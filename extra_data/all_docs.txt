@@ -1,0 +1,1031 @@
+=== DOC_BLOCK_0001 ===
+[ReadMe_AllViews.rtf][summary]:
+This sample demonstrates how to generate a new sheet that includes all the selected views. It also demonstrates how to access the properties of a viewport such as LabelLineOffset, LabelLength and Orientation.
+
+[ReadMe_AllViews.rtf][description]:
+This sample demonstrates the following functionalities:
+-	Finds all the views and title blocks in the current project and display the names in a tree view. The user can select several views. When OK button is clicked, a new sheet is generated that has all the selected views placed in.
+-	The most important class is ViewsMgr. It shows how to get all views from document, and how to generate a new sheet via RevitAPI. It shows also how to access and set a viewport properties.
+
+=== DOC_BLOCK_0003 ===
+[ReadMe_MultithreadedCalculation.rtf][description]:
+Prompt the user to select an element with Selection.PickObject
+Find the largest face of the element
+Get the active view’s SpatialFieldManager, or create a SpatialFieldManager if the active view does not have one.
+Add the reference of the element’s largest face to the SpatialFieldManager.
+Find the minimum and maximum UV of the face’s bounding box
+The myUV class is used because it can be safely passed to the external thread. myUV contains two double values. Native Revit classes (such as Autodesk.Revit.DB.UV) cannot be given to the thread.
+Create and register an IUpdater (SpatialFieldUpdater) so that the command will be able to respond when the element selected in step 1 is changed or deleted.
+Register an Idling event. Revit will use this event to alert the command that Revit is ready to receive and display additional results data.
+Start a new thread that will be used to compute and display the results
+Populate an IList of myUV elements describing the locations on the surface where results will be calculated
+Compute results
+Results are stored by adding instances of the resultData class to the “results” IList. Each resultData instance contains a myUV and double value.
+The results list is locked when it is being modified, to prevent it from being modified by multiple threads at the same time.
+For the sake of simplicity in this example, the current second from the DateTime.Now property is used.
+Thread.Sleep is used to create a ½ second pause, simulating the time that might be needed to perform a complex analysis, and to make the various features of this example more apparent.
+
+=== DOC_BLOCK_0005 ===
+[ReadMe_SpatialFieldGradient.rtf][description]:
+Create an AnalysisDisplayColoredSurfaceSettings object and set it to show gridlines on the surfaces
+Create an AnalysisDisplayColorSettings object and set min and max colors
+Create an AnalysisDisplayLegendSettings object and specify various legend settings
+Create an Analysis Display Style using the settings created in the previous steps
+Set the active view to use this Analysis Display Style
+Create a list (measureNames) so that each data point can store multiple values
+Create lists (unitNames & multipliers) so that the data can be displayed in both feet and inches
+When a face is selected
+Divide the face’s U & V parameterization into 10 segments in each direction
+Create three values based on the face’s U value at each point (U, U + 1, U * 10)
+Update the spatial field primitive to show this data on the face.
+
+=== DOC_BLOCK_0007 ===
+[ReadMe_AreaReinCurve.rtf][summary]:
+This sample shows user how to get AreaReinforcementCurve and change its parameters.
+
+[ReadMe_AreaReinCurve.rtf][description]:
+This sample shows user how to get the AreaReinforcement and AreaReinforcementCurve, and show user how to get the parameter by Element.get_Parameter(Autodesk.Revit.Parameters.BuiltInParameter parameterId) method and change its value by Parameter.Set(…) method.
+
+=== DOC_BLOCK_0009 ===
+[ReadMe_AutoRoute.rtf][summary]:
+This sample demonstrates how to route a set of ducts and fittings between a base air supply equipment and 2 terminals.
+
+[ReadMe_AutoRoute.rtf][description]:
+-	To create a mechanical system, use Document.Create.NewMechanicalSystem.
+-	To define the route, first find the bounding box that bounds all the three elements and then try the middle line, quarter lines on the X and Y axis as the trunk with a series of ducts that will be connected to the elements with fittings and ducts.
+-	To create duct, use Document.Create.NewDuct.
+-	To create fittings, use Document.Create.NewElbowFitting and Document.Create.NewTeeFitting.
+-	To make a connection between connectors, use Connector.ConnectTo
+
+=== DOC_BLOCK_0011 ===
+[ReadMe_AutoTagRooms.rtf][summary]:
+This sample demonstrates three main features:
+1.	How to get all rooms in a specified level.
+2.	How to get all room tags in current document.
+3.	How to create new room tags with specified room tag type to auto tag all rooms in a specified level.
+
+[ReadMe_AutoTagRooms.rtf][description]:
+Functionalities:
+-	Get all rooms and room tags in active document and list all the rooms grouped by level with room tag count.
+-	Get all available RoomTag types and Levels which have rooms in current project.
+-	Tag all rooms in a level with specified RoomTag type automatically.
+
+=== DOC_BLOCK_0013 ===
+[ReadMe_AvoidObstruction.rtf][summary]:
+This sample will demonstrate how to detect and resolve the obstructions of Pipe with Pipe, Pipe with Beam, or Pipe with Duct.
+
+[ReadMe_AvoidObstruction.rtf][description]:
+This sample provides following functionalities.
+-	 It will detect and resolve the obstructions of pipes.
+-	Just detect the obstructions of Pipe with Pipe, Pipe with Beam, or Pipe with Duct. Others such as Pipe with Wall (Stairs, Floor, etc) will be ignored.
+-	We just use pipe’s centerline to detect obstructions, and don’t consider the radius of the pipe.
+-	Just re-route the pipes, don’t change the others (Beam, Duct).
+-	How to resolve the obstructions:
+n	Keep the Pipe’s original direction not change.
+n	Split the Pipe’s line to some segments according to the obstructions detected.
+n	Re-route the Pipes to avoid the obstructions.
+
+=== DOC_BLOCK_0015 ===
+[ReadMe_BeamAndSlabNewParameter.rtf][summary]:
+This sample demonstrates how to add a shared instance parameter to beams and slabs, and uses GUID as the parameter’s value. Users also can use the value of the parameter to find the special element.
+
+[ReadMe_BeamAndSlabNewParameter.rtf][description]:
+-	The adding shared parameter functionality in this sample is corresponding to “Manage->Project Parameters...->Add->Shared parameter (Radio button) ->Select” in Revit main program. If you want more detailed information about Shared parameter please refer to “Setting up Shared Parameters” topic in Revit help document.
+-	The shared parameter named Unique ID should be added to the Structural Framing and the Floor categories, so it can cover both beams and slabs. And then the Unique id should be set to a system generated UUID.
+-	The shared parameter should reside in a file named MySharedParameters.txt and in a parameter group named MyParameters. If the file does not exist it should be created. If it does exist then it should be reused.
+-	Display, in a list box, the value of the Unique ID parameter if present for all the selected elements. 
+-	The element should be found by the GUID which was listed in the list box. And in this sample we add the found element into the SelElementSet (Document.Selection.Elements) to let it highlight.
+
+=== DOC_BLOCK_0017 ===
+[ReadMe_BoundaryConditions.rtf][summary]:
+This sample shows to get BoundaryConditions’ parameters or create BoundaryConditons.
+
+[ReadMe_BoundaryConditions.rtf][description]:
+-	Only select one structure element.
+-	If the selected element has boundary conditions the parameters of the boundary conditions (BC) are presented. And users are also allowed to set these parameters with other valid values.
+-	List all the Ids of BC whose host is the selected element in a list box.
+-	According to the selected BC Id, the relevant BC Type, State and X, Y, Z translation/rotation will be displayed.
+-	User is not allowed to change the BC Type.
+-	User can set the State of BC to Fixed, Pinned, Roller or User (When different values are selected the X, Y or Z translation/rotation should do corresponding changes according to the Revit main program UI). 
+-	If the User is selected as the current State, then X, Y or Z translation/rotation can be set to Fixed, Released or Spring.
+-	If Spring is selected for X, Y or Z translation/rotation, positive values can be inputted as the Spring Modulus (Show the unit of the value for users).
+-	If the selected element does not have a BC then create one.
+-	Set the BC Type to Point, Line or Area according to the selected element. (Beams/Walls/ Wall Foundations have line BC; Columns/ braces have point BC; Slabs/Foundation Slabs have area BC)
+-	Other initial parameters are set to be fixed.
+-	The user can change all the parameters values except the BC Type (refer to the details of last point)
+-	When the user clicks the OK button the existing BC is updated or the new BC is created.
+-	We should use NewPointBoundaryConditions, NewLineBoundaryConditions and NewAreaBoundaryConditions methods of Autodesk.Revit.Creation.Document to create BC
+
+=== DOC_BLOCK_0019 ===
+[ReadMe_CreateBeamsColumnsBraces.rtf][summary]:
+This sample demonstrates how to create a truss model which composes of columns, beams and braces automatically according to the user’s input.
+
+[ReadMe_CreateBeamsColumnsBraces.rtf][description]:
+-	Presents a dialog to ask the user for the following information, and create truss model according to these information.
+-	Distance between columns
+-	Number of Columns in the X direction
+-	Number of Columns in the Y direction
+-	The type of the columns
+-	The type of the beams
+-	The type of the braces
+-	Number of Floors
+-	The code should verify whether the number of floors is less than the number of levels since columns will be inserted from the level below to the level above. If there are not enough levels, notify the user the number of levels that must be added and exit the command with a failure message.
+-	Levels can be retrieved by iterating through the document elements. 
+-	The types that can be used for the beams, columns and braces can be located by searching the database for FamilySymbol objects that have material type of something other than undefined.
+-	All inserted beams, columns and braces must be specified as structural during creation.
+-	To insert a beam use the NewFamilyInstance method that takes a location and a reference direction. Location point should be the start of the beam and the reference direction should be a vector along the direction of the beam. Specify the structural type as beam.
+-	To insert a brace do the same as for a beam but specify brace as the structural type.
+
+=== DOC_BLOCK_0021 ===
+[ReadMe_CreateBeamSystem.rtf][summary]:
+This sample demonstrates how to generate a beam system with the horizontal linear beams selection’s profile.
+
+[ReadMe_CreateBeamSystem.rtf][description]:
+-	User selects some linear beams which make a horizontal profile first, and create a beam system with this profile. Allow user change the layout method and beam type of the created beam system.
+-	The command displays a dialog with a preview window on the left and generic properties grid on the right. 
+-	The generic property grid allows user to change the Layout method (clear spacing, fixed distance, fixed number and maximum spacing) and Beam type.
+-	The preview window displays the profile of the beam system and its direction. 
+-	Beam system’s direction is decided by the first line in the CurveArray that is taken as the parameter of profile in NewBeamSystem method.
+-	Beam system’s layout method and beam type can be retrieved and modified through BeamType and LayoutRule properties of BeamSystem.
+-	Use Autodesk.Revit.Creation.Document.NewBeamSystem(CurveArray) method to create BeamSystem.
+
+=== DOC_BLOCK_0023 ===
+[ReadMe_CreateComplexAreaRein.rtf][summary]:
+This sample demonstrates how to create AreaReinforcement by Revit API and change its parameters.
+
+[ReadMe_CreateComplexAreaRein.rtf][description]:
+-	This sample shows how to create AreaReinforcement by Revit API and set the parameter.
+-	Create slab reinforcement with all four layers, and with two rectangular curve loops, nested, so that we have a rectangular opening.
+-	On the interior 4 curves, set the override flag and flip the hooks on the top 2 layers to “up”.
+-	The type used for creating Area Reinforcement can be found in the project if user has loaded an AreaReinformentType in the project.
+-	The slab/wall’s geometry information is available as Geometry property of the Floor/Wall object.
+-	The property ‘layout rule’ can be found from the Area Reinforcement by using the following generic parameters: REBAR_SYSTEM_LAYOUT_RULE
+-	The properties of the AreaReinforcement Curve can be obtained by following generic parameters:
+Name|Build in Parameter|
+Override Area Reinforcement Settings|REBAR_SYSTEM_OVERRIDE|
+Top Major Hook Orientation|REBAR_SYSTEM_HOOK_ORIENT_TOP_DIR_1|
+Top Minor Hook Orientation|REBAR_SYSTEM_HOOK_ORIENT_TOP_DIR_2|
+
+=== DOC_BLOCK_0025 ===
+[ReadMe_CreateDimensions.rtf][summary]:
+This sample shows how to add a dimension to a selected structure wall from its start to its end.
+
+[ReadMe_CreateDimensions.rtf][description]:
+This sample provides following functionalities.
+-	To get one element by using its Id, use Docment.Element(ElementId) method.
+-	Retrieve all the walls in the current project.
+-	Loop to get every wall and perform following actions
+-	Get the wall’s local curve and create a new bound line with its start point and end point
+-	Loop the wall’s geometry elements and find the two upright lines beside the line   created in step 1. Create a reference array contains the references of the two lines
+-	Create a new bound line which is close and parallel to the line in step 1
+-	Create a dimension for the wall using the reference array as its bounds and the parallel line as its place
+
+=== DOC_BLOCK_0027 ===
+[ReadMe_CreateDuctworkStiffener.rtf][summary]:
+This sample demonstrates how to create ductwork stiffener.
+
+[ReadMe_CreateDuctworkStiffener.rtf][description]:
+The sample implements IExternalCommand interface and utilizes the method CreateDuctworkStiffener to create stiffeners on ductwork.
+
+=== DOC_BLOCK_0029 ===
+[ReadMe_CreateSimpleAreaRein.rtf][summary]:
+This sample uses to show how to create AreaReinforcement and change its parameters by Revit API.
+
+[ReadMe_CreateSimpleAreaRein.rtf][description]:
+This sample will provide the following functionality:
+-	Create an Area Reinforcement in a rectangular shape on the selected slab or wall (except Curtain-Wall and Stacked-Wall). The boundary would be the same as the slab/wall boundaries. The application can verify the boundary of the selected slab/wall is rectangular.
+-	A dialog to the user asking for the following information:
+-	 Select type of Reinforcement which you want to create
+-	 Select “Layout Rule” in the “Construction” Parameter Group
+-	 All the Layers are listed in the “Layer” Parameter Group. There are four layers. Each layer should include “True” or “False” selection, select “True” means you can change the property of rebar on this layer, otherwise you can not change them.
+-	The type used for creating Area Reinforcement can be found in the project if user have loaded an AreaReinformentType in the project or have drawn an AreaReinforcement in current project.
+-	The slab/wall’s geometry information is available as Geometry property of the Floor/Wall object.
+-	The Parameters in “Layer” Parameter Group can be found from the Area Reinforcement by using the following generic parameters:
+-	REBAR_SYSTEM_ACTIVE_BOTTOM_DIR_2, 
+-	REBAR_SYSTEM_ACTIVE_BOTTOM_DIR_1, 
+-	REBAR_SYSTEM_ACTIVE_TOP_DIR_2, 
+-	REBAR_SYSTEM_ACTIVE_TOP_DIR_1, 
+-	REBAR_SYSTEM_LAYOUT_RULE
+
+=== DOC_BLOCK_0031 ===
+[ReadMe_CreateViewSection.rtf][summary]:
+This sample shows how to generate a section view across the mid point of a linear element, such as a wall, floor or beam
+
+[ReadMe_CreateViewSection.rtf][description]:
+This sample provides following functionalities.
+-	Retrieve the selected linear element.
+-	Generate a BoundingBoxXYZ instance which will be used in NewViewSection() method
+-	set its Max and Min property
+-	Generate a Transform instance as the Transform property of BoundingBoxXYZ which defines the Origin and the directions (including RightDirection, UpDirection and ViewDirection) of the created view
+-	Create the section view using the BoundingBoxXYZ.
+
+=== DOC_BLOCK_0033 ===
+[ReadMe_CreateWallinBeamProfile.rtf][summary]:
+This sample demonstrates how to generate a wall which has the profile of beams selection. When the command is executed, a dialog should appear that contains a drop-down list for all types of wall and a check box for whether the walls are structural. Default should be checked.
+
+[ReadMe_CreateWallinBeamProfile.rtf][description]:
+This sample should provide the following functionalities:
+-	Add a command that takes a selection of beams that makes a vertical profile and make a profiled wall using the outline generated by the beams.
+-	This sample should be worked for only a selection of beams that makes a vertical profile.
+-	When the command is executed a dialog should appear that contains the following:
+-	A drop-down list for all types of wall.
+-	A check box for whether the walls are structural. Default should be checked.
+-	Users should be able to select wall type which will be used in creation. And the users can choose to create structural or architecture walls also.
+-	Users select the required items from these boxes. When OK is clicked the dialog should be dismissed and a profile wall should be created using the outline generated by the beams.
+
+=== DOC_BLOCK_0035 ===
+[ReadMe_CreateWallsUnderBeams.rtf][summary]:
+This sample demonstrates how to generate simple rectangular wall(s) under the beam(s) selection. When the command is executed a dialog should appear that contains a drop-down list for all types of wall and a check box for whether the walls are structural. Default should be checked.
+
+[ReadMe_CreateWallsUnderBeams.rtf][description]:
+This sample should provide the following functionalities:
+-	Add a command that takes a selection of beams that makes a vertical profile and make a profiled wall using the outline generated by the beams.
+-	This command will take a selection of beams and draw simple rectangular walls along and under the path of the beams.
+-	This sample should be worked for only horizontal beam objects.
+-	When the command is executed a dialog should appear that contains the following:
+-	A drop-down list for all types of wall.
+-	A check box for whether the walls are structural. Default should be checked.
+-	Users should be able to select the wall type which will be used in creation. And users can choose to create structural or architecture walls also.
+-	Users select the required items from these boxes. When OK is clicked. The dialog should be dismissed and simple rectangular walls should be created along and under the path of the selected beams.
+
+=== DOC_BLOCK_0037 ===
+[ReadMe_CurvedBeam.rtf][summary]:
+This sample demonstrates how to create curved beam, this sample can create three types of curved beam: arc, ellipse and nurbspline.
+
+[ReadMe_CurvedBeam.rtf][description]:
+This sample uses FamilySymbol, FamilyInstance, Arc, Ellipse and NurbSpline classes mostly to get all structural framing types and levels from Revit project, then use them to create new beam.
+-	To get structural framing types and levels of Revit, use ElementClassFilter to iterate them.
+-	To get all symbols of a family, use Family.Symbols property.
+-	To get the category of family symbol, use FamiySybol.Category property.
+-	To create arc, ellipse and nurbspline, use NewArc, NewEllipse and NewNurbSpline methods of Creation.Document class respectively.
+-	To create curved beam instance, use NewFamilyInstance method of Creation.Document class, by specifying the curve for new beam.
+
+=== DOC_BLOCK_0039 ===
+[ReadMe_DeckProperties.rtf][summary]:
+This sample shows that how to get the properties of deck layer by RevitAPI.
+
+[ReadMe_DeckProperties.rtf][description]:
+-	Display the properties deck layer in a list. It contains Deck Profile, Deck Material, Concrete cover thickness and Concrete Material.
+-	For concrete slabs, it contains Concrete thickness and Concrete material.
+-	The CompoundStructureLayer layers can be obtained from the Autodesk.Revit.DB.FloorType’s CompoundStructureLayer property.
+
+=== DOC_BLOCK_0041 ===
+[ReadMe_DeleteDimensions.rtf][summary]:
+Show how to delete Dimension elements.
+
+[ReadMe_DeleteDimensions.rtf][description]:
+-	To get the select elements use Application.ActiveUIDocument.Selection.Elements.
+-	To verify the dimension is pinned or not use Dimension.Pinned.
+-	To delete a dimension use Document.Delete(ElementSet).
+
+=== DOC_BLOCK_0043 ===
+[ReadMe_DoorSwing.rtf][summary]:
+This sample will demonstrate how to create and maintain door opening parameters, internal door parameter, From/To Room and how to schedule these parameters. Feature to customize to your country standard is also provided.
+
+[ReadMe_DoorSwing.rtf][description]:
+For door’s opening functionality, user can invoke the external command "Customize Door Opening Expression" to add needed shared parameters and customize door opening expression according to their own country's standard and each door family’s geometry. When the door was flipped or mirrored, user can invoke the external command “Update Door Properties” to update parameters’ values. Schedule for these parameters will be done from Revit UI.
+
+For door’s related room functionality, from Revit UI user can schedule the “To room” and “From room” information for Internal and external doors in two separate schedule tables and can change the direction of the door in schedule tables. User will then use “Update Door Geometry” command to update the geometry of the door after the direction of the door was changed in schedule tables. When the door was flipped or mirrored in view, user can invoke the external command “Update Door Properties” to update “To room” and “From room” information too.
+
+Parameter updating process will also be invoked upon closing, save or save as of the project file.
+
+=== DOC_BLOCK_0045 ===
+[ReadMe_ViewFilters.rtf][summary]:
+This sample demonstrates how to create and modify view filters by 2011 new element iteration API.
+
+[ReadMe_ViewFilters.rtf][description]:
+This sample uses element iteration API and especially ParameterFilterElement related method to simulate functionalities of UI command: View\Filters. This sample also allows adding filter rule of > 3 and provides more options on rule values.
+-	To find all view filters within document, use ElementClassFilter(typof(ParameterFilterElement)).
+-	ParameterFilterElement.Create(…) methods can create new view filters; its related methods can access or modify categories/ rules of filter.
+-	ParameterFilterUtilities.GetAllFilterableCategories() method can find all categories which support filtering.
+-	ParameterFilterRuleFactory.CreateXXX() methods can create accordingly filter rules.
+-	Using FilterInverseRule to created inverted filter rule that inverts the boolean values returned by the rule it contains.
+-	Document.get_TypeOfStorage(BuiltInParameter) can get storage type(int/double/string/elementid) of parameter.
+-	View filter (ParameterFilterElement) can be deleted by Document.Delete() method.
+-	By reflecting base FilterRule to its derived, we can find out details of this rule: rule criteria (equals/greater/less…), rule values.
+
+=== DOC_BLOCK_0047 ===
+[ReadMe_ErrorHandling.rtf][summary]:
+This sample demonstrates how to create failure definition id, failure definition, failure message and how to resolve failures in failure (pro)processing steps.
+
+[ReadMe_ErrorHandling.rtf][description]:
+Functionalities:
+-	Shows how to create failure definition ids and failure definitions with different severities and different resolution types.
+-	Shows how to create failure messages and post them.
+-	Shows how to solve failures during failure preprocessor.
+-	Shows how to solve failures in failure processing event.
+-	Shows how to solve failures during failure processor.
+
+=== DOC_BLOCK_0049 ===
+[ReadMe_EventsMonitor.rtf][summary]:
+This sample demonstrates how to subscribe to controlled application level Events.
+
+[ReadMe_EventsMonitor.rtf][description]:
+The sample pop up a dialog named “Events Tracking Setting” when the Revit application starts. User makes his choice in this dialog and tracking the events he selected. And one custom panel with a push button is created at the same time. This button is used to retrieve the setting dialog shown at the beginning to let use change his last choice. All subscribed events are shown in InformationWindows including their names, types and the trigger times.
+-	This sample will subscribe to events according to what the user chose in Events Setting Window.
+-	This sample lists events information like time, name, and type and so on in a modeless window when corresponding events are raised.
+
+=== DOC_BLOCK_0051 ===
+[ReadMe_SelectionChanged.rtf][summary]:
+The sample implements IExternalApplication interface and subscribes SelectionChanged event in OnStartUp; the registered event handler will dump selected references related information to log files.
+
+=== DOC_BLOCK_0053 ===
+[ReadMe_AutoParameter.rtf][summary]:
+This sample demonstrates how to automatically add parameters (shared or not) to family documents.
+
+[ReadMe_AutoParameter.rtf][description]:
+This sample utilizes FamilyManager class to implement the features: add parameters (shared or not) to the specified family file.
+-	To add family parameters, use the AddParameter(String paramName, BuiltInParameterGroup paramGroup, ParameterType paramType, bool isInstance) method;
+-	To add shared parameters, use the AddParameter(ExternalDefinition familyDefinition, BuiltInParameterGroup paramGroup, bool isInstance) method;
+
+=== DOC_BLOCK_0055 ===
+[ReadMe_CreateAirHandler.rtf][summary]:
+This sample creates one air handler and adds connectors (piping, duct).
+
+[ReadMe_CreateAirHandler.rtf][description]:
+This sample first utilizes the OwnerFamily.FamilyCategory property to check the template.
+
+And then this sample utilizes the NewExtrusion, NewPipeConnector, NewDuctConnector in Autodesk.Revit.Creation.FamilyItemFactory class to create handler and connectors, and utilizes xxxDuct properties to set proper parameters of connectors.
+
+Finally, this sample utilizes the method Document::CombineElements to join the extrusions in one air handler.
+
+=== DOC_BLOCK_0057 ===
+[ReadMe_CreateTruss.rtf][summary]:
+This sample demonstrates how to create a mono truss in truss family document.
+
+[ReadMe_CreateTruss.rtf][description]:
+The sample utilizes the method NewModelCurve to create the truss curves and utilizes the TrussCurveType property of ModelCurve class to set their truss types.
+Some useful constraints are added to the truss curves by the method NewAlignment.
+
+=== DOC_BLOCK_0059 ===
+[ReadMe_DWGFamilyCreation.rtf][summary]:
+This sample shows how to import a dwg file into a family document and add parameters to the family through Revit API.
+
+[ReadMe_DWGFamilyCreation.rtf][description]:
+This sample provides following functionalities.
+-	Let user import a dwg file into a Revit family document.
+-	Let user add parameters to the imported instance.
+
+=== DOC_BLOCK_0061 ===
+[ReadMe_GenericModelCreation.rtf][summary]:
+This sample shows how to create Generic Model through Revit API
+
+[ReadMe_GenericModelCreation.rtf][description]:
+This sample mostly uses the FamilyItemFactory class for implementing the functionality: creating Extrusion/ Blend/ Revolution/ Sweep/ SweptBlend elements.
+-	To get a SketchPlane, use CreateSketchPlane().
+-	To get a Curve, use Autodesk.Revit.Creation.Application.Create.NewLineBound () and Append it to a CurveArray to get the array.
+-	Autodesk.Revit.Creation.FamilyItemFactory.NewXXXX() create families.
+
+=== DOC_BLOCK_0063 ===
+[ReadMe_TypeRegeneration.rtf][description]:
+This sample only can be used in family. This sample mostly uses FamilyManager class for implementing the functionality: Check if every type regeneration without any error or warning. Revit model will change to the next one. Finally, give a conclusion result: If all regeneration goes well, the user will get one message says ‘All types in the family can regenerate successfully.’ If there is any error result, one message about which type(s) have a problem will be shown. There is one log file that stores all information displayed in the form.
+-	To get or set the current type, use property CurrentType of the FamilyManager.
+-	To get all the family types, use property Types of the FamilyManager.
+
+=== DOC_BLOCK_0065 ===
+[ReadMe_WindowWizard.rtf][description]:
+The sample implements IExternalCommand interface and allows user to create window family via wizard. User should create a family with window family template, and then user can input dimensions for window parameters, specify the materials, and save family file locally. 
+-	To create Extrusion, use the method NewExtrusion of FamilyItemFactory.
+-	To create Alignment, use the method NewAlignment of FamilyItemFactory.
+-	To create Dimension, use the method NewDimension of FamilyItemFactory.
+-	To create ReferencePlane, use the method NewReferencePlane of FamilyItemFactory.
+-	To create family type, use the method NewType of FamilyItemFactory
+-	To get the materials, use the property Settings.Materials of document.
+-	To get the Categories, use the property Settings.Categories of document.
+
+=== DOC_BLOCK_0067 ===
+[ReadMe_FindColumns.rtf][summary]:
+This sample shows how to find columns that are embedded in walls with the Revit API method FindReferencesWithContextByDirection.
+
+[ReadMe_FindColumns.rtf][description]:
+1.	Determine which walls to process (either the selected walls, or all walls if none are selected)
+2.	Find columns embedded in each wall
+a.	For linear walls
+i.	Set the height for the ray at 1’ above the wall’s level
+ii.	Find the direction tangent to the wall’s location curve
+iii.	Because the wall’s LocationCurve is always the wall centerline, use the wall’s width to determine the offset needed for FindReferencesWithContextByDirection to shoot its “ray” just outside of the wall
+iv.	Find references of objects returned by FindReferencesWithContextByDirection when running from one end of the wall to the other end of the wall
+v.	Check each reference to validate that it is a column within the allowable distance from the origin used with FindReferencesWithContextByDirection (don’t want columns past the end of the wall)
+b.	For non-linear walls
+i.	Unlike linear walls, where a single ray can be to check for intersections along the entire length of the wall, a non-linear wall must be divided into series of smaller pieces to approximate the wall as a set of shorter straight segments.
+ii.	Calculate an increment that will be used for the length of these short segments
+iii.	Check for columns along every incremental piece of the wall using the methodology described above for linear walls.
+c.	Select the resulting columns
+
+=== DOC_BLOCK_0069 ===
+[ReadMe_RaytraceBounce.rtf][summary]:
+This sample shows how to find intersection between ray and face and create connecting lines by Revit API method FindReferencesWithContextByDirection.
+
+[ReadMe_RaytraceBounce.rtf][description]:
+This sample mostly uses the FindReferencesWithContextByDirection method for implementing the functionalities:
+1.	Launch a ray from appointed location in appointed direction to find the first intersection with a face
+2.	Calculate the reflection angle of the ray from the face and launch another ray to find the next intersection
+3.	For each ray/intersection, create a model line connecting the two points.  The end result should be a series of model lines bouncing from item to item.
+4.	Provide a hard limit of say, 100 intersections, to prevent endless reflections within an enclosed space.
+5.	Write a log file of the intersection containing: the element type, id, and material of the intersected face.
+
+=== DOC_BLOCK_0071 ===
+[ReadMe_FoundationSlab.rtf][summary]:
+This sample demonstrates how to create Foundation Slab.
+
+[ReadMe_FoundationSlab.rtf][description]:
+-	To get slabs, iterate through the document looking for ‘Floor’ objects.
+-	The Mark property can be found in floor parameter: BuiltInParameter.ALL_MODEL_MARK.
+-	Foundation slab types can be found by iterating through the document looking for ‘FloorType’ objects with category named ‘Structural Foundations’.
+-	A Foundation Slab can be created by ‘NewFloor’ method with the given horizontal profile and using a specified foundation slab style. 
+-	Structural slab's profile can be found in its AnalyticalModel property. Nonstructural floor's profile can be formed through its Geometry property.
+-	The octagonal profile is an array of planar lines that represent the horizontal profile of the octagonal foundation slab.
+-	Make sure the profile of slab is a closed outline, or else it could not be created by Revit.
+
+=== DOC_BLOCK_0073 ===
+[ReadMe_FrameBuilder.rtf][summary]:
+This sample demonstrates how to create a frame composed of columns, beams and braces. User can input parameters to create a frame consist of column, beam and brace. It has a user visible option to use the suspended updating function to increase the speed of the model creation. And users can duplicate the type of column, beam and brace.
+
+[ReadMe_FrameBuilder.rtf][description]:
+This sample provides the following functionality:
+-	Present a dialog to users asking for the following information:
+-	Distance between columns
+-	Number of Columns in the X direction
+-	Number of Columns in the Y direction
+-	The type of the columns
+-	The type of the beams
+-	The type of the braces
+-	Number of Floors
+-	Incremental height of Auto-generated levels
+-	Coordinate of the bottom left corner of Frame
+-	Angle to rotate Frame in clockwise
+-	The number of floors is less than the number of levels since columns will be inserted from the level below to the level above. For example if the number of floors requested is 3 then there must be 4 levels and the columns will go from Level 1 to 2, Level 2 to 3 and Level 3 to 4. If there is less than 2 levels tell the user 2 levels must be added and exit the command with a failure. If more levels are need, auto-generate levels according to the number of floors. The height between adjoin generated levels equals to the height between the highest 2 levels existed in the project.
+-	Starting with the lowest level and progressing to higher levels, insert columns with the specified type into the project programmatically in an array format based on the number of columns specified in the X and Y directions with the correct specified distance between them. Do this for each floor specified.
+-	Insert beams of the specified type between the tops of each adjacent column in the X and Y direction to form a square grid of beams. Beams are not needed between diagonal columns.
+-	Insert braces of the specified type between the midpoint of each column and the midpoint of each adjoining beam.
+-	The frame is moved according to the coordinate of the bottom left corner. Then rotate it in clockwise according to the input angle.
+-	Users can create a new concrete element type through duplicating specified type. The work flow is as follows:
+-	Press the Duplicate button in the dialog;
+-	Change name of column’s type and press OK;
+-	Change value for b and h of section in another dialog and press OK;
+-	Similar steps can be followed for concrete and wood beams and braces.
+
+=== DOC_BLOCK_0075 ===
+[ReadMe_GenerateFloor.rtf][summary]:
+This sample demonstrates how to generate a floor using the closed outline made by a selection of walls.
+
+[ReadMe_GenerateFloor.rtf][description]:
+-	The profile of floor can be retrieved from the location of walls. If this curve array is not in sequence, creating floor with this profile will encounter an exception. The solution is to arrange the curves in sequence first.
+-	Before RevitAPI 10, the method ‘NewFloor’ is the only interface to create the object floor, slab, and foundation slab etc… From the RevitAPI 10, it is divided into three methods, “NewFloor”, “NewSlab” and “NewFoundationSlab”.
+
+=== DOC_BLOCK_0077 ===
+[ReadMe_ComputedSymbolGeometry.rtf][description]:
+The sample implements IExternalCommand interface and allows user to get and view slave symbol geometry. 
+-	To get slave symbol geometry, use the method GetInstanceGeometry of ComputedSymbolGeometry.
+-	To paint geometry information, use the method PaintSolid of ComputedSymbolGeometry.
+
+=== DOC_BLOCK_0079 ===
+[ReadMe_EnergyAnalysisModel.rtf][description]:
+The sample implements IExternalCommand interface and allows user to define the options of energy analysis and view the analytical data.
+-	To get analytical openings information, use the method GetAnalyticalOpenings of EnergyAnalysisModel.
+-	To get analytical shading surfaces information, use the method GetAnalyticalShadingSurfaces of EnergyAnalysisModel.
+-	To get analytical spaces information, use the method GetAnalyticalSpaces of EnergyAnalysisModel.
+-	To view new analytical model, use the method RefreshAnalysisData of EnergyAnalysisModel.
+
+=== DOC_BLOCK_0081 ===
+[ReadMe_HelloRevit.rtf][summary]:
+Shows how a basic ExternalCommand can be added to the Revit user interface. It uses a Revit task dialog to communicate information to the interactive user.
+
+[ReadMe_HelloRevit.rtf][description]:
+The sample defines a class which inherits from IExternalCommand interface, and implements the Execute method with creating a task dialog in its body. 
+·	The task dialog has Title, Main Instruction, Main Content, 2 Command Links, footer text, and OK/Cancel buttons. See as below:
+
+·	If push Command Link1, a task dialog with default Close button shows the information about the Revit Build.
+
+·	If push Command Link2, a task dialog created by static show () method shows the information about the Active Document.
+
+=== DOC_BLOCK_0083 ===
+[ReadMe_ImportExport.rtf][summary]:
+This sample shows how to export current project to dwg, sat,dxf, dwf(x), gbxml, fbx, dgn, pdf or image files and how to import a dwg, image, GBXML or Inventor file into Revit.
+
+[ReadMe_ImportExport.rtf][description]:
+This sample provides following functionalities.
+-	Let users specify the export options and export the current project to dwg, dwf(x), gbxml, fbx or dgn files.
+-	Let users specify the import options and import a dwg, image, GBXML or Inventor file into Revit.
+
+=== DOC_BLOCK_0085 ===
+[ReadMe_InPlaceMembers.rtf][summary]:
+This sample demonstrates how to get the In-place Family instance and its properties in the current document of Revit.
+
+[ReadMe_InPlaceMembers.rtf][description]:
+This sample retrieves the properties’ values of an In-place FamilyInstance, paints the analytical model of FamilyInstance in a PictureBox and shows other properties in a Property Grid. We can get the AnalyticalModel’s profile via Curves property.
+
+=== DOC_BLOCK_0087 ===
+[ReadMe_InvisibleParam.rtf][summary]:
+This sample demonstrates how to use share parameter file to create share parameters and how to bind share parameters and instance.
+
+[ReadMe_InvisibleParam.rtf][description]:
+This sample uses Application.OpenSharedParameterFile method to get DefinitionFile instance as the share parameter file and create visible and invisible two parameters. Use InstanceBinding instance created by NewInstanceBinding method to bind parameters to elements.
+
+=== DOC_BLOCK_0089 ===
+[ReadMe_Journaling.rtf][summary]:
+This sample demonstrates how an external application can be incorporated into the journaling mechanism.
+
+[ReadMe_Journaling.rtf][description]:
+This sample mostly uses StringStringMap class for implementing the functionality: read and write user data from/to journal file, the data exists in APIStringStringMapJournalData journal data section in journal file.
+-	To read or write data which stored in the journal file, use StringStringMap class’s methods:  get_Item(key) and Insert(key, value).
+-	The ExternalCommandData.Data property can be used to get/set the journal data (StringStringMap object).
+-	To get all Wall Type in Revit project, use ActiveDocument.WallTypes.
+-	To get an existing element by Id, use ActiveDocument.get_Element(ref ElementId).
+
+=== DOC_BLOCK_0091 ===
+[ReadMe_LevelsProperty.rtf][summary]:
+This sample demonstrates how to get all the levels in a document, and how to create or delete a level and set its properties.
+
+[ReadMe_LevelsProperty.rtf][description]:
+-	Display a list of all Levels in the current document, with their name and elevation. All the levels can be found by iterating through the current document elements.
+-	Create a new level with a unique name and an elevation. A new level can be created by using the NewLevel method which belongs to the Autodesk.Revit.Creation.Document Class.
+-	Delete a level.
+-	A level’s name and elevation can be set by the Name and Elevation property in the Autodesk.Revit.DB.Level Class. The name of a Level should be unique.
+
+=== DOC_BLOCK_0093 ===
+[ReadMe_Loads.rtf][summary]:
+This sample shows how to operate Load Case, Load Nature, Load Usage and Load Combination.
+
+[ReadMe_Loads.rtf][description]:
+Functionalities:
+-	Get all the load cases, load natures, load combinations, load usages, and formulas in a Revit project.
+-	Present all existing Load Cases in current project including their names, case numbers, natures, and categories; Modify name, nature and category. Then allow users to “Duplicate” a new Load Case into current project, meanwhile displaying them on the dialog.
+-	Show all the load natures (including the existing natures in current project already and the added natures), which name can be modified, and an “Add” button allow to add a new one.
+-	Add new Load Combination into current project and set its parameters such as load cases and load usages in creation. 
+-	Delete certain Load Combination or Load usage.
+
+=== DOC_BLOCK_0095 ===
+[ReadMe_DistanceToPanels.rtf][summary]:
+Measure the distance from a selected object to all divided surface panels. Store this value for each panel in an instance parameter Distance.
+
+[ReadMe_DistanceToPanels.rtf][description]:
+1.	Find divided surfaces in the massing family
+2.	Find all panels in the DividedSurface elements. The panels are FamilyInstance elements returned by the DividedSurface.GetTileFamilyInstance(GridNode, tileIndex) method.
+3.	Find the location of the selected "origin" component.
+4.	Check the parameters of each panel and set the "Distance" instance parameter with the distance from that panel to the origin component.
+
+=== DOC_BLOCK_0097 ===
+[ReadMe_DividedSurfaceByIntersects.rtf][summary]:
+This sample demonstrates 2 main features:
+1.	How to add intersects to DividedSurface.
+2.	How to remove intersects to DividedSurface.
+
+[ReadMe_DividedSurfaceByIntersects.rtf][description]:
+Functionalities:
+-	Divide the surface with intersect elements ( Level, ReferencePlane, ModelCurve, etc).
+-	Remove the intersects that don’t need any more.
+
+=== DOC_BLOCK_0099 ===
+[ReadMe_MeasurePanelArea.rtf][summary]:
+Measure the area of curtain panels in divided surfaces. Identify panels with area greater than and less than user-specified values. A text file is created in the same folder as the sample DLL file listing the area and element ID of every panel.
+
+[ReadMe_MeasurePanelArea.rtf][description]:
+1.	Find panel families loaded into the massing family
+2.	Create a List containing the selected DividedSurface elements. If no DividedSurface elements are selected, include all DividedSurface elements in the model.
+3.	Find all panels in the DividedSurface elements. The panels are FamilyInstance elements returned by the DividedSurface.GetTileFamilyInstance(GridNode, tileIndex) method.
+4.	Get the area of each panel using FamilyInstance.get_Geometry(opt)
+a.	For partial border panels, get_Geometry returns the panel geometry in a Solid object
+b.	For uncut panels, their geometry is found through Instance.SymbolGeometry.Objects
+5.	Change the FamilyInstance.Symbol based on the panel area relative to the range specified by the user in the dialog box.
+
+=== DOC_BLOCK_0101 ===
+[ReadMe_NewForm.rtf][summary]:
+This sample shows how to create form through Revit API
+
+[ReadMe_NewForm.rtf][description]:
+This sample mostly uses the FamilyItemFactory class for implementing the functionality: creating ExtrusionForm/ CapForm/ RevolveForm/ SweptBlendForm/ Loft Form elements.
+-	To create a profile, use MakeLine() or MakeArc() to create a ModelCurve and append it to a ReferenceArray.
+-	To create a path, use MakeLine() to create a ModelCurve.
+-	Use Autodesk.Revit.Creation.FamilyItemFactory.NewXXXForm() to create forms.
+
+=== DOC_BLOCK_0103 ===
+[ReadMe_PanelEdgeLengthAngle.rtf][summary]:
+Measure the edge length and angle of curtain panels in divided surfaces. Save the length and angle data to the instance parameters of curtain panels.
+
+[ReadMe_PanelEdgeLengthAngle.rtf][description]:
+1.	Find divided surfaces in the massing family
+2.	Find all panels in the DividedSurface elements. The panels are FamilyInstance elements returned by the DividedSurface.GetTileFamilyInstance(GridNode, tileIndex) method.
+3.	Check the parameters of each panel, make sure the “Length1” to “Length4” and “Angle1” to “Angle4” parameters exist
+4.	Get the edges of each panel using FamilyInstance.get_Geometry(opt)
+a.	For partial border panels, get_Geometry returns the panel geometry in a Solid object
+b.	For uncut panels, their geometry is found through Instance.SymbolGeometry.Objects
+5.	Compute the length of each edge and the angle between 2 edges, store the data to the length and angle parameters.
+
+=== DOC_BLOCK_0105 ===
+[ReadMe_ModelLines.rtf][summary]:
+This sample shows how to get model lines of all kinds and how to create model lines using Revit API.
+
+[ReadMe_ModelLines.rtf][description]:
+-	Get the number of each model line type in a list. ModelLines can be located by iterating through the document elements, such as ModelArc, ModelEllipse and ModelLine and so forth.
+-	For creating a ModelArc type model line, input three points to create it.
+-	For creating a ModelLine type model line, input two points to create it.
+-	For the other types, select a base model curve which provides the corresponding curve and then input offset vector from the selected base model curve.
+-	Select a sketch plane to place the created model curve and you can also create a new sketch plane if you want. The creation of sketch plane can be done with NewSketchPlane() method in Autodesk.Revit.Creation.Document class.
+-	The creation of model lines can be done with NewModelCurve() and NewModelCurveArray() methods in Autodesk.Revit.Creation.Document class.
+
+=== DOC_BLOCK_0107 ===
+[Readme_MultistoryStairs.rtf][summary]:
+MultistoryStairs editing utilities, including creating multistory stairs by a standard stairs, adding/removing stairs by picking level.
+
+[Readme_MultistoryStairs.rtf][description]:
+This sample provides following functionalities.
+Create a multistory stairs by a standard stairs.
+Picking some levels to add aligned stairs into the multistory stairs.
+Picking some levels to remove aligned stairs from the multistory stairs.
+
+=== DOC_BLOCK_0109 ===
+[ReadMe_NetworkPressureLossReport.rtf][summary]:
+This addin sample shows how to access the MEP analytical model data and traverse the network. The flow and pressure loss results are exported to a csv file or displayed in Analysis Visualization Framework (AVF).
+
+[ReadMe_NetworkPressureLossReport.rtf][description]:
+Run the command “Pressure Loss Report” under the Add-Ins once the dll is loaded into Revit. It finds all valid networks that show up in the dialog. 
+
+
+
+The selected network can be exported into a csv file. It may be loaded into applications like Excel to better visualize the table, as shown below. Notice that the secton has the straight and fitting subtotal. If users want to have the breakdown of individual analytical segments, they may check the “Itemized” to export the table. 
+
+
+
+Users may also click the View button on the dialog to display the flow direction and values. It is important to note that the flow vector length is scaled to the flow value. So is the color of these flow arrows. Since this is based on the AVF, the colors and other visualization settings can be modified in Revit.
+
+=== DOC_BLOCK_0111 ===
+[ReadMe_NewHostedSweep.rtf][summary]:
+This sample will demonstrate how to create hosted sweep (includes Fascia, Gutter and SlabEdge), and how to modify their properties.
+
+[ReadMe_NewHostedSweep.rtf][description]:
+This sample let user create hosted sweep and modify the created hosted sweep. 
+Its Implementation lists as below:
+Ø	Types can be gotten via Document properties FasciaTypes, GutterTypes, and SlabEdgeTypes. These types can be used to create Fascia, Gutter, and SlabEdge.
+Ø	Fascia will be created with NewFascia (FasciaType, ReferenceArray), Gutter with NewGutter (GutterType, ReferenceArray) and SlabEdge with NewSlabEdge (SlabEdgeType, ReferenceArray). The first parameter can be null (the default type will be used) or the types from Document and the second parameter will be the edges’ references of a roof or a floor.
+Ø	Segments can be added via method AddSegment (Reference) of each subclass of HostedSweep. 
+Ø	Segments can be removed via method RemoveSegment (Reference) of HostedSweep.
+Ø	Angle, HorizontalOffset and VerticalOffset are get/set properties of HostedSweep, and their value can be get and set easily. 
+Ø	Flip states in horizontal or vertical direction of HostedSweep can be changed via method HorizontalFlip (), and VerticalFlip (). Properties of HorizontalFlipped and VerticalFlipped can query the flip states in horizontal or vertical direction.
+Ø	Transaction will be used in each operation (eg. creating HostedSweep or changing HostedSweep properties) in order to see the result immediately in Revit after each operation. Methods of Document’s BeginTransaction (), EndTransaction () and AbortTransaction () will be used to do transaction operation.
+Ø	The edges are filtered via method AddSegment (). If AddSegment () throws exception, then this edge will be discarded otherwise this edge will be treated as an eligible edge.
+
+=== DOC_BLOCK_0113 ===
+[ReadMe_NewMacro.rtf][summary]:
+This sample demonstrates how to generate a new Macro that includes basic codes. It also demonstrates how to build Macro and how to get excute Macro by MacroManager.
+
+[ReadMe_NewMacro.rtf][description]:
+This sample demonstrates the following functionalities:
+-	Create a new  Macro by defualt code.
+-    Excute this Macro.
+
+=== DOC_BLOCK_0115 ===
+[ReadMe_NewPathReinforcement.rtf][summary]:
+This sample demonstrates how to create PathReinforcement by API.
+
+[ReadMe_NewPathReinforcement.rtf][description]:
+This sample shows user how to create PathReinforcement by 
+NewPathReinforcement(PathReinforcementType, Element, CurveArray, bool) method:
+-	Use Document.Create.NewPathReinforcementType() method to create one PathReinforcementType if there is no PathReinforcementType in current document.
+-	Element here stands for the host of the PathReinforcement, a wall or a floor.
+-	CurveArray stores the Path of the PathReinforcement.
+-	bool value indicates the PathReinforcement lies to which side of Path.
+
+=== DOC_BLOCK_0117 ===
+[ReadMe_NewRebar.rtf][summary]:
+This sample will demonstrate how to create rebar via NewRebar (RebarShape rebarShape, RebarBarType rebarType, Element host, XYZ origin, XYZ xVec, XYZ yVec) and how to customize RebarShape (include straight segment and arc shape).
+
+[ReadMe_NewRebar.rtf][description]:
+This sample will demonstrate how to create rebar via NewRebar (RebarShape rebarShape, RebarBarType rebarType, Element host, XYZ origin, XYZ xVec, XYZ yVec) and how to customize RebarShape (include straight segment and arc shape). This sample will cover methods ScaleToBox and SetLayoutRuleWithoutExaminingHost of Rebar and almost all methods and properties of RebarShape.
+
+=== DOC_BLOCK_0119 ===
+[ReadMe_NewRoof.rtf][summary]:
+This sample demonstrates four main features:
+1.	How to create a new footprint roof.
+2.	How to create an extrusion roof.
+3.	How to edit an existed footprint roof.
+4.	How to edit an existed extrusion roof.
+
+[ReadMe_NewRoof.rtf][description]:
+Functionalities:
+-	Get all footprint roofs and extrusion roofs in active document and list them grouped by the creation way.
+-	Create a footprint roof with default properties by specifying a curve loop, or a wall loop, or loops combination of walls and curves, a level and a roof type.
+-	Create an extruded roof by providing a profile which is a series of connected lines or arcs, not closed in a loop, a roof type, a reference plane, an extrusion start value and an extrusion end value. Note that the reference plane should be a vertical plane.
+-	Select a footprint roof in the list, then user can define a footprint roof line is slope-defining and can change the slope angel of the selected roof, Also other properties of roof line can be changed respectively, such as overhang, offset from base, extend into wall. The roof’s type can be changed just select a different type.
+-	Select an extrusion roof in the list, and then user can change the value of extrusion start, extrusion end, and the roof type and the reference level of the extrusion roof.
+
+=== DOC_BLOCK_0121 ===
+[ReadMe_Openings.rtf][summary]:
+Shows how to get geometry profile and properties of an opening and how to add x model lines to opening bounding box.
+
+[ReadMe_Openings.rtf][description]:
+This sample retrieves all openings in active document and displays the profile and properties of the selected opening. The openings can be retrieved by iterating the document’s elements. And then the profile will be shown in a PictureBox control and the properties will be shown in a PropertyGrid control. The ModelLine can be created by NewModelCurve method of Document.
+
+=== DOC_BLOCK_0123 ===
+[ReadMe_ParameterUtils.rtf][summary]:
+This sample demonstrates how to get the parameters of a Revit element.
+
+[ReadMe_ParameterUtils.rtf][description]:
+-	To get the collection of selected elements, use Document.Selection.Elements.
+-	To get the collection of parameters that the element has, use Element.Parameters.
+-	Use Parameter.StorageType to get the parameter storage type and with the corresponding function (such as AsDouble() if the storage type is double) to get the value of it.
+-	To retrieve the element with its id, use Document.get_Element(ElementId id).
+-	To get the name of element, use Element.Name.
+-	ListView is used to show the string array in which each string stands for single parameter information.
+
+=== DOC_BLOCK_0125 ===
+[ReadMe_PathReinforcement.rtf][summary]:
+This sample demonstrates how to retrieve curves, profile and properties of path reinforcement object.
+
+[ReadMe_PathReinforcement.rtf][description]:
+This sample will get path reinforcement from active document and display its properties in a dialog. Curves of path reinforcement will be displayed in picture box and other data be displayed in property grid. The geometry data can be got by “Curves” property of path reinforcement and other properties can be got by “get_Parameter” and “Parameters” methods.
+
+=== DOC_BLOCK_0127 ===
+[ReadMe_PlaceFamilyInstanceByFace.rtf][summary]:
+This sample demonstrates how to create family instance on face.
+
+[ReadMe_PlaceFamilyInstanceByFace.rtf][description]:
+This sample will demonstrate how to create family instance on face.
+
+=== DOC_BLOCK_0129 ===
+[ReadMe_PowerCircuit.rtf][summary]:
+This sample shows how to operate power circuits.
+
+[ReadMe_PowerCircuit.rtf][description]:
+This sample provides following functionalities.
+-	Let user create a power circuit with selected elements. The elements should have unused electrical connectors within same voltage definition and with same pole numbers.
+-	Let user edit a power circuit.
+-	Let user add an element to a circuit. The element should have unused electrical connectors within same voltage definition and with same pole numbers as the circuit elements. 
+-	Let user remove an element from the circuit.
+-	Let user select a panel for a circuit. 
+-	Let user disconnect panel from a circuit if the circuit has a panel。
+
+=== DOC_BLOCK_0131 ===
+[ReadMe_RebarContainerAnyShapeType.rtf][summary]:
+Show how to create a Rebar Container in a concrete element (Beam or Column) which does not currently host reinforcement.
+
+[ReadMe_RebarContainerAnyShapeType.rtf][description]:
+This sample uses method RebarContainer.Create to create a Rebar Container for the selected host. The RebarContainer,Create method requires the RebarContainerType parameter which is called by the RebarContainerType.CreateDefaultContainerType.
+
+=== DOC_BLOCK_0133 ===
+[ReadMe_ReferencePlane.rtf][summary]:
+This sample shows how to create Reference Plane by Revit API.
+
+[ReadMe_ReferencePlane.rtf][description]:
+This sample provides the following functionalities:
+-	Report all reference planes in current project, show its ID, bubble end, free end and normal. 
+-	Allow user to create a reference plane:
+-	If user selected wall in Revit then create Reference Plane at the left face of the wall.
+-	If user selected floor in Revit then create Reference Plane at the bottom of the floor.
+
+=== DOC_BLOCK_0135 ===
+[ReadMe_Reinforcement.rtf][summary]:
+Show how to create Rebar in concrete element (Beam or Column) which does not have any reinforcement.
+
+[ReadMe_Reinforcement.rtf][description]:
+This sample use Rebar.CreateFromCurves method to create Rebar for the selected host. Rebar.CreateFromCurves method needs RebarBarType parameter which can be got by iterating the active document elements. Another parameter that is needed is BarTerminationsData that stores Ids for hooks or end treatments or cranks. These ones can also be obtained by iterating the active document elements.
+
+=== DOC_BLOCK_0137 ===
+[ReadMe_Ribbon.rtf][summary]:
+This sample demonstrates how to create customized ribbon for Add-In and how to create different types of ribbon items (RibbonPanel, PushButton, PulldownButton, Stackable Buttons, RadioButtonGroup, TextBox, SplitButton).
+
+[ReadMe_Ribbon.rtf][description]:
+This sample should provide the following functionalities:
+·	Add different kinds of Ribbon Buttons into Revit: (just like the screenshot below)
+Ø	First Part of the Panel is use to create walls or structural walls.
+Ø	Second Part is used to select on which level the new wall with what shape will be built. Also, you can undo you changes made on those choosing by “Reset” button. 
+Ø	Third Part is used to select the wall type. 
+Ø	Fourth Part is used to set the “Mark” of the new wall. 
+Ø	Fifth Part is used to delete or move walls.
+Ø	Fourth and fifty parts are added into the Slide-Out panel.
+
+
+·	The First Part contains one SplitButton which consists with two PushButtons.
+Ø	Create Wall is used to create a wall in the center of the Revit canvas.
+Ø	Create Wall is used to create a structural wall in the center of the Revit canvas.
+·	The Second Part contains one StackedButton which is consisted of one PushButton and two Comboboxes.
+Ø	The first button is used to reset the choosing changes made by user.
+Ø	The other two Combo-boxes are used to select the level and wall’s shape. 
+·	The Third Part contains a RadioButtonGroup for user to select WallType.
+ ·	The Fourth Part contains a Text box which is used to set the “Mark” for the new wall. 
+ ·	The Fifth Part contains a StackedButton which consisted of a PushButton (delete all the walls) and a PulldownButton (move all the walls in X or Y direction)
+
+
+Implementation Notes
+·	To add RibbonPanel in Revit, user need to implement the IExternalApplication interface, and call the corresponding method to create RibbonItems in OnStartup(ControlledApplication) method.
+·	Each button in every Panel should have a corresponding command to execute. The command corresponding to each button should implement the IExternalCommand interface.
+·	Use ControlledApplication.CreateRibbonPanel(string ribbonName) to add new Panel to Revit.
+·	Use RibbonPanel.AddPushButton() to add single PushButton to each Panel.
+·	Use RibbonPanel.AddStackedButtons() to add stackable buttons to each panel.
+·	Use PulldownButton.AddItem() to add sub button to each PulldownButton.
+·	Set the Image or LargeImage properties, user must new an ImageSource class first, but ImageSource is an abstract class, so user must new the subclass of ImageSource, such as BitmapImage.
+For instance:  PushButton.Image = new BitmapImage(new Uri(imagePath, UriKind.Absolute))
+
+=== DOC_BLOCK_0139 ===
+[ReadMe_RoofsRooms.rtf][summary]:
+This sample demonstrates how to check whether a Room/Space has a bounding Roof.
+
+[ReadMe_RoofsRooms.rtf][description]:
+Functionalities:
+Retrieve all Rooms (Space) and Roofs from current project and check them separately.
+Use SparialElementGeometryCalculator to obtain the boundary faces of the room/space. 
+Check if boundary faces related element is a roof.
+
+=== DOC_BLOCK_0141 ===
+[ReadMe_Rooms.rtf][summary]:
+This sample demonstrates how to get Room’s information (Number, Area, Department, etc), add room tags and change Room numbers.
+
+[ReadMe_Rooms.rtf][description]:
+This sample uses Rooms and Creation classes mostly to implement the functionality: get Room’s information (Number, Department, Tags, etc), add Tags to Room and change Room’s number.
+-	Room objects can be gotten via ActiveDocument.Elements property.
+-	To add Tags for Room, use Document.Create.NewRoomTag method.
+-	To get department and area of Room, use BuiltInParameter.ROOM_DEPARTMENT and BuiltInParameter.ROOM_AREA as parameters for Room.get_Parameter() methods.
+-	Number property of Room can be used to get/set the Room’s Number.
+
+=== DOC_BLOCK_0143 ===
+[ReadMe_RoomSchedule.rtf][summary]:
+This sample demonstrates: how to retrieve spread sheet data, how to create rooms without placing them and how to update spreadsheet data with data of rooms mapped to.
+
+[ReadMe_RoomSchedule.rtf][description]:
+This sample uses OleDb.OleDbConnection, OleDb.OleDbCommand and relevant Revit classes mostly to synchronize spreadsheet based room schedule with Revit rooms. This sample implements two functionalities: import room schedule from spreadsheet and update room area fields in spreadsheet by using data from Revit.
+-	To deal with .xls file (read, update), use OleDb.OleDbConnection, OleDbCommand, DataTable classes of .NET.
+-	To create rooms in specified phase, use Creation.Document.NewRoom(Phase).
+-	To get specified element you want, use Document.get_Elements(Filter) method.
+-	To get parameters of room, use Room.get_Parameter(String paramName) method.
+-	To get all rooms in each PlanTopology, use PlanTopology.Rooms property.
+-	DocumenSaving/DocumentSavedAs/DocumentClosed of controlled application level subscribed and implements related functionality.
+-	Class DefinitionFile, DefinitionGroup, Definition and InstanceBinding will be used to create shared parameter for rooms.
+
+=== DOC_BLOCK_0145 ===
+[ReadMe_ShaftHolePuncher.rtf][summary]:
+This sample demonstrates how to create single or Shaft Opening on a wall, floor or beam.
+
+[ReadMe_ShaftHolePuncher.rtf][description]:
+This sample shows user how to create Opening by 
+Autodesk.Revit.Creation.Document.NewOpening(…) method, this method has four overloads:
+-	NewOpening(Element, CurveArray, eRefFace) is used to create Opening in a beam, brace or column. eRefFace is used to define a face which opening is based on.
+-	NewOpening(Element, CurveArray, bool) <mk:@MSITStore:C:\Program%20Files\Autodesk%20Revit%20Building%2010\Program\RevitAPI.chm::/Autodesk.Revit.Creation.Document.NewOpening_overload_2.html> is used to create Opening on roof, floor or ceiling, bool value is used to indicate whether it is to cut perpendicular to the face or cut vertically.
+-	NewOpening(Level, Level, CurveArray) is used to create Shaft Opening.
+-	NewOpening(Wall, ref XYZ, ref XYZ) is used to create Opening on Wall.
+
+=== DOC_BLOCK_0147 ===
+[ReadMe_SharedCoordinateSystem.rtf][summary]:
+This sample demonstrates how to get place, location of project, and change their values.
+
+[ReadMe_SharedCoordinateSystem.rtf][description]:
+This sample demonstrates the following functionality:
+-	Get place of the current document, and get the data from place (in the active document):
+-	City name.
+-	Latitude.
+-	Longitude.
+-	Time zone.
+-	Get location of the current document, and get the data from location:
+-	Name
+-	Transform (from this point to origin)
+-	Present a dialog to show the data of place and location for current document, and modify the following information:
+-	Latitude, Longitude and Time zone for active place
+-	Active Place for the active document (City Name, Latitude and Longitude) to defined list AR-CITY.UNI file on disk
+-	Transform for current Location
+-	Current Location from list of defined locations
+-	Add new location to list.
+
+=== DOC_BLOCK_0149 ===
+[ReadMe_SheetToView3D.rtf][summary]:
+This sample demonstrates how to use the View and Viewport transforms to map a point on a sheet to a location in the 3D model. It also demonstrates how to use TransformWithBoundary to inspect the view crop regions if the view crop has been broken (split) into many pieces.
+
+[ReadMe_SheetToView3D.rtf][description]:
+This sample demonstrates the following functionalities:
+-	It captures a click on a sheet from the user, then verifies that a view plan viewport was clicked.  Then it collects transforms from the clicked viewport and view and builds a transform from sheet space to 3D model space. (If the view has a broken (split) crop region, then the crop region and transform for the click’s location is found.)  The click point is then converted into 3D model space and projected onto the view plan’s cut plane.  A new perspective 3D view is created with its camera at this point.
+-	The most important class is MakeView3D. It shows how to get the transforms from the viewports and views, how to get crop region boundaries from TransformWithBoundary, and how to generate a new 3D view via RevitAPI.
+
+=== DOC_BLOCK_0151 ===
+[ReadMe_SlabProperties.rtf][summary]:
+This sample demonstrates how to get Slab’s properties which consist of Level, Type Name, Span Direction and Slab’s Layers information (Material Name, Thickness, Young Modulus X, Y and Z).
+
+[ReadMe_SlabProperties.rtf][description]:
+This sample uses Structural and Parameters classes mostly to implement the functionality of getting Slab’s properties which consists of Level, Type Name, Span Direction and all Layers information (Material name, Young Modulus.
+-	Slab objects can be gotten from ActiveDocument.Selection.Elements.
+-	Floor.Level.Name, Floor.FloorType.Name and Floor.get_Parameter(BuiltInParameter.FLOOR_PARAM_SPAN_DIRECTION) can be used to get the Level, Type name and Span direction of Slab respectively.
+-	Floor.FloorType.CompoundStructure.Layers can be used to retrieve the Structure Layers collection of Slab.
+-	CompoundStructureLayer class’s Thickness, Material properties and get_Parameter() method can retrieve the thickness, material and the young modulus of Slab.
+-	Use BuiltInParameter.PHY_MATERIAL_PARAM_YOUNG_MOD1, PHY_MATERIAL_PARAM_YOUNG_MOD2 and PHY_MATERIAL_PARAM_YOUNG_MOD3 to retrieve the X, Y, Z Young Modulus respectively.
+
+=== DOC_BLOCK_0153 ===
+[ReadMe_SlabShapeEditing.rtf][summary]:
+This sample demonstrates how to create SlabShapeVertex and SlabShapeCrease, and then use them to edit slab’s shape.
+
+[ReadMe_SlabShapeEditing.rtf][description]:
+This sample shows user how to:
+1.	Create SlabShapeVertex by 
+SlabShapeEditor.DrawPoint(Autodesk.Revit.Geometry.XYZ location) method.
+2.	Create SlabShapeCrease by
+SlabShapeEditor.DrawSplitLine(SlabShapeVertex startVertex, SlabShapeVertex endVertex) method. A crease is consisted by two vertices.
+3.	Move new created vertex by
+ SlabShapeEditor.ModifySubElement(SlabShapeVertex pVertex, double offset)
+4.	Move new created crease by
+SlabShapeEditor.ModifySubElement(SlabShapeCrease pCrease, double offset), offset use to set position of midpoint on crease.
+
+=== DOC_BLOCK_0155 ===
+[ReadMe_SolidSolidCut.rtf][summary]:
+Shows how to use Solid-Solid Cut and Uncut.
+
+[ReadMe_SolidSolidCut.rtf][description]:
+The sample defines two classes which inherit from IExternalCommand interface, and implement the Execute method with cut or uncut two solids operation.
+The class Cut implements the function that can let the sphere cut the cube.
+The class Uncut implements the function that can remove the cutting relationship between the sphere and the cube.
+
+=== DOC_BLOCK_0157 ===
+[ReadMe_SpanDirection.rtf][summary]:
+This sample demonstrates how to get span direction and span direction symbols of structural Floor (Slab).
+
+[ReadMe_SpanDirection.rtf][description]:
+This sample uses Floor class mostly to implement the functionality of getting properties of Floor (Slab): span direction angle and span direction symbols.
+-	Floor objects can be gotten from ActiveDocument.Selection.Elements.
+-	Floor.SpanDirectionAngle and Floor.SpanDirectionSymbols properties can be used to retrieve the span direction angle and span direction symbols of Floor (Slab).
+-	To get span direction symbols, Element.ObjectType.Name
+
+=== DOC_BLOCK_0159 ===
+[ReadMe_SpotDimension.rtf][summary]:
+This sample demonstrates how to retrieve all the spot dimensions and theirs properties in all views of Revit document.
+
+[ReadMe_SpotDimension.rtf][description]:
+-	Get spot dimensions in all views. All the spot dimensions can be retrieved by scanning Elements of Document.
+-	There is a dialog to show these spot dimensions according to its View property and some information of them.
+-	If one spot dimension was selected in dialog when return to Revit, it can be highlighted.
+-	Classify spot dimension according to its View property. Spot dimensions in same view will be displayed together.
+-	Select view from a list, and then spot dimensions in it are displayed.
+-	Select spot dimension from a list, then some of its parameters are displayed.
+-	Parameters can be got via DimensionType.get_Parameter() and some properties of the SpotDimension Class.
+
+=== DOC_BLOCK_0161 ===
+[ReadMe_StructSample.rtf][summary]:
+This sample demonstrates how to place a set of columns in the selected wall.
+
+[ReadMe_StructSample.rtf][description]:
+This sample uses FamilyInstance, Family, FamilySymbol methods mostly to find a specialized column; then place this column to some selected walls with specialized spacing. (Note: the column type and interval between two columns are hard codes).
+-	To retrieve all the symbols of one Family, use Autodesk.Revit.Elements.Family.Symbols property and use Autodesk.Revit.Symbols.FamilySymbol.Name to get specialized column type.
+-	To create new column, use Autodesk.Revit.Document.Create.NewFamilyInstance method; Use Autodesk.Revit.Elements.FamilyInstance.Location to change or rotate column.
+-	To get/set the Column’s base & top levels, use Autodesk.Revit.Parameters.BuiltInParameter.FAMILY_BASE_LEVEL_PARAM and FAMILY_TOP_LEVEL_PARAM parameters in FamilyInstance.get_Parameter () method. 
+-	To get/set the relevant information (vector, length) of wall and column, use methods and properties of classes Autodesk.Revit.Geometry.XYZ, UV, Line.
+
+=== DOC_BLOCK_0163 ===
+[ReadMe_StructuralLayerFunction.rtf][summary]:
+This sample demonstrates how to retrieve the function of each structural layer of selected floor in order from outside to inside in a dialog box.
+
+[ReadMe_StructuralLayerFunction.rtf][description]:
+This sample uses Autodesk.Revit.Structural.CompoundStructureLayer and Autodesk.Revit.Structural.Enum.CompoundStructureLayerFunction mostly to get all the layer functions of Floor.
+-	To get all the Structure layers of floor, use Floor.FloorType.CompoundStructure.Layers property.
+-	To get the function of one layer, use Function property of CompoundStructureLayer class.
+-	The layers of the floor are ordered from outside to inside in the structural layers object.
+
+=== DOC_BLOCK_0165 ===
+[ReadMe_TagBeam.rtf][summary]:
+This sample demonstrates how to create tags at the start and end of selected beams, how to create a rebar tag at the end of the first curve of selected rebar and how to create a text.
+
+[ReadMe_TagBeam.rtf][description]:
+This sample creates tags to the start and end of selected beams. Create a rebar tag at the end of the first curve of the selected rebar and create text node at the right of the rebar..
+
+=== DOC_BLOCK_0167 ===
+[ReadMe_Toposolid.rtf][summary]:
+API samples for toposolid related features.
+
+[ReadMe_Toposolid.rtf][description]:
+This sample provides following functionalities.
+Create a Toposolid using a list of points, a list of curveloops, a ToposolidType id, and a level id.
+Create a Toposolid by selecting an ImportInstance. 
+Add ContourSettingItems to the contour setting of a ToposolidType.
+Modify ContourSettingItems of the contour setting of a ToposolidType. 
+Create a Toposolid by selecting a TopographySurface.
+Change the visibility of SlabShape points for Toposolid category. 
+Split a Toposolid by selecting a list of curves.
+Simplify a Toposolid by a given ratio.
+
+=== DOC_BLOCK_0169 ===
+[ReadMe_TransactionControl.rtf][summary]:
+This sample demonstrates how to use transaction group, transaction and sub transaction.
+
+[ReadMe_TransactionControl.rtf][description]:
+Functionalities:
+-	Three buttons in group box of transaction group provide following operations: begin a transaction group, rollback a transaction group, commit a transaction group. 
+-	Three buttons in group box of transaction provide following operations: begin a transaction, rollback a transaction, commit a transaction. 
+-	Three buttons in another operations group box provide following operations: create a wall, move a wall, delete a wall. 
+-	Provide a tree view to display transaction groups, transactions, operations and the relationship between them. 
+-	Allow user to use nested transaction groups to manage their transaction groups and transactions. Transactions cannot be nested and can be created inside or outside a transaction group. Sub transactions must be created inside a transaction. User can do one or more of the operations listed above inside a transaction or sub transaction.
+-	When user clicks “Ok”/”Cancel” and there are some transaction groups or transactions which are not finished, show a message box to ask user whether to end all transactions.
+
+=== DOC_BLOCK_0171 ===
+[ReadMe_Truss.rtf][summary]:
+This sample demonstrates how to create a truss and modify its truss members and profile.
+
+[ReadMe_Truss.rtf][description]:
+This sample shows user how to create Truss by 
+Autodesk.Revit.Creation.Document.NewTruss(Symbols.TrussType trussType, Elements.SketchPlane sketchPlane, Geometry.Curve baseCurve, Elements.View dbView) method:
+n	TrussType will specify the type of truss, can be get from Autodesk.Revit.Document.TrussTypes property.
+n	sketchPlane used to define which sketch plane truss can base on
+n	baseCurve used to define the start point and end point of new truss.
+n	dbView used to specify which level truss create on.
+
+=== DOC_BLOCK_0173 ===
+[ReadMe_ViewPrinter.rtf][summary]:
+This sample demonstrates how to print the printable view and sheets.
+
+[ReadMe_ViewPrinter.rtf][description]:
+This sample demonstrates the following functionalities:
+-	Print the printable views and sheets.
+-	Change print setting.
+

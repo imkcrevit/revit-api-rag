@@ -1,0 +1,15 @@
+models:
+  - model: Qwen/Qwen3-Embedding-0.6B
+    parameters:
+      density: [1, 0.7, 0.1] # density gradient
+      weight: 0.4
+  - model: Qwen/Qwen3-Embedding-0.6B
+    parameters:
+      density: 0.5
+      weight: 0.6 # weight gradient
+merge_method: ties
+base_model: Qwen/Qwen3-Embedding-0.6B
+parameters:
+  normalize: true
+  int8_mask: true
+dtype: float16
