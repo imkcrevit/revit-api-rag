@@ -10,15 +10,15 @@ this is a rag project to use revit api
 
 ## Enviorment
 `./requirements.txt`
-
+## Revit Version
+`2026`
 ## Graphics Platform
-
-`https://www.autodl.com/`
-graphics : 5090
-cuda : 12.8 
-embedding & rerank model : QWen 0.6B
-embedding database : chromadb
-database : sqlite
+- `https://www.autodl.com/`
+- graphics : 5090
+- cuda : 12.8 
+- embedding & rerank model : QWen 0.6B
+- embedding database : chromadb
+- database : sqlite
 
 ## Split The RevitAPI File
 ![RevitAPI](RevitAPI.png)
