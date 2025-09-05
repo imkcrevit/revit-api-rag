@@ -1,3 +1,19 @@
+# 致谢与源代码归属 (Acknowledgements and Source Attribution)
+
+本 RAG 项目的部分代码和文件实现，参考或直接使用了来自 Jeremy Tammik 的 [RevitSdkSamples](https://github.com/jeremytammik/RevitSdkSamples) 项目。
+
+该项目是基于 **MIT License** 授权的优秀资源，为本项目提供了巨大的帮助。
+
+原始项目的版权和授权详情，请参阅本项目根目录下的 `NOTICE` 和 `LICENSE` 文件。
+
+# Acknowledgements and Source Attribution
+
+Portions of this RAG project are based on code and files from Jeremy Tammik's [RevitSdkSamples](https://github.com/jeremytammik/RevitSdkSamples).
+
+The original project is an invaluable resource licensed under the **MIT License**.
+
+The original copyright notice and full license text can be found in the `NOTICE` and `LICENSE` files in this project's root directory.
+
 # revit-api-rag
 this is a rag project to use revit api
 
