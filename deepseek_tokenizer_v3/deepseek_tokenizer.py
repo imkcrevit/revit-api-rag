@@ -16,7 +16,7 @@ def get_local_tokenizer_length(content : str) :
                 )
 
         result = tokenizer.encode(content)
-        print(len(result))
+        # print(len(result))
         return len(result)
 
 
