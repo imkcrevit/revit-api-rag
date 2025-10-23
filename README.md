@@ -14,6 +14,23 @@ The original project is an invaluable resource licensed under the **MIT License*
 
 The original copyright notice and full license text can be found in the `NOTICE` and `LICENSE` files in this project's root directory.
 
+# 2025.10.23 Update
+## SDK Embedding Setup
+1. Add New File [Revit SDK Kernel](./revit_sdk_prund/sdk_prunding.ipynb)
+2. Use `tree-sitter` to get the gold-code block , and remove the `using` , `namespace` or some `summary`
+3. Use A LLM to read all gold-code block and generation a clean code 
+4. Use The LLM json output format 
+5. Save Data To [Sqlit File](./revit_sdk_collection/revit_sdk.db)
+![workflow](./RAG-Workflow-Update.jpg)
+
+## Main Workflow 
+1. Embedding the sdk file , And Save To [chromadb1022_code_1](./chromadb1022_code_1.db/)
+2. Add New Setuo Will Generation A  Simple Code If user Want To Complete Code , Can input the target-character to get 
+3. Remove The API Key Files
+4. Update The Prompt To Mian Workflow
+5. The Result OutPut [output_text.md](./output_text_1023.md)
+![workflow](./rag-main-workflow.jpg)
+
 # revit-api-rag
 this is a rag project to use revit api
 
