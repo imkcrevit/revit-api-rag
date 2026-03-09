@@ -1,0 +1,30 @@
+# ============================================================
+# Server 阶段依赖（GCP 服务器安装）
+# pip install -r requirements-server.txt
+# ============================================================
+
+# Web 框架
+fastapi>=0.100
+uvicorn[standard]>=0.22
+pydantic>=2.0
+sse-starlette>=1.0
+
+# 前端
+gradio>=4.0
+
+# LLM API
+google-genai>=1.0
+openai>=1.0
+
+# Rerank API
+cohere>=5.0
+
+# 向量数据库
+chromadb>=1.0
+
+# 基础工具
+numpy>=1.26
+pyyaml>=6.0
+python-dotenv>=1.0
+httpx>=0.28
+jinja2>=3.1
