@@ -432,7 +432,10 @@ def save_to_sqlite(api_data: list[dict], db_path: str):
             exceptions TEXT,
             return_value TEXT,
             syntax TEXT,
-            members TEXT
+            members TEXT,
+            quality_score REAL,
+            quality_issues TEXT,
+            rewritten INTEGER DEFAULT 0
         )
     """)
 
@@ -440,16 +443,21 @@ def save_to_sqlite(api_data: list[dict], db_path: str):
     cursor.execute("DELETE FROM revit_api")
 
     for item in api_data:
+        issues = item.get("_quality_issues") or []
         cursor.execute(
-            """INSERT INTO revit_api 
-               (name, full_id, namespace, content_type, keywords, info, 
-                summary, remark, parameters, exceptions, return_value, syntax, members) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO revit_api
+               (name, full_id, namespace, content_type, keywords, info,
+                summary, remark, parameters, exceptions, return_value, syntax, members,
+                quality_score, quality_issues, rewritten)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (item.get("name"), item.get("full_id"), item.get("namespace"),
              item.get("content_type"), item.get("keywords"), item.get("info"),
              item.get("summary"), item.get("remark"), item.get("parameters"),
              item.get("exceptions"), item.get("return_value"), item.get("syntax"),
-             item.get("members"))
+             item.get("members"),
+             item.get("_quality_score"),
+             "; ".join(issues) if issues else None,
+             1 if item.get("_rewritten") else 0)
         )
 
     conn.commit()
