@@ -30,13 +30,22 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 4096,
         timeout: float = _DEFAULT_TIMEOUT,
+        proxy: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self._client = httpx.Client(timeout=timeout)
+
+        # Configure HTTP proxy if provided (helps with Gemini routing in restricted networks)
+        if proxy:
+            self._client = httpx.Client(
+                timeout=timeout,
+                proxy=proxy,
+            )
+        else:
+            self._client = httpx.Client(timeout=timeout)
 
     def generate_text(self, prompt: str, system_prompt: str | None = None) -> str:
         """
@@ -119,7 +128,13 @@ def create_llm_client(config: dict[str, Any], provider_override: str | None = No
         )
 
     temperature = llm_cfg.get("temperature", 0.3)
-    max_tokens = llm_cfg.get("max_tokens", 4096)
+    max_tokens  = llm_cfg.get("max_tokens", 4096)
+
+    # Proxy: model-level override > global proxy config
+    proxy_cfg   = config.get("proxy", {})
+    proxy_url: str | None = None
+    if proxy_cfg.get("enabled", False):
+        proxy_url = proxy_cfg.get("https") or proxy_cfg.get("http")
 
     return LLMClient(
         base_url=base_url,
@@ -127,5 +142,6 @@ def create_llm_client(config: dict[str, Any], provider_override: str | None = No
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        proxy=proxy_url,
     )
 
