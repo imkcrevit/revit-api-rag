@@ -210,3 +210,4 @@ data/raw/
 data/chromadb_api.tar.gz
 data/chromadb_code.tar.gz
 data/sqlite/*.db
+!data/sqlite/revit-api-*/
