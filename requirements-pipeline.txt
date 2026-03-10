@@ -1,0 +1,29 @@
+# ============================================================
+# Pipeline 阶段依赖（Colab 中安装）
+# pip install -r requirements-pipeline.txt
+# ============================================================
+
+# 数据解析
+beautifulsoup4>=4.12
+lxml
+
+# Embedding API
+google-genai>=1.0
+openai>=1.0
+
+# 向量数据库
+chromadb>=1.0
+
+# 数据处理
+pandas>=2.0
+numpy>=1.26
+tqdm>=4.60
+pyyaml>=6.0
+python-dotenv>=1.0
+
+# LLM API（数据清洗阶段调用）
+httpx>=0.28
+
+# 代码解析（SDK 清洗用）
+# tree-sitter>=0.20
+# tree-sitter-c-sharp>=0.20

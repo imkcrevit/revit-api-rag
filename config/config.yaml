@@ -1,0 +1,73 @@
+
+revit_version: "2026"
+
+# --- OpenRouter 统一配置 ---
+openrouter:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: "OPENROUTER_API_KEY"
+
+# --- LLM 配置 ---
+llm:
+  provider: "gemini"   # gemini / deepseek
+  models:
+    gemini:
+      model: "google/gemini-2.5-flash-preview"
+      api_key_env: "OPENROUTER_API_KEY"
+      base_url: "https://openrouter.ai/api/v1"
+    deepseek:
+      model: "deepseek/deepseek-chat-v3-0324"
+      api_key_env: "OPENROUTER_API_KEY"
+      base_url: "https://openrouter.ai/api/v1"
+  temperature: 0.3
+  max_tokens: 4096
+
+# --- Embedding 配置 ---
+embedding:
+  provider: "openai"
+  models:
+    openai:
+      model: "openai/text-embedding-3-large"
+      dimension: 3072
+      api_key_env: "OPENROUTER_API_KEY"
+      base_url: "https://openrouter.ai/api/v1"
+
+# --- Rerank 配置 ---
+rerank:
+  enabled: true
+  provider: "cohere"
+  models:
+    cohere:
+      model: "cohere/rerank-v3.5"
+      api_key_env: "OPENROUTER_API_KEY"
+      base_url: "https://openrouter.ai/api/v1"
+
+# --- 检索参数 ---
+retrieval:
+  api:
+    top_k: 30
+    rerank_top_n: 15
+  code:
+    top_k: 5
+    rerank_top_n: 3
+
+# --- 数据路径 ---
+data:
+  chromadb_dir: "./data/chromadb"
+  sqlite_dir: "./data/sqlite"
+  knowledge_dir: "./data/knowledge"
+
+# --- Intent Bridge ---
+intent:
+  enabled: true
+  auto_complete: true
+  ask_on_ambiguity: true
+  validate_output: true
+  explain_result: true
+  language: "zh"
+
+# --- 服务配置 ---
+server:
+  host: "0.0.0.0"
+  port: 8000
+  gradio_port: 7860
+  cors_origins: ["*"]

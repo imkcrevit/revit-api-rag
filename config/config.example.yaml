@@ -1,0 +1,86 @@
+# ============================================================
+# revit-api-rag 配置文件
+# 复制此文件为 config.yaml 并修改
+# API Key 通过环境变量设置，此处引用变量名
+# ============================================================
+
+revit_version: "2026"
+
+# --- LLM 配置 ---
+llm:
+  provider: "gemini"   # gemini / deepseek
+  models:
+    gemini:
+      model: "gemini-2.5-flash"
+      api_key_env: "GOOGLE_API_KEY"
+    deepseek:
+      model: "deepseek-chat"
+      base_url: "https://api.deepseek.com/v1"
+      api_key_env: "DEEPSEEK_API_KEY"
+  temperature: 0.3
+  max_tokens: 4096
+
+# --- Embedding 配置 ---
+embedding:
+  provider: "google"   # openai / google / local_hf / zhipu
+  models:
+    openai:
+      model: "text-embedding-3-small"
+      dimension: 1536
+      api_key_env: "OPENAI_API_KEY"
+    google:
+      model: "text-embedding-004"
+      dimension: 768
+      api_key_env: "GOOGLE_API_KEY"
+    local_hf:
+      model: "Qwen/Qwen2.5-0.5B"
+      device: "cuda"
+    zhipu:
+      model: "embedding-3"
+      api_key_env: "ZHIPU_API_KEY"
+
+# --- Rerank 配置 ---
+rerank:
+  enabled: true
+  provider: "cohere"   # cohere / jina / local_hf
+  models:
+    cohere:
+      model: "rerank-v3.5"
+      api_key_env: "COHERE_API_KEY"
+    jina:
+      model: "jina-reranker-v2-base-multilingual"
+      api_key_env: "JINA_API_KEY"
+    local_hf:
+      model: "Qwen/Qwen2.5-0.5B"
+      device: "cuda"
+
+# --- 检索参数 ---
+retrieval:
+  api:
+    top_k: 30
+    rerank_top_n: 15
+  code:
+    top_k: 5
+    rerank_top_n: 3
+
+# --- 数据路径 ---
+data:
+  chromadb_dir: "./data/chromadb"
+  sqlite_dir: "./data/sqlite"
+  knowledge_dir: "./data/knowledge"
+
+# --- Intent Bridge ---
+intent:
+  enabled: true
+  auto_complete: true
+  ask_on_ambiguity: true
+  validate_output: true
+  explain_result: true
+  language: "zh"
+
+# --- 服务配置 ---
+server:
+  host: "0.0.0.0"
+  port: 8000
+  gradio_port: 7860
+  cors_origins: ["*"]

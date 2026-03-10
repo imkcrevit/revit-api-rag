@@ -1,0 +1,48 @@
+"""
+配置加载器 — 读取 config.yaml 并提供全局访问
+"""
+import os
+import yaml
+from pathlib import Path
+
+
+def load_config(config_path: str = None) -> dict:
+    """加载配置文件"""
+    if config_path is None:
+        # 按优先级查找配置文件
+        candidates = [
+            Path("config/config.yaml"),
+            Path("config/config.example.yaml"),
+            Path(__file__).parent.parent / "config" / "config.yaml",
+            Path(__file__).parent.parent / "config" / "config.example.yaml",
+        ]
+        for p in candidates:
+            if p.exists():
+                config_path = str(p)
+                break
+        else:
+            raise FileNotFoundError("找不到配置文件，请复制 config.example.yaml 为 config.yaml")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    return config
+
+
+def get_api_key(env_name: str) -> str:
+    """从环境变量获取 API Key"""
+    key = os.getenv(env_name)
+    if not key:
+        raise ValueError(f"环境变量 {env_name} 未设置，请在 .env 文件或系统环境中配置")
+    return key
+
+
+# 全局配置单例
+_config = None
+
+
+def get_config() -> dict:
+    global _config
+    if _config is None:
+        _config = load_config()
+    return _config
