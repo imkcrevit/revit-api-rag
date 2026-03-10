@@ -3,7 +3,7 @@ revit_version: "2026"
 
 # --- HTTP 代理配置（国内环境建议开启，解决 Gemini 等模型 400/连接问题）---
 proxy:
-  enabled: true
+  enabled: false
   http: "http://127.0.0.1:10808"
   https: "http://127.0.0.1:10808"
 
