@@ -121,6 +121,7 @@ def parse_single_html(html_path: str) -> dict | None:
         "return_value": return_value,
         "syntax": syntax,
         "members": members,
+        "_source_file": str(html_path),  # exact path used by quality_agent to load raw HTML
     }
 
 

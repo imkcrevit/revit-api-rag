@@ -29,18 +29,33 @@ from pipeline.llm_client import LLMClient, create_llm_client
 # 阈值配置
 # ─────────────────────────────────────────────────────────────
 _QUALITY_THRESHOLD = 0.6   # Stage-1 得分低于此值时触发 Stage-2
-_MAX_STAGE2_ITEMS = 2000   # 单次运行最多处理多少条 Stage-2（防止费用过高）
+_MAX_STAGE2_ITEMS = 2000
 
 
 # ─────────────────────────────────────────────────────────────
 # HTML 辅助：定位并读取原始 HTML 文件
 # ─────────────────────────────────────────────────────────────
 
-def _load_html_excerpt(item: dict[str, Any], html_dir: str, max_chars: int = 3000) -> str:
+def _load_html_excerpt(item: dict[str, Any], html_dir: str | None, max_chars: int = 3000) -> str:
     """
-    根据 full_id / name 在 html_dir 里找到对应 HTML 文件并读取前 max_chars 字符。
-    CHM 解压后文件名通常与 full_id 或 name 直接关联。
+    读取原始 HTML 内容。
+    优先使用 parse_single_html 存储的 _source_file 精确路径；
+    若无则按 full_id / name 做名称猜测。
     """
+    # 最直接：parse_single_html 已存储原始文件路径
+    src = item.get("_source_file", "")
+    if src:
+        p = Path(src)
+        if p.exists():
+            try:
+                return p.read_text(encoding="utf-8", errors="ignore")[:max_chars]
+            except Exception:
+                pass
+
+    # 回退：按名称在 html_dir 里搜索
+    if not html_dir:
+        return ""
+
     full_id = item.get("full_id") or ""
     name    = item.get("name") or ""
 
@@ -48,7 +63,6 @@ def _load_html_excerpt(item: dict[str, Any], html_dir: str, max_chars: int = 300
     if full_id:
         candidates.append(full_id + ".htm")
         candidates.append(full_id + ".html")
-        # 只取类名部分
         short = full_id.split(".")[-1]
         candidates.append(short + ".htm")
         candidates.append(short + ".html")
@@ -74,20 +88,21 @@ def _load_html_excerpt(item: dict[str, Any], html_dir: str, max_chars: int = 300
 
 _STAGE1_SYSTEM = (
     "You are a strict data-quality auditor for Revit API documentation records. "
-    "Always reply with a single valid JSON object and nothing else."
+    "Be critical and precise. Always reply with a single valid JSON object and nothing else."
 )
 
-_STAGE1_PROMPT_TPL = """\
+_STAGE1_PROMPT_WITH_HTML = """\
 Audit the following parsed Revit API record by comparing it against the RAW HTML source.
-Check whether important information present in the HTML has been correctly extracted into the parsed fields.
 
-Score criteria (cumulative deductions):
-  -0.5  name or full_id indicates a constructor (#ctor / "Constructor") → likely noise, skip
-  -0.3  summary/info is missing OR is a generic template ("The XYZ type exposes…") while HTML has real description
-  -0.25 parameters field is empty but HTML source shows the method has arguments
-  -0.2  syntax/C# signature is missing or clearly incorrect compared to HTML
-  -0.2  important content visible in HTML is absent from all parsed fields
-  -0.15 parameter types are all "Unknown Type" but HTML contains type info
+Score criteria (cumulative deductions from 1.0):
+  -0.5  name/full_id indicates a constructor (#ctor / "Constructor") → noise
+  -0.4  summary AND info are BOTH empty or missing
+  -0.3  summary/info is a generic boilerplate ("The XYZ type exposes…", "Initializes a new instance…")
+        while the HTML contains a real description
+  -0.25 parameters field is empty/missing but HTML shows the method takes arguments
+  -0.2  syntax/C# signature is missing or clearly differs from what's in the HTML
+  -0.2  important content visible in HTML (description, return value) is absent from parsed fields
+  -0.15 all parameter types are "Unknown Type" but HTML has type information
   -0.1  any field contains raw HTML tags, garbled unicode, or excessive whitespace
 
 Parsed record:
@@ -101,12 +116,41 @@ Parsed record:
 Raw HTML excerpt (up to 2500 chars):
 {html_excerpt}
 
-Return ONLY a JSON object with these keys:
-  "quality_score" : float 0–1  (1 = perfect extraction, 0 = completely wrong/missing)
-  "issues"        : list of short English strings describing each problem found (empty list if none)
-  "needs_rewrite" : boolean  (true when quality_score < {threshold})
+Return ONLY a JSON object:
+  "quality_score" : float 0.0–1.0  (be strict; most records should be < 0.9)
+  "issues"        : list of short English strings (empty list only if truly perfect)
+  "needs_rewrite" : boolean (true when quality_score < {threshold})
 
-JSON only. No markdown fences. No explanation."""
+JSON only. No markdown. No explanation."""
+
+_STAGE1_PROMPT_NO_HTML = """\
+Audit the following parsed Revit API record for data quality.
+No raw HTML is available, so judge strictly on field completeness and plausibility.
+
+Score criteria (cumulative deductions from 1.0):
+  -0.5  name/full_id indicates a constructor (#ctor / "Constructor") → noise
+  -0.4  summary AND info are BOTH empty or missing
+  -0.3  summary or info is a generic boilerplate ("The XYZ type exposes…", "Initializes a new instance…")
+  -0.25 parameters field is empty but syntax shows the method takes arguments
+  -0.2  syntax/C# signature is missing entirely
+  -0.15 all parameter types shown as "Unknown Type"
+  -0.1  any field contains raw HTML tags, garbled text, or excessive whitespace
+  -0.1  summary/info is extremely short (under 20 characters) for a non-trivial API member
+
+Parsed record:
+  name        : {name}
+  full_id     : {full_id}
+  syntax      : {syntax}
+  summary     : {summary}
+  info        : {info}
+  parameters  : {parameters}
+
+Return ONLY a JSON object:
+  "quality_score" : float 0.0–1.0  (be strict; average should be around 0.7, not 1.0)
+  "issues"        : list of short English strings (empty list only if truly perfect)
+  "needs_rewrite" : boolean (true when quality_score < {threshold})
+
+JSON only. No markdown. No explanation."""
 
 
 def _stage1_audit(
@@ -116,39 +160,50 @@ def _stage1_audit(
 ) -> dict[str, Any]:
     """
     用 Gemini 对单条记录做结构化质量审核（含原始 HTML 对比）。
-    返回 {"quality_score": float, "issues": [...], "needs_rewrite": bool}
     """
-    html_excerpt = "(HTML not available)"
-    if html_dir:
-        raw = _load_html_excerpt(item, html_dir, max_chars=2500)
-        if raw:
-            # 去掉多余空白，压缩 HTML 噪音
-            html_excerpt = re.sub(r"\s{3,}", "  ", raw)
+    html_excerpt = _load_html_excerpt(item, html_dir, max_chars=2500)
 
-    prompt = _STAGE1_PROMPT_TPL.format(
-        threshold=_QUALITY_THRESHOLD,
-        name=item.get("name", ""),
-        full_id=item.get("full_id", ""),
-        syntax=(item.get("syntax") or "")[:300],
-        summary=(item.get("summary") or "")[:300],
-        info=(item.get("info") or "")[:200],
-        parameters=(item.get("parameters") or "")[:400],
-        html_excerpt=html_excerpt,
-    )
+    if html_excerpt:
+        # 压缩连续空白，减少 token
+        html_excerpt = re.sub(r"\s{3,}", "  ", html_excerpt)
+        prompt = _STAGE1_PROMPT_WITH_HTML.format(
+            threshold=_QUALITY_THRESHOLD,
+            name=item.get("name", ""),
+            full_id=item.get("full_id", ""),
+            syntax=(item.get("syntax") or "")[:300],
+            summary=(item.get("summary") or "")[:300],
+            info=(item.get("info") or "")[:200],
+            parameters=(item.get("parameters") or "")[:400],
+            html_excerpt=html_excerpt,
+        )
+    else:
+        prompt = _STAGE1_PROMPT_NO_HTML.format(
+            threshold=_QUALITY_THRESHOLD,
+            name=item.get("name", ""),
+            full_id=item.get("full_id", ""),
+            syntax=(item.get("syntax") or "")[:300],
+            summary=(item.get("summary") or "")[:300],
+            info=(item.get("info") or "")[:200],
+            parameters=(item.get("parameters") or "")[:400],
+        )
 
     try:
         raw_resp = gemini.generate_text(prompt, system_prompt=_STAGE1_SYSTEM)
-        # 有时模型会包裹在 ```json``` 里
         raw_resp = re.sub(r"^```(?:json)?\s*", "", raw_resp.strip(), flags=re.IGNORECASE)
         raw_resp = re.sub(r"\s*```$", "", raw_resp.strip())
         result = json.loads(raw_resp)
         result.setdefault("quality_score", 1.0)
         result.setdefault("issues", [])
         result.setdefault("needs_rewrite", result["quality_score"] < _QUALITY_THRESHOLD)
+        result["_html_found"] = bool(html_excerpt)
         return result
     except Exception as e:
-        # 审核失败时保守处理：不触发重写，保留原始数据
-        return {"quality_score": 1.0, "issues": [f"audit_failed: {e}"], "needs_rewrite": False}
+        return {
+            "quality_score": 1.0,
+            "issues": [f"audit_failed: {e}"],
+            "needs_rewrite": False,
+            "_html_found": bool(html_excerpt),
+        }
 
 
 # ─────────────────────────────────────────────────────────────
@@ -187,7 +242,7 @@ Return ONLY a JSON object. Include only keys where you have confident improvemen
   "syntax"     : the correct C# public signature (single line, from HTML)
   "info"       : concise description if summary is also missing
 
-JSON only. No markdown fences. No explanation."""
+JSON only. No markdown. No explanation."""
 
 
 def _stage2_rewrite(
@@ -198,13 +253,8 @@ def _stage2_rewrite(
 ) -> dict[str, Any]:
     """
     用 Claude Sonnet 对低质量条目做字段级修复（以原始 HTML 为依据）。
-    返回包含改善后字段的 dict（仅含需要覆写的 key）。
     """
-    html_excerpt = "(HTML not available)"
-    if html_dir:
-        raw = _load_html_excerpt(item, html_dir, max_chars=3000)
-        if raw:
-            html_excerpt = raw
+    html_excerpt = _load_html_excerpt(item, html_dir, max_chars=3000) or "(HTML not available)"
 
     prompt = _STAGE2_PROMPT_TPL.format(
         issues="\n".join(f"- {i}" for i in issues) if issues else "- general quality below threshold",
@@ -242,14 +292,14 @@ def run_quality_agent(
     """
     对解析后的 API 数据运行两阶段质量 Agent。
 
-    Stage-1 (Gemini) 对每条记录评分，同时对比原始 HTML（如果提供了 html_dir）。
-    Stage-2 (Claude) 仅对低分条目介入，以 HTML 为依据重写各字段。
+    Stage-1 (Gemini) 对每条记录评分，优先使用 item['_source_file'] 读取 HTML（
+    parse_single_html 现在会存储该字段），html_dir 作为回退的搜索目录。
 
     Args:
         api_data:   parse_all_api_html() 的输出
         config:     完整的 config.yaml dict
-        html_dir:   CHM 解压 HTML 目录（强烈建议提供，可显著提升 Stage-1 准确度）
-        max_stage2: Stage-2 最多处理多少条（防止 token 消耗过高）
+        html_dir:   CHM 解压 HTML 目录（备用，当 _source_file 不存在时搜索用）
+        max_stage2: Stage-2 最多处理多少条
         verbose:    是否打印进度和统计
 
     Returns:
@@ -258,52 +308,60 @@ def run_quality_agent(
           "_quality_score"  : float
           "_quality_issues" : list[str]
           "_rewritten"      : bool
+          "_html_found"     : bool  (诊断：Stage-1 是否成功加载 HTML)
     """
     gemini = create_llm_client(config, provider_override="gemini")
     claude = create_llm_client(config, provider_override="claude")
 
     stage2_count = 0
     rewritten_count = 0
+    html_found_count = 0
     results: list[dict[str, Any]] = []
 
     total = len(api_data)
-    html_note = f"  HTML 目录: {html_dir}" if html_dir else "  ⚠ 未提供 html_dir，Stage-1 无法对比 HTML（建议提供）"
     if verbose:
-        print(f"Quality Agent 启动 — 共 {total} 条")
+        print(f"Quality Agent — {total} records")
         print(f"  Stage-1: {gemini.model}")
         print(f"  Stage-2: {claude.model}")
-        print(html_note)
         print()
 
     for i, item in enumerate(api_data):
-        if verbose and i % 100 == 0:
-            print(f"  [{i:>5}/{total}] Stage-2 触发: {stage2_count} 条  重写成功: {rewritten_count} 条")
+        if verbose and i % 50 == 0:
+            pct_html = html_found_count / max(i, 1) * 100
+            print(
+                f"  [{i:>5}/{total}]  HTML found: {html_found_count}/{i} ({pct_html:.0f}%)"
+                f"  Stage-2: {stage2_count}  Rewritten: {rewritten_count}"
+            )
 
         # ── Stage-1: Gemini 审核（含 HTML 对比）────────
         audit = _stage1_audit(item, gemini, html_dir=html_dir)
         score         = audit.get("quality_score", 1.0)
         issues        = audit.get("issues", [])
         needs_rewrite = audit.get("needs_rewrite", False)
+        html_found    = audit.get("_html_found", False)
+
+        if html_found:
+            html_found_count += 1
 
         new_item = dict(item)
         new_item["_quality_score"]  = score
         new_item["_quality_issues"] = issues
         new_item["_rewritten"]      = False
+        new_item["_html_found"]     = html_found
 
         # ── Stage-2: Claude 重写（仅低质量条目）────────
         if needs_rewrite and stage2_count < max_stage2:
             stage2_count += 1
             if verbose:
-                print(f"  [Stage-2 #{stage2_count:>4}] {item.get('name', '')[:50]:<50}  score={score:.2f}")
+                print(f"  [Stage-2 #{stage2_count:>4}] {item.get('name', '')[:50]:<50}  score={score:.2f}  html={'Y' if html_found else 'N'}")
                 if issues:
-                    print(f"              issues: {'; '.join(issues[:3])}")
+                    print(f"              → {'; '.join(issues[:3])}")
 
             patch = _stage2_rewrite(item, issues, html_dir, claude)
 
             if patch and "_rewrite_error" not in patch:
                 for k, v in patch.items():
                     old_val = new_item.get(k) or ""
-                    # 只覆写空字段，或 patch 内容更长（说明修复后信息更丰富）
                     if not old_val or (isinstance(v, str) and len(v) > len(old_val)):
                         new_item[k] = v
                 new_item["_rewritten"] = True
@@ -315,9 +373,11 @@ def run_quality_agent(
 
     if verbose:
         low_quality = sum(1 for r in results if r["_quality_score"] < _QUALITY_THRESHOLD)
+        html_total  = sum(1 for r in results if r.get("_html_found"))
         print(f"\n{'='*60}")
         print(f"Quality Agent 完成")
         print(f"  总条数          : {total}")
+        print(f"  HTML 加载成功   : {html_total}  ({html_total/total*100:.1f}%)  ← 关键诊断")
         print(f"  低质量条目      : {low_quality}  ({low_quality/total*100:.1f}%)")
         print(f"  触发 Stage-2    : {stage2_count}")
         print(f"  成功重写        : {rewritten_count}")
