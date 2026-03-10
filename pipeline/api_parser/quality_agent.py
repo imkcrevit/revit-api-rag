@@ -409,6 +409,15 @@ def run_quality_agent(
         api_status = "OK" if conn["api_ok"] else f"FAILED ({conn['error']})"
         print(f"  Proxy  : {proxy_status}")
         print(f"  API    : {api_status}")
+
+        # If proxy is enabled but unreachable, auto-fallback to direct connection
+        if not conn["api_ok"] and config.get("proxy", {}).get("enabled", False):
+            print("  Proxy unreachable — retrying without proxy...")
+            config["proxy"]["enabled"] = False
+            conn = check_connectivity(config)
+            api_status = "OK" if conn["api_ok"] else f"FAILED ({conn['error']})"
+            print(f"  API (direct) : {api_status}")
+
         if not conn["api_ok"]:
             raise RuntimeError(
                 f"OpenRouter API is not reachable.\n"
