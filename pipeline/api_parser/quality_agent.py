@@ -333,12 +333,47 @@ def run_quality_agent(
                 f"  Stage-2: {stage2_count}  Rewritten: {rewritten_count}"
             )
 
+        # ── Pre-checks: deterministic quality flags ──────
+        # These catch obvious issues before calling Gemini,
+        # and act as a hard floor that Gemini cannot override upward.
+        pre_issues: list[str] = []
+        summary = item.get("summary") or ""
+        info    = item.get("info") or ""
+        params  = item.get("parameters") or ""
+        syntax  = item.get("syntax") or ""
+
+        # Both text fields empty
+        if not summary.strip() and not info.strip():
+            pre_issues.append("summary and info are both empty")
+        # Generic boilerplate templates
+        for tmpl in ("The ", "Initializes a new instance", "Gets or sets", "Gets the"):
+            if (summary.startswith(tmpl) or info.startswith(tmpl)) and len(summary + info) < 80:
+                pre_issues.append("summary/info looks like a short boilerplate template")
+                break
+        # Syntax has parameters but field is empty
+        if syntax and "(" in syntax and params.strip() == "" and "void" not in syntax.lower():
+            pre_issues.append("parameters field empty but syntax shows method takes arguments")
+        # Unknown types only
+        if params and params.count("Unknown Type") > 1 and "Unknown Type" in params:
+            pre_issues.append("parameter types are all 'Unknown Type'")
+
+        pre_deduction = min(len(pre_issues) * 0.25, 0.6)  # cap deduction at 0.6
+        pre_score = round(1.0 - pre_deduction, 2) if pre_issues else None
+
         # ── Stage-1: Gemini 审核（含 HTML 对比）────────
         audit = _stage1_audit(item, gemini, html_dir=html_dir)
         score         = audit.get("quality_score", 1.0)
-        issues        = audit.get("issues", [])
+        issues        = list(audit.get("issues", []))
         needs_rewrite = audit.get("needs_rewrite", False)
         html_found    = audit.get("_html_found", False)
+
+        # Merge pre-check results: take the lower score
+        if pre_score is not None:
+            if pre_score < score:
+                score = pre_score
+            issues = pre_issues + [iss for iss in issues if iss not in pre_issues]
+            if score < _QUALITY_THRESHOLD:
+                needs_rewrite = True
 
         if html_found:
             html_found_count += 1
