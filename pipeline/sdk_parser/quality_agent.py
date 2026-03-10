@@ -28,6 +28,11 @@ from pathlib import Path
 from typing import Any
 from collections import defaultdict
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None  # type: ignore[assignment]
+
 from pipeline.llm_client import LLMClient, create_llm_client
 
 # ─────────────────────────────────────────────────────────────
@@ -188,7 +193,7 @@ def _project_worker(
     """
     readme = (files[0].get("readme") or "") if files else ""
 
-    if verbose:
+    if verbose and not tqdm:
         with _print_lock:
             print(f"  [{project_idx:>3}/{total_projects}] {proj_name:<40} ({len(files)} files)")
 
@@ -295,6 +300,13 @@ def run_sdk_quality_agent(
     project_meta_count = 0
     file_meta_count = 0
 
+    pbar = tqdm(total=total_projects, desc="SDK Projects", unit="proj",
+                dynamic_ncols=True) if tqdm and verbose else None
+
+    def _on_project_done(future):
+        if pbar:
+            pbar.update(1)
+
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {}
         for pi, proj_name in enumerate(project_names, 1):
@@ -303,6 +315,7 @@ def run_sdk_quality_agent(
                 proj_name, projects[proj_name], claude,
                 verbose, pi, total_projects,
             )
+            fut.add_done_callback(_on_project_done)
             futures[fut] = proj_name
 
         for fut in as_completed(futures):
@@ -320,10 +333,12 @@ def run_sdk_quality_agent(
                 if verbose:
                     with _print_lock:
                         print(f"  ERROR [{proj_name}]: {e}")
-                # Keep original items for this project
                 for f in projects[proj_name]:
                     key = (f.get("project", ""), f.get("filename", ""))
                     results_map[key] = f
+
+    if pbar:
+        pbar.close()
 
     if verbose:
         print(f"\n{'='*60}")

@@ -27,6 +27,11 @@ from typing import Any
 
 import socket
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None  # type: ignore[assignment]
+
 from pipeline.llm_client import LLMClient, create_llm_client
 
 # ─────────────────────────────────────────────────────────────
@@ -554,16 +559,14 @@ def run_quality_agent(
         print(f"Phase 1: Stage-1 Gemini audit ({num_workers} threads)...")
 
     results: list[dict[str, Any] | None] = [None] * total
-    completed = 0
-    completed_lock = threading.Lock()
+
+    # Progress bar (tqdm) or fallback counter
+    pbar1 = tqdm(total=total, desc="Stage-1 Gemini", unit="rec",
+                 dynamic_ncols=True) if tqdm and verbose else None
 
     def _on_stage1_done(future):
-        nonlocal completed
-        with completed_lock:
-            completed += 1
-            if verbose and completed % 100 == 0:
-                with _print_lock:
-                    print(f"  Stage-1 progress: {completed:>5}/{total}")
+        if pbar1:
+            pbar1.update(1)
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {}
@@ -586,6 +589,9 @@ def run_quality_agent(
                 fallback["_needs_rewrite"] = False
                 results[idx] = fallback
 
+    if pbar1:
+        pbar1.close()
+
     html_found_count = sum(1 for r in results if r and r.get("_html_found"))
     if verbose:
         print(f"  Stage-1 complete: {total} records, HTML found: {html_found_count}")
@@ -594,7 +600,6 @@ def run_quality_agent(
     # ════════════════════════════════════════════════════════════
     # Phase 2: Stage-2 Claude 重写（并发，仅低质量 + 有 HTML）
     # ════════════════════════════════════════════════════════════
-    # Select candidates for Stage-2
     stage2_candidates: list[tuple[int, dict[str, Any]]] = []
     for i, item in enumerate(results):
         if not item:
@@ -605,23 +610,18 @@ def run_quality_agent(
             item["_quality_issues"] = list(item.get("_quality_issues", []))
             item["_quality_issues"].append("stage2_skipped: no HTML source available")
 
-    # Cap at max_stage2
     stage2_candidates = stage2_candidates[:max_stage2]
     stage2_total = len(stage2_candidates)
 
     if verbose:
         print(f"Phase 2: Stage-2 Claude rewrite — {stage2_total} candidates ({num_workers} threads)...")
 
-    stage2_done = 0
-    stage2_done_lock = threading.Lock()
+    pbar2 = tqdm(total=stage2_total, desc="Stage-2 Claude", unit="rec",
+                 dynamic_ncols=True) if tqdm and verbose and stage2_total > 0 else None
 
     def _on_stage2_done(future):
-        nonlocal stage2_done
-        with stage2_done_lock:
-            stage2_done += 1
-            if verbose and stage2_done % 50 == 0:
-                with _print_lock:
-                    print(f"  Stage-2 progress: {stage2_done:>5}/{stage2_total}")
+        if pbar2:
+            pbar2.update(1)
 
     if stage2_candidates:
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -640,6 +640,9 @@ def run_quality_agent(
                     if results[idx]:
                         results[idx]["_quality_issues"] = list(results[idx].get("_quality_issues", []))
                         results[idx]["_quality_issues"].append(f"stage2_thread_error: {e}")
+
+    if pbar2:
+        pbar2.close()
 
     # ── Clean up temporary flag & compute stats ──────────────────
     rewritten_count = 0
