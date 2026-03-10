@@ -36,50 +36,79 @@ _MAX_STAGE2_ITEMS = 2000
 # HTML 辅助：定位并读取原始 HTML 文件
 # ─────────────────────────────────────────────────────────────
 
-def _load_html_excerpt(item: dict[str, Any], html_dir: str | None, max_chars: int = 3000) -> str:
+def _html_to_clean_text(raw_html: str, max_chars: int = 2000) -> str:
     """
-    读取原始 HTML 内容。
+    Convert raw HTML to clean plain text safe for inclusion in LLM prompts.
+    Strips tags, removes control characters and excessive whitespace.
+    """
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        # Remove script/style nodes
+        for tag in soup(["script", "style", "head"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ")
+    except Exception:
+        # Fallback: crude tag strip
+        text = re.sub(r"<[^>]+>", " ", raw_html)
+
+    # Remove null bytes and other control characters (cause 400 errors in API calls)
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    # Collapse whitespace
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()[:max_chars]
+
+
+def _load_html_excerpt(item: dict[str, Any], html_dir: str | None, max_chars: int = 2000) -> str:
+    """
+    读取原始 HTML 并返回干净的纯文本（已去除标签和控制字符）。
     优先使用 parse_single_html 存储的 _source_file 精确路径；
     若无则按 full_id / name 做名称猜测。
     """
+    raw = ""
+
     # 最直接：parse_single_html 已存储原始文件路径
     src = item.get("_source_file", "")
     if src:
         p = Path(src)
         if p.exists():
             try:
-                return p.read_text(encoding="utf-8", errors="ignore")[:max_chars]
+                raw = p.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 pass
 
     # 回退：按名称在 html_dir 里搜索
-    if not html_dir:
+    if not raw and html_dir:
+        full_id = item.get("full_id") or ""
+        name    = item.get("name") or ""
+
+        candidates: list[str] = []
+        if full_id:
+            candidates.append(full_id + ".htm")
+            candidates.append(full_id + ".html")
+            short = full_id.split(".")[-1]
+            candidates.append(short + ".htm")
+            candidates.append(short + ".html")
+        if name:
+            safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+            candidates.append(safe_name + ".htm")
+            candidates.append(safe_name + ".html")
+
+        root = Path(html_dir)
+        for cand in candidates:
+            found = list(root.rglob(cand))
+            if found:
+                try:
+                    raw = found[0].read_text(encoding="utf-8", errors="ignore")
+                    break
+                except Exception:
+                    pass
+
+    if not raw:
         return ""
 
-    full_id = item.get("full_id") or ""
-    name    = item.get("name") or ""
-
-    candidates: list[str] = []
-    if full_id:
-        candidates.append(full_id + ".htm")
-        candidates.append(full_id + ".html")
-        short = full_id.split(".")[-1]
-        candidates.append(short + ".htm")
-        candidates.append(short + ".html")
-    if name:
-        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
-        candidates.append(safe_name + ".htm")
-        candidates.append(safe_name + ".html")
-
-    root = Path(html_dir)
-    for cand in candidates:
-        found = list(root.rglob(cand))
-        if found:
-            try:
-                return found[0].read_text(encoding="utf-8", errors="ignore")[:max_chars]
-            except Exception:
-                pass
-    return ""
+    return _html_to_clean_text(raw, max_chars=max_chars)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -345,16 +374,34 @@ def run_quality_agent(
         # Both text fields empty
         if not summary.strip() and not info.strip():
             pre_issues.append("summary and info are both empty")
-        # Generic boilerplate templates
-        for tmpl in ("The ", "Initializes a new instance", "Gets or sets", "Gets the"):
-            if (summary.startswith(tmpl) or info.startswith(tmpl)) and len(summary + info) < 80:
-                pre_issues.append("summary/info looks like a short boilerplate template")
+        # Generic boilerplate templates (check regardless of length)
+        _BOILERPLATE = [
+            "type exposes the following members",
+            "Initializes a new instance",
+        ]
+        _BOILERPLATE_SHORT = [   # only flag if text is short (< 120 chars)
+            ("The ", 120),
+            ("Gets or sets", 120),
+            ("Gets the", 80),
+        ]
+        combined_text = (summary + " " + info).lower()
+        for tmpl in _BOILERPLATE:
+            if tmpl.lower() in combined_text:
+                pre_issues.append(f"boilerplate template detected: '{tmpl}'")
                 break
+        else:
+            for tmpl, max_len in _BOILERPLATE_SHORT:
+                if (summary.startswith(tmpl) or info.startswith(tmpl)) and len(summary + info) < max_len:
+                    pre_issues.append("summary/info is a short generic boilerplate")
+                    break
         # Syntax has parameters but field is empty
-        if syntax and "(" in syntax and params.strip() == "" and "void" not in syntax.lower():
-            pre_issues.append("parameters field empty but syntax shows method takes arguments")
+        if syntax and "(" in syntax and params.strip() == "" and syntax.strip() != "()":
+            # Check it actually takes args (not just empty parens or void)
+            sig_args = re.search(r'\(([^)]+)\)', syntax)
+            if sig_args and sig_args.group(1).strip():
+                pre_issues.append("parameters field empty but syntax shows method takes arguments")
         # Unknown types only
-        if params and params.count("Unknown Type") > 1 and "Unknown Type" in params:
+        if params and params.count("Unknown Type") > 1:
             pre_issues.append("parameter types are all 'Unknown Type'")
 
         pre_deduction = min(len(pre_issues) * 0.25, 0.6)  # cap deduction at 0.6
