@@ -7,9 +7,20 @@ openrouter:
   api_key_env: "OPENROUTER_API_KEY"
 
 # --- LLM 配置 ---
+# provider 可选: claude / openai / gemini / deepseek
+# SDK 代码归纳总结推荐使用 claude 或 openai（推理质量更高）
 llm:
-  provider: "gemini"   # gemini / deepseek
+  provider: "claude"
   models:
+    claude:
+      # OpenRouter 上的 Claude 模型名，可选：
+      #   anthropic/claude-opus-4          — 最强，成本较高
+      #   anthropic/claude-sonnet-4-5      — 性价比最高（推荐）
+      #   anthropic/claude-3-5-haiku       — 最快，成本最低
+      model: "anthropic/claude-sonnet-4.6"
+      api_key_env: "OPENROUTER_API_KEY"
+      base_url: "https://openrouter.ai/api/v1"
+    
     gemini:
       model: "google/gemini-2.5-flash-preview"
       api_key_env: "OPENROUTER_API_KEY"

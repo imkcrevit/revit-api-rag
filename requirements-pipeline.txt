@@ -24,6 +24,6 @@ python-dotenv>=1.0
 # LLM API（数据清洗阶段调用）
 httpx>=0.28
 
-# 代码解析（SDK 清洗用）
-# tree-sitter>=0.20
-# tree-sitter-c-sharp>=0.20
+# 代码解析（SDK 清洗用 - P2）
+tree-sitter>=0.20
+tree-sitter-c-sharp>=0.20

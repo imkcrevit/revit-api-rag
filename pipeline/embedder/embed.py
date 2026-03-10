@@ -43,7 +43,11 @@ def embed_api_data(config: dict, api_db_path: str, chromadb_dir: str, batch_size
 
     conn = sqlite3.connect(api_db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, info FROM revit_api WHERE name IS NOT NULL AND info IS NOT NULL")
+    cursor.execute(
+        "SELECT id, name, full_id, summary, info "
+        "FROM revit_api "
+        "WHERE name IS NOT NULL"
+    )
     rows = cursor.fetchall()
     conn.close()
 
@@ -58,8 +62,32 @@ def embed_api_data(config: dict, api_db_path: str, chromadb_dir: str, batch_size
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i + batch_size]
         ids = [str(row[0]) for row in batch]
-        texts = [f"{row[1]} - {row[2]}" for row in batch]
-        metadatas = [{"name": row[1], "info": row[2]} for row in batch]
+
+        texts = []
+        metadatas = []
+        for row in batch:
+            _id, name, full_id, summary, info = row
+
+            if full_id and summary:
+                text = f"{full_id} : {summary}"
+            elif name and summary:
+                text = f"{name} : {summary}"
+            elif name and info:
+                text = f"{name} - {info}"
+            else:
+                # 最后回退：合并所有可用字段
+                parts = [p for p in [full_id, name, summary, info] if p]
+                text = " - ".join(parts) if parts else ""
+
+            texts.append(text)
+            metadatas.append(
+                {
+                    "name": name,
+                    "full_id": full_id,
+                    "summary": summary,
+                    "info": info,
+                }
+            )
 
         embeddings = embedder.embed_texts(texts)
 

@@ -36,7 +36,7 @@ def parse_single_html(html_path: str) -> dict | None:
 
     soup = BeautifulSoup(content, "html.parser")
 
-    # --- 提取 meta 信息 ---
+    # --- 提取标题 ---
     title_tag = soup.find("title")
     if not title_tag or not title_tag.string:
         return None
@@ -45,9 +45,16 @@ def parse_single_html(html_path: str) -> dict | None:
     if not title:
         return None
 
-    # Microsoft.Help.Id = 完整 API 路径，如 "Methods.T:Autodesk.Revit.DB.ExportLayerInfo"
-    help_id_meta = soup.find("meta", attrs={"name": "Microsoft.Help.Id"})
-    full_id = help_id_meta["content"] if help_id_meta and help_id_meta.get("content") else ""
+    # --- 提取 API 全名（优先使用 Microsoft.Help.F1） ---
+    full_id = _extract_api_fullname(soup, title)
+    if full_id is None:
+        # F1 meta 表明是命名空间目录页等噪音，直接跳过
+        return None
+
+    # --- 过滤构造函数页面（ctor） ---
+    # 构造函数仅描述如何实例化对象，不含方法逻辑，对 RAG 检索意义有限
+    if _is_constructor_page(title, full_id):
+        return None
 
     # 命名空间
     container_meta = soup.find("meta", attrs={"name": "container"})
@@ -75,16 +82,29 @@ def parse_single_html(html_path: str) -> dict | None:
     # --- 提取各 Section ---
     summary = _extract_section(topic_content, "summary")
     remark = _extract_section(topic_content, "remarks")
-    parameters = _extract_section(topic_content, "parameters")
+
+    # 优先使用结构化参数提取，回退到通用 section 抽取
+    parameters_structured = _extract_parameters_structured(soup)
+    if parameters_structured:
+        parameters = parameters_structured
+    else:
+        parameters = _extract_section(topic_content, "parameters")
     exceptions = _extract_section(topic_content, "exceptions")
     return_value = _extract_section(topic_content, "return")
-    syntax = _extract_syntax(topic_content)
+
+    # --- 提取 C# 签名 / 语法 ---
+    csharp_signature = _extract_csharp_signature(soup)
+    syntax = csharp_signature or _extract_syntax(topic_content)
 
     # --- 提取成员表格（方法/属性/事件列表）---
     members = _extract_members_table(topic_content)
 
     # 跳过完全空的页面
     if not info and not summary and not members and not syntax:
+        return None
+
+    # 旧版逻辑：如果既没有 C# 签名，又没有成员列表，多为目录/命名空间页，跳过
+    if not csharp_signature and not members:
         return None
 
     return {
@@ -110,6 +130,128 @@ def _clean_text(text: str) -> str:
     return text.strip()
 
 
+def _is_constructor_page(title: str, full_id: str) -> bool:
+    """
+    判断是否是构造函数页面，应跳过该类页面（不含业务逻辑，对 RAG 无意义）。
+
+    匹配规则：
+    1. full_id 含 '.#ctor' 或 '#ctor('（CHM 标准 M: 签名中的构造函数标识）
+    2. title 末尾词为 'Constructor' 或 'Constructors'（避免误伤 "ReconstructionMethod" 等）
+    """
+    full_id_lower = full_id.lower()
+
+    # 规则1：full_id 中的 #ctor（方法签名标准格式，精确匹配避免误判）
+    if ".#ctor" in full_id_lower or "#ctor(" in full_id_lower or full_id_lower.endswith("#ctor"):
+        return True
+
+    # 规则2：title 末尾是 Constructor / Constructors（单词边界，忽略大小写）
+    # 使用 $ 锚定，防止 "ReconstructionXxx" 误触发
+    if re.search(r"\bconstructors?\s*$", title, flags=re.IGNORECASE):
+        return True
+
+    return False
+
+
+def _extract_api_fullname(soup: BeautifulSoup, title: str) -> str | None:
+    """
+    提取 API 全名
+    优先使用 Microsoft.Help.F1，兼容旧版逻辑，并过滤命名空间目录页。
+    """
+    metas = soup.find_all("meta", attrs={"name": "Microsoft.Help.F1"})
+    if metas:
+        # 单个 F1 且标题包含 NameSpace，视为命名空间目录页，跳过
+        if len(metas) == 1:
+            if "NameSpace" in title:
+                return None
+            content = metas[0].get("content", "").strip()
+            if content:
+                return content
+        else:
+            # 多个 F1 时，旧版取第二个
+            content = metas[1].get("content", "").strip()
+            if content:
+                return content
+
+    # 回退：使用 Microsoft.Help.Id
+    help_id_meta = soup.find("meta", attrs={"name": "Microsoft.Help.Id"})
+    if help_id_meta and help_id_meta.get("content"):
+        return help_id_meta["content"].strip()
+
+    # 最后回退到标题
+    return title
+
+
+def _extract_csharp_signature(soup: BeautifulSoup) -> str:
+    """
+    从 HTML 中提取 C# 方法签名，仅保留包含 public 的签名。
+    对应旧版 get_csharp_full_name 逻辑。
+    """
+    div = soup.find("div", id="IDAB_code_Div1")
+    if not div:
+        return ""
+
+    pre = div.find("pre")
+    if not pre:
+        return ""
+
+    text = pre.get_text(separator=" ", strip=True)
+    if "public" not in text:
+        return ""
+
+    # 归一化空白
+    cleaned = re.sub(r"\s+", " ", text)
+    return cleaned
+
+
+def _extract_parameters_structured(soup: BeautifulSoup) -> str:
+    """
+    从 Parameters section 提取结构化参数信息：
+    [paramName : Type]  - description
+    优先使用 h4 \"Parameters\" + dl/dt/dd 结构。
+    """
+    h4 = soup.find("h4", string=lambda s: isinstance(s, str) and s.strip() == "Parameters")
+    if not h4:
+        return ""
+
+    dl = h4.find_next_sibling("dl")
+    if not dl:
+        return ""
+
+    dts = dl.find_all("dt")
+    dds = dl.find_all("dd")
+    if not dts or not dds:
+        return ""
+
+    lines: list[str] = []
+
+    for dt, dd in zip(dts, dds):
+        # 参数名
+        name_span = dt.find("span", class_="parameter")
+        param_name = name_span.get_text(strip=True) if name_span else dt.get_text(strip=True)
+
+        # 参数类型：依次尝试 <a> → span.noLink → span.selflink → Unknown Type
+        param_type = ""
+        a_tags = dt.find_all("a")
+        if a_tags:
+            param_type = a_tags[-1].get_text(strip=True)
+        else:
+            no_link = dt.find("span", class_="noLink") or dt.find("span", class_="selflink")
+            if no_link:
+                param_type = no_link.get_text(strip=True)
+            else:
+                param_type = "Unknown Type"
+
+        # 参数描述
+        param_desc = dd.get_text(" ", strip=True)
+
+        line = f"[{param_name} : {param_type}]"
+        if param_desc:
+            line += f"  - {param_desc}"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
 def _extract_section(topic_content, section_name: str) -> str:
     """
     提取指定 section 的内容
@@ -124,6 +266,17 @@ def _extract_section(topic_content, section_name: str) -> str:
         "exceptions": ["Exceptions"],
         "return": ["Return Value", "Returns"],
     }
+
+    # 旧版精确定位：div.summary / div#IDBCSection
+    if section_name == "summary":
+        summary_div = topic_content.find("div", class_="summary")
+        if summary_div:
+            return _clean_text(summary_div.get_text())
+
+    if section_name == "remarks":
+        remarks_div = topic_content.find("div", id="IDBCSection")
+        if remarks_div:
+            return _clean_text(remarks_div.get_text())
 
     keywords = section_keywords.get(section_name, [section_name])
 
@@ -191,35 +344,67 @@ def _extract_members_table(topic_content) -> str:
     return "\n".join(members)
 
 
-def parse_all_api_html(html_dir: str) -> list[dict]:
+def parse_all_api_html(html_dir: str, *, limit: int | None = None) -> list[dict]:
     """
-    解析目录下所有 API HTML 文件
+    解析目录下所有（或前 limit 个）API HTML 文件
 
     Args:
         html_dir: CHM 解压后的 HTML 文件目录
+        limit:    仅解析前 N 个文件（调试用），None 表示全量
 
     Returns:
-        list of parsed API data dicts
+        list of parsed API data dicts（已过滤构造函数、命名空间页等噪音）
     """
     results = []
     html_dir = Path(html_dir)
 
     html_files = list(html_dir.glob("**/*.html")) + list(html_dir.glob("**/*.htm"))
-    print(f"找到 {len(html_files)} 个 HTML 文件")
+    if limit:
+        html_files = html_files[:limit]
+    total = len(html_files)
+    print(f"找到 {total} 个 HTML 文件{f'（限制前 {limit} 个）' if limit else ''}")
+
+    skipped_ctor = 0
+    skipped_noise = 0
 
     for i, html_file in enumerate(html_files):
-        if i % 1000 == 0:
-            print(f"  解析进度: {i}/{len(html_files)}")
+        if i % 1000 == 0 and i > 0:
+            print(f"  解析进度: {i}/{total}  有效={len(results)}  ctor跳过={skipped_ctor}  噪音跳过={skipped_noise}")
         try:
             data = parse_single_html(str(html_file))
             if data:
                 results.append(data)
+            else:
+                # 区分 ctor 跳过和其他跳过（通过再次调用轻量检查）
+                _title, _fid = _peek_title_and_fullid(html_file)
+                if _title and _is_constructor_page(_title, _fid):
+                    skipped_ctor += 1
+                else:
+                    skipped_noise += 1
         except Exception as e:
-            if i < 10:  # 只打印前10个错误，避免刷屏
+            if i < 10:
                 print(f"  解析失败: {html_file.name} - {e}")
+            skipped_noise += 1
 
-    print(f"成功解析 {len(results)} 条 API 数据")
+    print(f"\n解析完成：有效={len(results)}  ctor过滤={skipped_ctor}  其他噪音={skipped_noise}  总计={total}")
     return results
+
+
+def _peek_title_and_fullid(html_file: Path) -> tuple[str, str]:
+    """快速读取 HTML 的 title 和 F1/Id meta，不做完整解析（用于统计 ctor 跳过数量）"""
+    try:
+        content = html_file.read_text(encoding="utf-8", errors="ignore")
+        soup = BeautifulSoup(content, "html.parser")
+        title_tag = soup.find("title")
+        title = title_tag.string.strip() if title_tag and title_tag.string else ""
+        f1 = soup.find("meta", attrs={"name": "Microsoft.Help.F1"})
+        fid = f1.get("content", "") if f1 else ""
+        if not fid:
+            id_meta = soup.find("meta", attrs={"name": "Microsoft.Help.Id"})
+            fid = id_meta.get("content", "") if id_meta else ""
+        return title, fid
+    except Exception:
+        return "", ""
 
 
 def save_to_sqlite(api_data: list[dict], db_path: str):
