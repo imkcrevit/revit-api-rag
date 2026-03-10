@@ -1,13 +1,13 @@
 """
-API 数据质量检查 Agent（两阶段）
+API 数据质量检查 Agent（两阶段，多线程）
 
 流程：
-  Stage-1 | Gemini（快速、低成本）
+  Stage-1 | Gemini（快速、低成本）— 5 线程并发
            对每条解析结果做结构化审核，同时比对原始 HTML 文件内容，
            能准确发现「解析漏字段」「摘要与 HTML 不符」等问题。
            返回 JSON 打分 (quality_score 0–1) 和 issues 列表。
 
-  Stage-2 | Claude Sonnet（精准、高质量）
+  Stage-2 | Claude Sonnet（精准、高质量）— 5 线程并发
            仅对 Stage-1 标记为「需要修复」的条目介入：
            - 以原始 HTML 为依据，重新生成 summary / parameters / syntax
 
@@ -20,12 +20,20 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import socket
 
 from pipeline.llm_client import LLMClient, create_llm_client
+
+# ─────────────────────────────────────────────────────────────
+# 并发配置
+# ─────────────────────────────────────────────────────────────
+_NUM_WORKERS = 5
+_print_lock = threading.Lock()
 
 
 def check_connectivity(config: dict[str, Any]) -> dict[str, Any]:
@@ -175,22 +183,27 @@ def _load_html_excerpt(item: dict[str, Any], html_dir: str | None, max_chars: in
 # ─────────────────────────────────────────────────────────────
 
 _STAGE1_SYSTEM = (
-    "You are a strict data-quality auditor for Revit API documentation records. "
-    "Be critical and precise. Always reply with a single valid JSON object and nothing else."
+    "You are a data-quality auditor for Revit API documentation records. "
+    "You measure PARSE QUALITY — how well the parser captured information that EXISTS in the HTML. "
+    "Always reply with a single valid JSON object and nothing else."
 )
 
 _STAGE1_PROMPT_WITH_HTML = """\
 Audit the following parsed Revit API record by comparing it against the RAW HTML source.
 
-Score criteria (cumulative deductions from 1.0):
-  -0.5  name/full_id indicates a constructor (#ctor / "Constructor") → noise
-  -0.4  summary AND info are BOTH empty or missing
-  -0.3  summary/info is a generic boilerplate ("The XYZ type exposes…", "Initializes a new instance…")
-        while the HTML contains a real description
-  -0.25 parameters field is empty/missing but HTML shows the method takes arguments
-  -0.2  syntax/C# signature is missing or clearly differs from what's in the HTML
-  -0.2  important content visible in HTML (description, return value) is absent from parsed fields
-  -0.15 all parameter types are "Unknown Type" but HTML has type information
+CRITICAL PRINCIPLE: You are measuring PARSE QUALITY, NOT documentation completeness.
+Only deduct points when the HTML source CONTAINS information that the parsed record
+is MISSING or incorrectly captured. If the HTML itself lacks a field (e.g., no parameters,
+no syntax block, no description), then having that field empty is CORRECT — do NOT deduct.
+
+Score criteria (cumulative deductions from 1.0, ONLY apply when HTML evidence exists):
+  -0.5  name/full_id indicates a constructor (#ctor / "Constructor") → noise record
+  -0.4  summary AND info are BOTH empty, BUT the HTML contains a real description
+  -0.3  summary/info is generic boilerplate ("The XYZ type exposes…") while the HTML has a real description
+  -0.25 parameters field is empty BUT the HTML shows method parameters with descriptions
+  -0.2  syntax/C# signature is missing BUT the HTML contains a public C# signature
+  -0.2  important content in the HTML (description, return value) is absent from parsed fields
+  -0.15 all parameter types are "Unknown Type" BUT the HTML has actual type information
   -0.1  any field contains raw HTML tags, garbled unicode, or excessive whitespace
 
 Parsed record:
@@ -205,25 +218,28 @@ Raw HTML excerpt (up to 2500 chars):
 {html_excerpt}
 
 Return ONLY a JSON object:
-  "quality_score" : float 0.0–1.0  (be strict; most records should be < 0.9)
-  "issues"        : list of short English strings (empty list only if truly perfect)
+  "quality_score" : float 0.0–1.0  (a well-parsed record capturing all HTML info should score 0.85–0.95)
+  "issues"        : list of short English strings (empty list if parsed data correctly reflects HTML)
   "needs_rewrite" : boolean (true when quality_score < {threshold})
 
 JSON only. No markdown. No explanation."""
 
 _STAGE1_PROMPT_NO_HTML = """\
 Audit the following parsed Revit API record for data quality.
-No raw HTML is available, so judge strictly on field completeness and plausibility.
+No raw HTML is available — be CONSERVATIVE. Without HTML to compare, you cannot know
+if missing fields are a parse failure or just absent from the source documentation.
+Only deduct for clearly detectable issues.
 
 Score criteria (cumulative deductions from 1.0):
   -0.5  name/full_id indicates a constructor (#ctor / "Constructor") → noise
-  -0.4  summary AND info are BOTH empty or missing
-  -0.3  summary or info is a generic boilerplate ("The XYZ type exposes…", "Initializes a new instance…")
-  -0.25 parameters field is empty but syntax shows the method takes arguments
-  -0.2  syntax/C# signature is missing entirely
-  -0.15 all parameter types shown as "Unknown Type"
+  -0.3  summary or info is clearly generic boilerplate ("The XYZ type exposes…", "Initializes a new instance…")
+  -0.25 parameters field is empty but syntax shows the method takes arguments (with actual param names)
   -0.1  any field contains raw HTML tags, garbled text, or excessive whitespace
-  -0.1  summary/info is extremely short (under 20 characters) for a non-trivial API member
+
+DO NOT deduct for:
+  - Empty summary/info (could be genuinely absent in source documentation)
+  - Missing syntax (source may not have a code block)
+  - Missing parameters (could be a property or parameterless method)
 
 Parsed record:
   name        : {name}
@@ -234,8 +250,8 @@ Parsed record:
   parameters  : {parameters}
 
 Return ONLY a JSON object:
-  "quality_score" : float 0.0–1.0  (be strict; average should be around 0.7, not 1.0)
-  "issues"        : list of short English strings (empty list only if truly perfect)
+  "quality_score" : float 0.0–1.0  (default to 0.8 when no clear issues found)
+  "issues"        : list of short English strings (empty list when no detectable issues)
   "needs_rewrite" : boolean (true when quality_score < {threshold})
 
 JSON only. No markdown. No explanation."""
@@ -306,7 +322,7 @@ _STAGE2_SYSTEM = (
 )
 
 _STAGE2_PROMPT_TPL = """\
-The following Revit API record has quality issues. Use the RAW HTML as the ground truth to produce corrected fields.
+The following Revit API record has quality issues. Use the RAW HTML as ground truth to produce corrected fields.
 
 Identified issues:
 {issues}
@@ -320,10 +336,16 @@ Original parsed record:
   parameters  : {parameters}
   remark      : {remark}
 
-Raw HTML excerpt (up to 3000 chars):
+Raw HTML excerpt (up to 5000 chars):
 {html_excerpt}
 
-Return ONLY a JSON object. Include only keys where you have confident improvements (omit unchanged fields):
+IMPORTANT:
+- Only include fields where you can make a GENUINE improvement based on HTML evidence.
+- If the original field already matches the HTML, do NOT include it.
+- If a field is empty in both the record AND the HTML, omit it — do NOT fabricate content.
+- Keep output concise to minimize tokens.
+
+Return ONLY a JSON object with improved fields (omit unchanged ones):
   "summary"    : clear 1-sentence English description of what this API member does
   "parameters" : multiline string, one param per line: "[paramName : Type]  - description"
                  (empty string "" if this API truly has no parameters)
@@ -342,17 +364,17 @@ def _stage2_rewrite(
     """
     用 Claude Sonnet 对低质量条目做字段级修复（以原始 HTML 为依据）。
     """
-    html_excerpt = _load_html_excerpt(item, html_dir, max_chars=3000) or "(HTML not available)"
+    html_excerpt = _load_html_excerpt(item, html_dir, max_chars=5000) or "(HTML not available)"
 
     prompt = _STAGE2_PROMPT_TPL.format(
         issues="\n".join(f"- {i}" for i in issues) if issues else "- general quality below threshold",
         name=item.get("name", ""),
         full_id=item.get("full_id", ""),
-        syntax=(item.get("syntax") or "")[:400],
-        summary=(item.get("summary") or "")[:400],
-        info=(item.get("info") or "")[:300],
-        parameters=(item.get("parameters") or "")[:600],
-        remark=(item.get("remark") or "")[:300],
+        syntax=(item.get("syntax") or "")[:600],
+        summary=(item.get("summary") or "")[:600],
+        info=(item.get("info") or "")[:500],
+        parameters=(item.get("parameters") or "")[:800],
+        remark=(item.get("remark") or "")[:400],
         html_excerpt=html_excerpt,
     )
 
@@ -370,25 +392,113 @@ def _stage2_rewrite(
 # 公开入口
 # ─────────────────────────────────────────────────────────────
 
+def _stage1_worker(
+    idx: int,
+    item: dict[str, Any],
+    gemini: LLMClient,
+    html_dir: str | None,
+) -> tuple[int, dict[str, Any]]:
+    """
+    单条记录的 Stage-1 处理（在线程中执行）：pre-check + Gemini 审核。
+    返回 (原始索引, 带 _quality_* 字段的新 item)。
+    """
+    # ── Pre-checks ──────────────────────────────────────────
+    pre_issues: list[str] = []
+    summary = item.get("summary") or ""
+    info    = item.get("info") or ""
+    params  = item.get("parameters") or ""
+
+    html_preview = _load_html_excerpt(item, html_dir, max_chars=500)
+
+    if not summary.strip() and not info.strip() and html_preview:
+        pre_issues.append("summary and info are both empty (HTML has content)")
+    _BOILERPLATE = [
+        "type exposes the following members",
+        "Initializes a new instance",
+    ]
+    combined_text = (summary + " " + info).lower()
+    for tmpl in _BOILERPLATE:
+        if tmpl.lower() in combined_text:
+            pre_issues.append(f"boilerplate template detected: '{tmpl}'")
+            break
+    if params and params.count("Unknown Type") > 1:
+        pre_issues.append("parameter types are all 'Unknown Type'")
+
+    pre_deduction = min(len(pre_issues) * 0.2, 0.5)
+    pre_score = round(1.0 - pre_deduction, 2) if pre_issues else None
+
+    # ── Gemini audit ────────────────────────────────────────
+    audit = _stage1_audit(item, gemini, html_dir=html_dir)
+    score         = audit.get("quality_score", 1.0)
+    issues        = list(audit.get("issues", []))
+    needs_rewrite = audit.get("needs_rewrite", False)
+    html_found    = audit.get("_html_found", False)
+
+    if pre_score is not None:
+        if pre_score < score:
+            score = pre_score
+        issues = pre_issues + [iss for iss in issues if iss not in pre_issues]
+        if score < _QUALITY_THRESHOLD:
+            needs_rewrite = True
+
+    new_item = dict(item)
+    new_item["_quality_score"]  = score
+    new_item["_quality_issues"] = issues
+    new_item["_rewritten"]      = False
+    new_item["_html_found"]     = html_found
+    new_item["_needs_rewrite"]  = needs_rewrite  # temporary flag for Stage-2 selection
+
+    return (idx, new_item)
+
+
+def _stage2_worker(
+    idx: int,
+    item: dict[str, Any],
+    html_dir: str | None,
+    claude: LLMClient,
+) -> tuple[int, dict[str, Any]]:
+    """
+    单条记录的 Stage-2 处理（在线程中执行）：Claude 重写。
+    返回 (原始索引, 更新后的 item)。
+    """
+    issues = item.get("_quality_issues", [])
+    patch = _stage2_rewrite(item, issues, html_dir, claude)
+
+    new_item = dict(item)
+    if patch and "_rewrite_error" not in patch:
+        for k, v in patch.items():
+            old_val = new_item.get(k) or ""
+            if not old_val or (isinstance(v, str) and len(v) > len(old_val) * 0.5):
+                new_item[k] = v
+        new_item["_rewritten"] = True
+    elif "_rewrite_error" in patch:
+        new_item["_quality_issues"] = list(new_item.get("_quality_issues", []))
+        new_item["_quality_issues"].append(f"rewrite_failed: {patch['_rewrite_error']}")
+
+    return (idx, new_item)
+
+
 def run_quality_agent(
     api_data: list[dict[str, Any]],
     config: dict[str, Any],
     html_dir: str | None = None,
     max_stage2: int = _MAX_STAGE2_ITEMS,
+    num_workers: int = _NUM_WORKERS,
     verbose: bool = True,
 ) -> list[dict[str, Any]]:
     """
-    对解析后的 API 数据运行两阶段质量 Agent。
+    对解析后的 API 数据运行两阶段质量 Agent（多线程并发）。
 
-    Stage-1 (Gemini) 对每条记录评分，优先使用 item['_source_file'] 读取 HTML（
-    parse_single_html 现在会存储该字段），html_dir 作为回退的搜索目录。
+    Phase 1: Pre-check + Stage-1 Gemini 审核（num_workers 线程并发）
+    Phase 2: Stage-2 Claude 重写低质量条目（num_workers 线程并发）
 
     Args:
-        api_data:   parse_all_api_html() 的输出
-        config:     完整的 config.yaml dict
-        html_dir:   CHM 解压 HTML 目录（备用，当 _source_file 不存在时搜索用）
-        max_stage2: Stage-2 最多处理多少条
-        verbose:    是否打印进度和统计
+        api_data:    parse_all_api_html() 的输出
+        config:      完整的 config.yaml dict
+        html_dir:    CHM 解压 HTML 目录
+        max_stage2:  Stage-2 最多处理多少条
+        num_workers: 并发线程数（默认 5）
+        verbose:     是否打印进度和统计
 
     Returns:
         与 api_data 结构完全相同的列表，低质量条目的字段已被补全/重写。
@@ -396,7 +506,7 @@ def run_quality_agent(
           "_quality_score"  : float
           "_quality_issues" : list[str]
           "_rewritten"      : bool
-          "_html_found"     : bool  (诊断：Stage-1 是否成功加载 HTML)
+          "_html_found"     : bool
     """
     # ── Pre-flight: connectivity check ──────────────────────────
     if verbose:
@@ -410,7 +520,6 @@ def run_quality_agent(
         print(f"  Proxy  : {proxy_status}")
         print(f"  API    : {api_status}")
 
-        # If proxy is enabled but unreachable, auto-fallback to direct connection
         if not conn["api_ok"] and config.get("proxy", {}).get("enabled", False):
             print("  Proxy unreachable — retrying without proxy...")
             config["proxy"]["enabled"] = False
@@ -429,128 +538,128 @@ def run_quality_agent(
 
     gemini = create_llm_client(config, provider_override="gemini")
     claude = create_llm_client(config, provider_override="claude")
-
-    stage2_count = 0
-    rewritten_count = 0
-    html_found_count = 0
-    results: list[dict[str, Any]] = []
+    claude.max_tokens = 8192
 
     total = len(api_data)
     if verbose:
-        print(f"Quality Agent — {total} records")
+        print(f"Quality Agent — {total} records, {num_workers} threads")
         print(f"  Stage-1: {gemini.model}")
         print(f"  Stage-2: {claude.model}")
         print()
 
-    for i, item in enumerate(api_data):
-        if verbose and i % 50 == 0:
-            pct_html = html_found_count / max(i, 1) * 100
-            print(
-                f"  [{i:>5}/{total}]  HTML found: {html_found_count}/{i} ({pct_html:.0f}%)"
-                f"  Stage-2: {stage2_count}  Rewritten: {rewritten_count}"
-            )
+    # ════════════════════════════════════════════════════════════
+    # Phase 1: Stage-1 Gemini 审核（并发）
+    # ════════════════════════════════════════════════════════════
+    if verbose:
+        print(f"Phase 1: Stage-1 Gemini audit ({num_workers} threads)...")
 
-        # ── Pre-checks: deterministic quality flags ──────
-        # These catch obvious issues before calling Gemini,
-        # and act as a hard floor that Gemini cannot override upward.
-        pre_issues: list[str] = []
-        summary = item.get("summary") or ""
-        info    = item.get("info") or ""
-        params  = item.get("parameters") or ""
-        syntax  = item.get("syntax") or ""
+    results: list[dict[str, Any] | None] = [None] * total
+    completed = 0
+    completed_lock = threading.Lock()
 
-        # Both text fields empty
-        if not summary.strip() and not info.strip():
-            pre_issues.append("summary and info are both empty")
-        # Generic boilerplate templates (check regardless of length)
-        _BOILERPLATE = [
-            "type exposes the following members",
-            "Initializes a new instance",
-        ]
-        _BOILERPLATE_SHORT = [   # only flag if text is short (< 120 chars)
-            ("The ", 120),
-            ("Gets or sets", 120),
-            ("Gets the", 80),
-        ]
-        combined_text = (summary + " " + info).lower()
-        for tmpl in _BOILERPLATE:
-            if tmpl.lower() in combined_text:
-                pre_issues.append(f"boilerplate template detected: '{tmpl}'")
-                break
-        else:
-            for tmpl, max_len in _BOILERPLATE_SHORT:
-                if (summary.startswith(tmpl) or info.startswith(tmpl)) and len(summary + info) < max_len:
-                    pre_issues.append("summary/info is a short generic boilerplate")
-                    break
-        # Syntax has parameters but field is empty
-        if syntax and "(" in syntax and params.strip() == "" and syntax.strip() != "()":
-            # Check it actually takes args (not just empty parens or void)
-            sig_args = re.search(r'\(([^)]+)\)', syntax)
-            if sig_args and sig_args.group(1).strip():
-                pre_issues.append("parameters field empty but syntax shows method takes arguments")
-        # Unknown types only
-        if params and params.count("Unknown Type") > 1:
-            pre_issues.append("parameter types are all 'Unknown Type'")
+    def _on_stage1_done(future):
+        nonlocal completed
+        with completed_lock:
+            completed += 1
+            if verbose and completed % 100 == 0:
+                with _print_lock:
+                    print(f"  Stage-1 progress: {completed:>5}/{total}")
 
-        pre_deduction = min(len(pre_issues) * 0.25, 0.6)  # cap deduction at 0.6
-        pre_score = round(1.0 - pre_deduction, 2) if pre_issues else None
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {}
+        for i, item in enumerate(api_data):
+            fut = executor.submit(_stage1_worker, i, item, gemini, html_dir)
+            fut.add_done_callback(_on_stage1_done)
+            futures[fut] = i
 
-        # ── Stage-1: Gemini 审核（含 HTML 对比）────────
-        audit = _stage1_audit(item, gemini, html_dir=html_dir)
-        score         = audit.get("quality_score", 1.0)
-        issues        = list(audit.get("issues", []))
-        needs_rewrite = audit.get("needs_rewrite", False)
-        html_found    = audit.get("_html_found", False)
+        for fut in as_completed(futures):
+            try:
+                idx, new_item = fut.result()
+                results[idx] = new_item
+            except Exception as e:
+                idx = futures[fut]
+                fallback = dict(api_data[idx])
+                fallback["_quality_score"] = 1.0
+                fallback["_quality_issues"] = [f"stage1_thread_error: {e}"]
+                fallback["_rewritten"] = False
+                fallback["_html_found"] = False
+                fallback["_needs_rewrite"] = False
+                results[idx] = fallback
 
-        # Merge pre-check results: take the lower score
-        if pre_score is not None:
-            if pre_score < score:
-                score = pre_score
-            issues = pre_issues + [iss for iss in issues if iss not in pre_issues]
-            if score < _QUALITY_THRESHOLD:
-                needs_rewrite = True
+    html_found_count = sum(1 for r in results if r and r.get("_html_found"))
+    if verbose:
+        print(f"  Stage-1 complete: {total} records, HTML found: {html_found_count}")
+        print()
 
-        if html_found:
-            html_found_count += 1
+    # ════════════════════════════════════════════════════════════
+    # Phase 2: Stage-2 Claude 重写（并发，仅低质量 + 有 HTML）
+    # ════════════════════════════════════════════════════════════
+    # Select candidates for Stage-2
+    stage2_candidates: list[tuple[int, dict[str, Any]]] = []
+    for i, item in enumerate(results):
+        if not item:
+            continue
+        if item.get("_needs_rewrite") and item.get("_html_found"):
+            stage2_candidates.append((i, item))
+        elif item.get("_needs_rewrite") and not item.get("_html_found"):
+            item["_quality_issues"] = list(item.get("_quality_issues", []))
+            item["_quality_issues"].append("stage2_skipped: no HTML source available")
 
-        new_item = dict(item)
-        new_item["_quality_score"]  = score
-        new_item["_quality_issues"] = issues
-        new_item["_rewritten"]      = False
-        new_item["_html_found"]     = html_found
-
-        # ── Stage-2: Claude 重写（仅低质量条目）────────
-        if needs_rewrite and stage2_count < max_stage2:
-            stage2_count += 1
-            if verbose:
-                print(f"  [Stage-2 #{stage2_count:>4}] {item.get('name', '')[:50]:<50}  score={score:.2f}  html={'Y' if html_found else 'N'}")
-                if issues:
-                    print(f"              → {'; '.join(issues[:3])}")
-
-            patch = _stage2_rewrite(item, issues, html_dir, claude)
-
-            if patch and "_rewrite_error" not in patch:
-                for k, v in patch.items():
-                    old_val = new_item.get(k) or ""
-                    if not old_val or (isinstance(v, str) and len(v) > len(old_val)):
-                        new_item[k] = v
-                new_item["_rewritten"] = True
-                rewritten_count += 1
-            elif "_rewrite_error" in patch:
-                new_item["_quality_issues"].append(f"rewrite_failed: {patch['_rewrite_error']}")
-
-        results.append(new_item)
+    # Cap at max_stage2
+    stage2_candidates = stage2_candidates[:max_stage2]
+    stage2_total = len(stage2_candidates)
 
     if verbose:
-        low_quality = sum(1 for r in results if r["_quality_score"] < _QUALITY_THRESHOLD)
-        html_total  = sum(1 for r in results if r.get("_html_found"))
+        print(f"Phase 2: Stage-2 Claude rewrite — {stage2_total} candidates ({num_workers} threads)...")
+
+    stage2_done = 0
+    stage2_done_lock = threading.Lock()
+
+    def _on_stage2_done(future):
+        nonlocal stage2_done
+        with stage2_done_lock:
+            stage2_done += 1
+            if verbose and stage2_done % 50 == 0:
+                with _print_lock:
+                    print(f"  Stage-2 progress: {stage2_done:>5}/{stage2_total}")
+
+    if stage2_candidates:
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {}
+            for orig_idx, item in stage2_candidates:
+                fut = executor.submit(_stage2_worker, orig_idx, item, html_dir, claude)
+                fut.add_done_callback(_on_stage2_done)
+                futures[fut] = orig_idx
+
+            for fut in as_completed(futures):
+                try:
+                    idx, updated_item = fut.result()
+                    results[idx] = updated_item
+                except Exception as e:
+                    idx = futures[fut]
+                    if results[idx]:
+                        results[idx]["_quality_issues"] = list(results[idx].get("_quality_issues", []))
+                        results[idx]["_quality_issues"].append(f"stage2_thread_error: {e}")
+
+    # ── Clean up temporary flag & compute stats ──────────────────
+    rewritten_count = 0
+    for item in results:
+        if item:
+            item.pop("_needs_rewrite", None)
+            if item.get("_rewritten"):
+                rewritten_count += 1
+
+    if verbose:
+        low_quality = sum(1 for r in results if r and r["_quality_score"] < _QUALITY_THRESHOLD)
+        html_total  = sum(1 for r in results if r and r.get("_html_found"))
         print(f"\n{'='*60}")
         print(f"Quality Agent 完成")
         print(f"  总条数          : {total}")
-        print(f"  HTML 加载成功   : {html_total}  ({html_total/total*100:.1f}%)  ← 关键诊断")
+        print(f"  并发线程数      : {num_workers}")
+        print(f"  HTML 加载成功   : {html_total}  ({html_total/total*100:.1f}%)")
         print(f"  低质量条目      : {low_quality}  ({low_quality/total*100:.1f}%)")
-        print(f"  触发 Stage-2    : {stage2_count}")
+        print(f"  触发 Stage-2    : {stage2_total}")
         print(f"  成功重写        : {rewritten_count}")
         print(f"{'='*60}")
 
-    return results
+    return [r for r in results if r is not None]

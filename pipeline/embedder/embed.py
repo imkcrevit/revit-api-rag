@@ -115,15 +115,27 @@ def embed_code_data(config: dict, sdk_db_path: str, chromadb_dir: str, batch_siz
 
     conn = sqlite3.connect(sdk_db_path)
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, project, filename, code, clean_code, description 
-        FROM revit_sdk 
-        WHERE code IS NOT NULL AND code != ''
-    """)
+    # Try to read enriched columns if they exist
+    try:
+        cursor.execute("""
+            SELECT id, project, filename, code, clean_code, description,
+                   project_summary, file_purpose, use_case_category
+            FROM revit_sdk
+            WHERE code IS NOT NULL AND code != ''
+        """)
+        has_quality_cols = True
+    except sqlite3.OperationalError:
+        cursor.execute("""
+            SELECT id, project, filename, code, clean_code, description
+            FROM revit_sdk
+            WHERE code IS NOT NULL AND code != ''
+        """)
+        has_quality_cols = False
     rows = cursor.fetchall()
     conn.close()
 
-    print(f"从 {sdk_db_path} 读取 {len(rows)} 条 SDK 代码数据")
+    print(f"从 {sdk_db_path} 读取 {len(rows)} 条 SDK 代码数据" +
+          (" (含元数据)" if has_quality_cols else ""))
 
     client = chromadb.PersistentClient(path=chromadb_dir)
     collection = client.get_or_create_collection(
@@ -140,8 +152,16 @@ def embed_code_data(config: dict, sdk_db_path: str, chromadb_dir: str, batch_siz
             # 优先用 clean_code，没有则用 code
             code = row[4] if row[4] else row[3]
             desc = row[5] or ""
-            # description + 代码前1000字符作为 embedding 文本
-            text = f"{desc}\n{code[:1000]}" if desc else code[:1000]
+
+            # Use enriched metadata for richer embedding text
+            if has_quality_cols:
+                proj_summary = row[6] or ""
+                file_purpose = row[7] or ""
+                prefix = " | ".join(filter(None, [proj_summary, file_purpose, desc]))
+            else:
+                prefix = desc
+
+            text = f"{prefix}\n{code[:800]}" if prefix else code[:1000]
             texts.append(text)
 
         metadatas = [{"project": row[1], "filename": row[2]} for row in batch]
