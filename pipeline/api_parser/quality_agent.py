@@ -23,7 +23,66 @@ import re
 from pathlib import Path
 from typing import Any
 
+import socket
+
 from pipeline.llm_client import LLMClient, create_llm_client
+
+
+def check_connectivity(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Pre-flight connectivity check: verifies proxy port and OpenRouter API.
+
+    Returns a dict with keys:
+      proxy_ok    : bool  (False if proxy not configured or not reachable)
+      api_ok      : bool  (True if OpenRouter responds)
+      proxy_addr  : str   (proxy address used, or 'disabled')
+      error       : str | None
+    """
+    import httpx
+
+    proxy_cfg  = config.get("proxy", {})
+    proxy_url  = None
+    proxy_ok   = False
+    proxy_addr = "disabled"
+
+    # ── 1. Check proxy port ──────────────────────────────────────
+    if proxy_cfg.get("enabled", False):
+        proxy_url  = proxy_cfg.get("https") or proxy_cfg.get("http", "")
+        proxy_addr = proxy_url
+
+        # Parse host:port from "http://127.0.0.1:10808"
+        try:
+            import urllib.parse
+            parsed = urllib.parse.urlparse(proxy_url)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or 10808
+            sock = socket.create_connection((host, port), timeout=3)
+            sock.close()
+            proxy_ok = True
+        except Exception as e:
+            return {
+                "proxy_ok": False,
+                "api_ok": False,
+                "proxy_addr": proxy_addr,
+                "error": f"Proxy {proxy_addr} unreachable: {e}",
+            }
+
+    # ── 2. Check OpenRouter API ──────────────────────────────────
+    try:
+        client_kwargs: dict = {"timeout": 10}
+        if proxy_ok and proxy_url:
+            client_kwargs["proxy"] = proxy_url
+        resp = httpx.get("https://openrouter.ai/api/v1/models", **client_kwargs)
+        api_ok = resp.status_code < 500
+    except Exception as e:
+        return {
+            "proxy_ok": proxy_ok,
+            "api_ok": False,
+            "proxy_addr": proxy_addr,
+            "error": f"OpenRouter unreachable: {e}",
+        }
+
+    return {"proxy_ok": proxy_ok, "api_ok": api_ok, "proxy_addr": proxy_addr, "error": None}
 
 # ─────────────────────────────────────────────────────────────
 # 阈值配置
@@ -339,6 +398,26 @@ def run_quality_agent(
           "_rewritten"      : bool
           "_html_found"     : bool  (诊断：Stage-1 是否成功加载 HTML)
     """
+    # ── Pre-flight: connectivity check ──────────────────────────
+    if verbose:
+        print("Checking connectivity...")
+    conn = check_connectivity(config)
+    if verbose:
+        proxy_status = f"OK ({conn['proxy_addr']})" if conn["proxy_ok"] else (
+            f"DISABLED" if conn["proxy_addr"] == "disabled" else f"FAILED ({conn['error']})"
+        )
+        api_status = "OK" if conn["api_ok"] else f"FAILED ({conn['error']})"
+        print(f"  Proxy  : {proxy_status}")
+        print(f"  API    : {api_status}")
+        if not conn["api_ok"]:
+            raise RuntimeError(
+                f"OpenRouter API is not reachable.\n"
+                f"Error: {conn['error']}\n"
+                f"Proxy : {conn['proxy_addr']}\n"
+                "Fix: ensure proxy is running, or set proxy.enabled=false in config.yaml"
+            )
+        print()
+
     gemini = create_llm_client(config, provider_override="gemini")
     claude = create_llm_client(config, provider_override="claude")
 
