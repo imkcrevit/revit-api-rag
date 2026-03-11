@@ -202,27 +202,24 @@ def clean_code_with_llm(raw_data: list[dict], config: dict[str, Any]) -> list[di
 
         description = ""
         if code:
-            # 组合一个简短的上下文给 LLM
             prompt_parts = [
-                "你是 Revit SDK 示例代码的分析助手。",
-                "请根据下面的 C# 示例代码和可选的 ReadMe 内容，用 1-3 句话用中文概括这个示例的功能和用途。",
-                "重点说明：这个示例演示了什么场景、涉及哪些主要 API、对使用者有什么帮助。",
+                "You are an expert Revit SDK code analyst.",
+                "Based on the C# sample code and optional ReadMe below, write a concise 2-3 sentence",
+                "English description covering: what scenario this sample demonstrates, which main",
+                "Revit APIs are involved, and why it is useful to a developer.",
                 "",
             ]
             if project or filename:
-                prompt_parts.append(f"示例项目: {project} / {filename}")
+                prompt_parts.append(f"Sample project: {project} / {filename}")
             if readme:
-                prompt_parts.append("ReadMe 摘要（可能为空）:")
-                # 控制 ReadMe 长度，避免 prompt 过长
-                trimmed_readme = readme[:2000]
-                prompt_parts.append(trimmed_readme)
+                prompt_parts.append("ReadMe (may be empty):")
+                prompt_parts.append(readme[:2000])
 
             prompt_parts.append("")
-            prompt_parts.append("下面是代码片段（已做基础剪枝）:")
-            trimmed_code = code[:3000]
-            prompt_parts.append(trimmed_code)
+            prompt_parts.append("Code (pruned):")
+            prompt_parts.append(code[:3000])
             prompt_parts.append("")
-            prompt_parts.append("请直接输出概括性的描述文本，不要输出代码或 JSON。")
+            prompt_parts.append("Output the description text only. No JSON, no code, no bullet points.")
 
             prompt = "\n".join(prompt_parts)
 
