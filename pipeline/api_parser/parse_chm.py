@@ -408,10 +408,13 @@ def _peek_title_and_fullid(html_file: Path) -> tuple[str, str]:
         return "", ""
 
 
-def save_to_sqlite(api_data: list[dict], db_path: str):
-    """
-    将解析后的 API 数据存入 SQLite
-    """
+def save_to_sqlite(api_data: list[dict], db_path: str, batch_size: int = 500):
+    """Save parsed API data to SQLite with a tqdm progress bar."""
+    try:
+        from tqdm.auto import tqdm as _tqdm
+    except ImportError:
+        _tqdm = None  # type: ignore[assignment]
+
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
     conn = sqlite3.connect(db_path)
@@ -438,28 +441,54 @@ def save_to_sqlite(api_data: list[dict], db_path: str):
             rewritten INTEGER DEFAULT 0
         )
     """)
-
-    # 清空旧数据
     cursor.execute("DELETE FROM revit_api")
 
+    total = len(api_data)
+    pbar = _tqdm(total=total, desc="Saving to SQLite", unit="rec",
+                 dynamic_ncols=True) if _tqdm else None
+
+    batch: list = []
     for item in api_data:
         issues = item.get("_quality_issues") or []
-        cursor.execute(
+        batch.append((
+            item.get("name"), item.get("full_id"), item.get("namespace"),
+            item.get("content_type"), item.get("keywords"), item.get("info"),
+            item.get("summary"), item.get("remark"), item.get("parameters"),
+            item.get("exceptions"), item.get("return_value"), item.get("syntax"),
+            item.get("members"),
+            item.get("_quality_score"),
+            "; ".join(issues) if issues else None,
+            1 if item.get("_rewritten") else 0,
+        ))
+        if len(batch) >= batch_size:
+            cursor.executemany(
+                """INSERT INTO revit_api
+                   (name, full_id, namespace, content_type, keywords, info,
+                    summary, remark, parameters, exceptions, return_value, syntax, members,
+                    quality_score, quality_issues, rewritten)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                batch,
+            )
+            conn.commit()
+            if pbar:
+                pbar.update(len(batch))
+            batch = []
+
+    if batch:
+        cursor.executemany(
             """INSERT INTO revit_api
                (name, full_id, namespace, content_type, keywords, info,
                 summary, remark, parameters, exceptions, return_value, syntax, members,
                 quality_score, quality_issues, rewritten)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (item.get("name"), item.get("full_id"), item.get("namespace"),
-             item.get("content_type"), item.get("keywords"), item.get("info"),
-             item.get("summary"), item.get("remark"), item.get("parameters"),
-             item.get("exceptions"), item.get("return_value"), item.get("syntax"),
-             item.get("members"),
-             item.get("_quality_score"),
-             "; ".join(issues) if issues else None,
-             1 if item.get("_rewritten") else 0)
+            batch,
         )
+        conn.commit()
+        if pbar:
+            pbar.update(len(batch))
 
-    conn.commit()
+    if pbar:
+        pbar.close()
+
     conn.close()
-    print(f"已保存 {len(api_data)} 条数据到 {db_path}")
+    print(f"Saved {total} records to {db_path}")
