@@ -1,20 +1,21 @@
 """
-SDK 数据质量与元数据 Agent（多线程）
+SDK data quality and metadata Agent (multi-threaded).
 
-使用 Claude Sonnet 对 SDK 项目进行整体分析：
-  - 项目级：读取 README，总结项目用途、涉及的 API 类、设计模式、用例分类
-  - 文件级：每个 .cs 文件的用途、关键类、关键方法
+Uses Claude Sonnet to analyse SDK sample projects at two levels:
+  - Project level : README + file listing → project_summary, api_classes_used,
+                    key_patterns, use_case_category
+  - File level    : every .cs file (batched 5 at a time) → file_purpose,
+                    key_classes, key_methods
 
-目的：预计算丰富的元数据，减少最终用户 RAG 查询时的 token 消耗，提高检索准确度。
+Concurrency:
+  Phase 1: one Claude call per project — num_workers threads in parallel
+  Phase 2: one Claude call per 5-file batch — sequential within each project
 
-并发策略：
-  Phase 1: 项目级分析 — 5 线程并发（每个项目 1 次 Claude 调用）
-  Phase 2: 文件级批量分析 — 5 线程并发（每 5 文件 1 次 Claude 调用）
-
-对外接口：
-    from pipeline.sdk_parser.quality_agent import run_sdk_quality_agent
+Public API:
+    from pipeline.sdk_parser.quality_agent import run_sdk_quality_agent, save_enriched_to_sqlite
 
     enriched = run_sdk_quality_agent(sdk_data, config)
+    save_enriched_to_sqlite(enriched, db_path)   # deletes old DB, writes fresh
 """
 from __future__ import annotations
 
@@ -36,15 +37,15 @@ except ImportError:
 from pipeline.llm_client import LLMClient, create_llm_client
 
 # ─────────────────────────────────────────────────────────────
-# 并发配置
+# Concurrency settings
 # ─────────────────────────────────────────────────────────────
-_NUM_WORKERS = 5
+_NUM_WORKERS    = 5
 _FILE_BATCH_SIZE = 5
-_print_lock = threading.Lock()
+_print_lock     = threading.Lock()
 
 
 # ─────────────────────────────────────────────────────────────
-# 项目级分析
+# Project-level analysis
 # ─────────────────────────────────────────────────────────────
 
 _PROJECT_SYSTEM = (
@@ -65,7 +66,7 @@ File listing with code previews:
 {file_previews}
 
 Return a JSON object with:
-  "project_summary"   : 2-3 sentence description of what this project demonstrates (in English)
+  "project_summary"   : 2-3 sentence English description of what this project demonstrates
   "api_classes_used"  : list of main Revit API classes/types used (e.g. ["Document", "FamilyInstance", "Transaction"])
   "key_patterns"      : list of design patterns demonstrated (e.g. ["ExternalCommand", "FilteredElementCollector", "Event handling"])
   "use_case_category" : one of: "geometry", "family", "view", "structure", "mep", "annotation", "export", "utility", "ui", "analysis", "database", "other"
@@ -79,16 +80,25 @@ def _analyze_project(
     files: list[dict[str, Any]],
     claude: LLMClient,
 ) -> dict[str, Any]:
-    """用 Claude 分析单个 SDK 项目，返回项目级元数据。"""
+    """Analyse a single SDK project with Claude; returns project-level metadata."""
     previews = []
+    total_preview_chars = 0
     for f in files[:20]:
-        code = (f.get("clean_code") or f.get("code") or "")[:800]
+        # Use full clean_code (method bodies only, already pruned).
+        # Fall back to raw code capped at 2000 chars if clean_code is empty.
+        code = f.get("clean_code") or ""
+        if not code.strip():
+            code = (f.get("code") or "")[:2000]
+        # Cap individual file preview at 2000 chars to keep total prompt reasonable.
+        code = code[:2000]
+        total_preview_chars += len(code)
         previews.append(f"--- {f.get('filename', '?')} ---\n{code}")
-    file_previews = "\n\n".join(previews)
+        if total_preview_chars >= 12_000:
+            previews.append("... (remaining files omitted for brevity)")
+            break
 
+    file_previews = "\n\n".join(previews)
     readme_trimmed = (readme or "(no README)")[:2000]
-    if len(file_previews) > 8000:
-        file_previews = file_previews[:8000] + "\n... (truncated)"
 
     prompt = _PROJECT_PROMPT_TPL.format(
         project_name=project_name,
@@ -118,7 +128,7 @@ def _analyze_project(
 
 
 # ─────────────────────────────────────────────────────────────
-# 文件级批量分析（5 文件一组，减少 API 调用）
+# File-level batch analysis (5 files per Claude call)
 # ─────────────────────────────────────────────────────────────
 
 _FILE_BATCH_SYSTEM = (
@@ -136,7 +146,7 @@ Return a JSON array with one object per file (in the same order):
 [
   {{
     "filename": "exact filename",
-    "file_purpose": "1-sentence description of what this file does",
+    "file_purpose": "1-sentence English description of what this file does",
     "key_classes": ["ClassName1", "ClassName2"],
     "key_methods": ["MethodName1 - brief description", "MethodName2 - brief description"]
   }}
@@ -151,15 +161,21 @@ def _analyze_file_batch(
     file_batch: list[dict[str, Any]],
     claude: LLMClient,
 ) -> list[dict[str, Any]]:
-    """用 Claude 批量分析一组文件（最多 5 个），返回文件级元数据列表。"""
+    """
+    Analyse a batch of .cs files with Claude (up to _FILE_BATCH_SIZE files).
+    Uses full clean_code per file (no truncation); falls back to raw code.
+    """
     sections = []
     for idx, f in enumerate(file_batch, 1):
-        code = (f.get("clean_code") or f.get("code") or "")[:2000]
+        # Full clean_code (method bodies); fall back to raw if empty.
+        code = f.get("clean_code") or ""
+        if not code.strip():
+            code = (f.get("code") or "")[:5000]
         sections.append(f"File {idx}: {f.get('filename', '?')}\n```csharp\n{code}\n```")
 
     prompt = _FILE_BATCH_PROMPT_TPL.format(
         project_name=project_name,
-        project_summary=project_summary[:300],
+        project_summary=(project_summary or "")[:300],
         file_sections="\n\n".join(sections),
     )
 
@@ -176,7 +192,7 @@ def _analyze_file_batch(
 
 
 # ─────────────────────────────────────────────────────────────
-# 项目级 worker（Phase 1：项目分析 + 文件批量分析）
+# Per-project worker (Phase 1 + 2 combined)
 # ─────────────────────────────────────────────────────────────
 
 def _project_worker(
@@ -188,8 +204,8 @@ def _project_worker(
     total_projects: int,
 ) -> dict[str, Any]:
     """
-    处理单个项目：项目级分析 + 所有文件的批量分析。
-    在线程中执行，返回该项目的完整结果。
+    Process a single project: project-level analysis + all file batches.
+    Runs in a thread; returns the fully enriched file list for the project.
     """
     readme = (files[0].get("readme") or "") if files else ""
 
@@ -197,55 +213,52 @@ def _project_worker(
         with _print_lock:
             print(f"  [{project_idx:>3}/{total_projects}] {proj_name:<40} ({len(files)} files)")
 
-    # ── Phase 1a: Project-level analysis ──
+    # ── Project-level analysis ──
     proj_meta = _analyze_project(proj_name, readme, files, claude)
 
     if verbose and proj_meta.get("_error"):
         with _print_lock:
             print(f"         project error: {proj_meta['_error'][:80]}")
 
-    proj_summary = proj_meta.get("project_summary", "")
-    api_classes = json.dumps(proj_meta.get("api_classes_used", []), ensure_ascii=False)
-    key_patterns = json.dumps(proj_meta.get("key_patterns", []), ensure_ascii=False)
-    category = proj_meta.get("use_case_category", "other")
+    proj_summary  = proj_meta.get("project_summary", "")
+    api_classes   = json.dumps(proj_meta.get("api_classes_used", []), ensure_ascii=False)
+    key_patterns  = json.dumps(proj_meta.get("key_patterns", []),      ensure_ascii=False)
+    category      = proj_meta.get("use_case_category", "other")
 
-    # ── Phase 1b: File-level analysis (batched, sequential within this project) ──
+    # ── File-level analysis (batched, sequential within this project) ──
     file_meta_map: dict[str, dict] = {}
     for batch_start in range(0, len(files), _FILE_BATCH_SIZE):
-        batch = files[batch_start:batch_start + _FILE_BATCH_SIZE]
+        batch = files[batch_start: batch_start + _FILE_BATCH_SIZE]
         batch_results = _analyze_file_batch(proj_name, proj_summary, batch, claude)
-
         for j, f in enumerate(batch):
             fname = f.get("filename", "")
             if j < len(batch_results):
                 file_meta_map[fname] = batch_results[j]
 
-    # ── Merge ──
+    # ── Merge project + file metadata ──
     enriched_files: list[dict[str, Any]] = []
     for f in files:
-        fname = f.get("filename", "")
-        fm = file_meta_map.get(fname, {})
-
+        fname   = f.get("filename", "")
+        fm      = file_meta_map.get(fname, {})
         enriched = dict(f)
-        enriched["project_summary"] = proj_summary
-        enriched["api_classes_used"] = api_classes
-        enriched["key_patterns"] = key_patterns
+        enriched["project_summary"]   = proj_summary
+        enriched["api_classes_used"]  = api_classes
+        enriched["key_patterns"]      = key_patterns
         enriched["use_case_category"] = category
-        enriched["file_purpose"] = fm.get("file_purpose", "")
-        enriched["key_classes"] = json.dumps(fm.get("key_classes", []), ensure_ascii=False)
-        enriched["key_methods"] = json.dumps(fm.get("key_methods", []), ensure_ascii=False)
-
+        enriched["file_purpose"]      = fm.get("file_purpose", "")
+        enriched["key_classes"]       = json.dumps(fm.get("key_classes",  []), ensure_ascii=False)
+        enriched["key_methods"]       = json.dumps(fm.get("key_methods",  []), ensure_ascii=False)
         enriched_files.append(enriched)
 
     return {
-        "project_name": proj_name,
-        "enriched_files": enriched_files,
+        "project_name":    proj_name,
+        "enriched_files":  enriched_files,
         "file_meta_count": len(file_meta_map),
     }
 
 
 # ─────────────────────────────────────────────────────────────
-# 公开入口
+# Public entry point
 # ─────────────────────────────────────────────────────────────
 
 def run_sdk_quality_agent(
@@ -256,17 +269,17 @@ def run_sdk_quality_agent(
     verbose: bool = True,
 ) -> list[dict[str, Any]]:
     """
-    对 SDK 数据运行 Claude 分析 Agent，生成项目级和文件级元数据（多线程并发）。
+    Run Claude analysis on SDK data to generate project- and file-level metadata.
 
     Args:
-        sdk_data:     extract_all_sdk_projects() 的输出
-        config:       完整的 config.yaml dict
-        max_projects: 限制处理项目数（调试用），None = 全部
-        num_workers:  并发线程数（默认 5）
-        verbose:      是否打印进度
+        sdk_data:     output of extract_all_sdk_projects()
+        config:       full config.yaml dict
+        max_projects: limit number of projects processed (debug); None = all
+        num_workers:  concurrent threads (default 5)
+        verbose:      print progress
 
     Returns:
-        与 sdk_data 结构相同的列表，每条记录增加：
+        Same list as sdk_data with added fields per record:
           "project_summary"    : str
           "api_classes_used"   : str  (JSON array string)
           "key_patterns"       : str  (JSON array string)
@@ -278,7 +291,7 @@ def run_sdk_quality_agent(
     claude = create_llm_client(config, provider_override="claude")
     claude.max_tokens = 4096
 
-    # Group by project
+    # Group files by project
     projects: dict[str, list[dict]] = defaultdict(list)
     for item in sdk_data:
         projects[item.get("project", "unknown")].append(item)
@@ -287,28 +300,38 @@ def run_sdk_quality_agent(
     if max_projects:
         project_names = project_names[:max_projects]
 
-    total_files = sum(len(projects[p]) for p in project_names)
+    total_files    = sum(len(projects[p]) for p in project_names)
     total_projects = len(project_names)
 
     if verbose:
-        print(f"SDK Quality Agent — {total_projects} projects, {total_files} files, {num_workers} threads")
+        print(f"SDK Quality Agent — {total_projects} projects | {total_files} files | {num_workers} threads")
         print(f"  Model: {claude.model}")
         print()
 
     # ── Parallel project processing ──────────────────────────────
     results_map: dict[tuple[str, str], dict] = {}
     project_meta_count = 0
-    file_meta_count = 0
+    file_meta_count    = 0
 
-    pbar = tqdm(total=total_projects, desc="SDK Projects", unit="proj",
-                dynamic_ncols=True) if tqdm and verbose else None
+    pbar_proj = (
+        tqdm(total=total_projects, desc="Projects", unit="proj", dynamic_ncols=True)
+        if tqdm and verbose else None
+    )
+    pbar_file = (
+        tqdm(total=total_files, desc="Files    ", unit="file", dynamic_ncols=True)
+        if tqdm and verbose else None
+    )
 
     def _on_project_done(future):
-        if pbar:
-            pbar.update(1)
+        proj_name = futures.get(future, "")
+        n_files = len(projects.get(proj_name, []))
+        if pbar_proj:
+            pbar_proj.update(1)
+        if pbar_file:
+            pbar_file.update(n_files)
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = {}
+        futures: dict = {}
         for pi, proj_name in enumerate(project_names, 1):
             fut = executor.submit(
                 _project_worker,
@@ -323,12 +346,10 @@ def run_sdk_quality_agent(
             try:
                 result = fut.result()
                 project_meta_count += 1
-                file_meta_count += result["file_meta_count"]
-
+                file_meta_count    += result["file_meta_count"]
                 for enriched in result["enriched_files"]:
                     key = (enriched.get("project", ""), enriched.get("filename", ""))
                     results_map[key] = enriched
-
             except Exception as e:
                 if verbose:
                     with _print_lock:
@@ -337,73 +358,123 @@ def run_sdk_quality_agent(
                     key = (f.get("project", ""), f.get("filename", ""))
                     results_map[key] = f
 
-    if pbar:
-        pbar.close()
+    if pbar_proj:
+        pbar_proj.close()
+    if pbar_file:
+        pbar_file.close()
 
     if verbose:
         print(f"\n{'='*60}")
-        print(f"SDK Quality Agent 完成")
-        print(f"  并发线程数    : {num_workers}")
-        print(f"  项目分析调用  : {project_meta_count}")
-        print(f"  文件分析条数  : {file_meta_count}")
+        print(f"SDK Quality Agent complete")
+        print(f"  Threads          : {num_workers}")
+        print(f"  Projects analysed: {project_meta_count}")
+        print(f"  Files analysed   : {file_meta_count}")
         print(f"{'='*60}")
 
-    # Return in original order
+    # Return in original sdk_data order
     results = []
     for item in sdk_data:
         key = (item.get("project", "unknown"), item.get("filename", ""))
-        enriched = results_map.get(key)
-        results.append(enriched if enriched else item)
-
+        results.append(results_map.get(key, item))
     return results
 
 
-def save_quality_to_sqlite(enriched_data: list[dict[str, Any]], db_path: str):
+def save_enriched_to_sqlite(enriched_data: list[dict[str, Any]], db_path: str):
     """
-    将 SDK 质量分析结果更新到已有的 revit_sdk SQLite 表中。
-    使用 ALTER TABLE 添加新列（幂等），然后按 (project, filename) 更新。
+    Delete the existing DB (if any) and write all enriched SDK records fresh.
+
+    Schema includes both extraction columns (code, clean_code, readme, description)
+    and quality-agent columns (project_summary, api_classes_used, …).
+    A tqdm progress bar tracks the INSERT.
     """
+    try:
+        from tqdm.auto import tqdm as _tqdm
+    except ImportError:
+        _tqdm = None  # type: ignore[assignment]
+
     if not enriched_data:
+        print("No data to save.")
         return
 
-    conn = sqlite3.connect(db_path)
+    db = Path(db_path)
+    db.parent.mkdir(parents=True, exist_ok=True)
+
+    if db.exists():
+        db.unlink()
+        print(f"Removed old DB: {db}")
+
+    conn   = sqlite3.connect(str(db))
     cursor = conn.cursor()
 
-    new_cols = [
-        "project_summary", "api_classes_used", "key_patterns",
-        "use_case_category", "file_purpose", "key_classes", "key_methods",
-    ]
-    for col in new_cols:
-        try:
-            cursor.execute(f"ALTER TABLE revit_sdk ADD COLUMN {col} TEXT")
-        except sqlite3.OperationalError:
-            pass
-
-    updated = 0
-    for item in enriched_data:
-        if not item.get("project_summary") and not item.get("file_purpose"):
-            continue
-
-        cursor.execute(
-            """UPDATE revit_sdk
-               SET project_summary=?, api_classes_used=?, key_patterns=?,
-                   use_case_category=?, file_purpose=?, key_classes=?, key_methods=?
-               WHERE project=? AND filename=?""",
-            (
-                item.get("project_summary", ""),
-                item.get("api_classes_used", "[]"),
-                item.get("key_patterns", "[]"),
-                item.get("use_case_category", ""),
-                item.get("file_purpose", ""),
-                item.get("key_classes", "[]"),
-                item.get("key_methods", "[]"),
-                item.get("project", ""),
-                item.get("filename", ""),
-            ),
+    cursor.execute("""
+        CREATE TABLE revit_sdk (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            project          TEXT,
+            filename         TEXT,
+            code             TEXT,
+            clean_code       TEXT,
+            readme           TEXT,
+            description      TEXT,
+            project_summary  TEXT,
+            api_classes_used TEXT,
+            key_patterns     TEXT,
+            use_case_category TEXT,
+            file_purpose     TEXT,
+            key_classes      TEXT,
+            key_methods      TEXT
         )
-        if cursor.rowcount > 0:
-            updated += 1
+    """)
 
-    conn.commit()
+    pbar = (
+        _tqdm(total=len(enriched_data), desc="Saving to SQLite", unit="rec", dynamic_ncols=True)
+        if _tqdm else None
+    )
+
+    BATCH = 500
+    batch: list = []
+    SQL = """INSERT INTO revit_sdk
+               (project, filename, code, clean_code, readme, description,
+                project_summary, api_classes_used, key_patterns, use_case_category,
+                file_purpose, key_classes, key_methods)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+
+    for item in enriched_data:
+        batch.append((
+            item.get("project"),
+            item.get("filename"),
+            item.get("code"),
+            item.get("clean_code"),
+            item.get("readme"),
+            item.get("description"),
+            item.get("project_summary"),
+            item.get("api_classes_used"),
+            item.get("key_patterns"),
+            item.get("use_case_category"),
+            item.get("file_purpose"),
+            item.get("key_classes"),
+            item.get("key_methods"),
+        ))
+        if len(batch) >= BATCH:
+            cursor.executemany(SQL, batch)
+            conn.commit()
+            if pbar:
+                pbar.update(len(batch))
+            batch = []
+
+    if batch:
+        cursor.executemany(SQL, batch)
+        conn.commit()
+        if pbar:
+            pbar.update(len(batch))
+
+    if pbar:
+        pbar.close()
+
     conn.close()
-    print(f"SDK 元数据已更新 {updated}/{len(enriched_data)} 条到 {db_path}")
+    print(f"Saved {len(enriched_data)} records to {db}")
+
+
+# Keep old name as an alias for backward compatibility
+def save_quality_to_sqlite(enriched_data: list[dict[str, Any]], db_path: str):
+    """Deprecated alias — use save_enriched_to_sqlite instead."""
+    save_enriched_to_sqlite(enriched_data, db_path)
