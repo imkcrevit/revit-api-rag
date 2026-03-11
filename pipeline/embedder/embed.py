@@ -107,35 +107,45 @@ def embed_api_data(config: dict, api_db_path: str, chromadb_dir: str, batch_size
 
 def embed_code_data(config: dict, sdk_db_path: str, chromadb_dir: str, batch_size: int = 20):
     """
-    将 SDK 代码数据向量化并存入 ChromaDB
-    优先使用 clean_code，如果为空则回退到 code 字段
+    将 SDK 代码数据向量化并存入 ChromaDB。
+
+    读取新版 sdk_info 表（project, summary, content, mentioned_apis），
+    仅使用 summary 字段作为 embedding 文本，大幅节省 token。
+    兼容旧版 revit_sdk 表（fallback）。
     """
     os.makedirs(chromadb_dir, exist_ok=True)
     embedder = create_embedding(config)
 
     conn = sqlite3.connect(sdk_db_path)
     cursor = conn.cursor()
-    # Try to read enriched columns if they exist
+
+    # Prefer new sdk_info table; fall back to legacy revit_sdk
     try:
         cursor.execute("""
-            SELECT id, project, filename, code, clean_code, description,
-                   project_summary, file_purpose, use_case_category
-            FROM revit_sdk
-            WHERE code IS NOT NULL AND code != ''
+            SELECT id, project, summary, content, mentioned_apis
+            FROM sdk_info
+            WHERE summary IS NOT NULL AND summary != ''
         """)
-        has_quality_cols = True
+        rows = cursor.fetchall()
+        use_new_schema = True
     except sqlite3.OperationalError:
-        cursor.execute("""
-            SELECT id, project, filename, code, clean_code, description
-            FROM revit_sdk
-            WHERE code IS NOT NULL AND code != ''
-        """)
-        has_quality_cols = False
-    rows = cursor.fetchall()
+        try:
+            cursor.execute("""
+                SELECT id, project, filename, code, clean_code, description,
+                       project_summary, file_purpose, use_case_category
+                FROM revit_sdk
+                WHERE code IS NOT NULL AND code != ''
+            """)
+            rows = cursor.fetchall()
+            use_new_schema = False
+        except sqlite3.OperationalError:
+            rows = []
+            use_new_schema = False
+
     conn.close()
 
-    print(f"从 {sdk_db_path} 读取 {len(rows)} 条 SDK 代码数据" +
-          (" (含元数据)" if has_quality_cols else ""))
+    schema_label = "sdk_info (summary-only)" if use_new_schema else "revit_sdk (legacy)"
+    print(f"从 {sdk_db_path} 读取 {len(rows)} 条 SDK 数据 [{schema_label}]")
 
     client = chromadb.PersistentClient(path=chromadb_dir)
     collection = client.get_or_create_collection(
@@ -148,23 +158,32 @@ def embed_code_data(config: dict, sdk_db_path: str, chromadb_dir: str, batch_siz
         ids = [str(row[0]) for row in batch]
 
         texts = []
+        metadatas = []
+
         for row in batch:
-            # 优先用 clean_code，没有则用 code
-            code = row[4] if row[4] else row[3]
-            desc = row[5] or ""
-
-            # Use enriched metadata for richer embedding text
-            if has_quality_cols:
-                proj_summary = row[6] or ""
-                file_purpose = row[7] or ""
-                prefix = " | ".join(filter(None, [proj_summary, file_purpose, desc]))
+            if use_new_schema:
+                # row: id, project, summary, content, mentioned_apis
+                project = row[1] or ""
+                summary = row[2] or ""
+                mentioned_apis = row[4] or ""
+                # Embedding text = summary only (concise, semantic-rich, minimal tokens)
+                text = summary if summary else (row[3] or "")[:500]
+                texts.append(text)
+                metadatas.append({
+                    "project": project,
+                    "mentioned_apis": mentioned_apis,
+                })
             else:
-                prefix = desc
-
-            text = f"{prefix}\n{code[:800]}" if prefix else code[:1000]
-            texts.append(text)
-
-        metadatas = [{"project": row[1], "filename": row[2]} for row in batch]
+                # Legacy schema fallback
+                # row: id, project, filename, code, clean_code, description, project_summary, file_purpose, use_case_category
+                code = row[4] if len(row) > 4 and row[4] else (row[3] or "")
+                desc = row[5] if len(row) > 5 else ""
+                proj_summary = row[6] if len(row) > 6 else ""
+                file_purpose = row[7] if len(row) > 7 else ""
+                prefix = " | ".join(filter(None, [proj_summary or "", file_purpose or "", desc or ""]))
+                text = f"{prefix}\n{code[:800]}" if prefix else code[:1000]
+                texts.append(text)
+                metadatas.append({"project": row[1] or "", "filename": row[2] or ""})
 
         embeddings = embedder.embed_texts(texts)
 

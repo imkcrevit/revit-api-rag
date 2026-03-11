@@ -27,3 +27,6 @@ httpx>=0.28
 # 代码解析（SDK 清洗用 - P2）
 tree-sitter>=0.20
 tree-sitter-c-sharp>=0.20
+
+# RTF 解析（SDK ReadMe 转文本）
+striprtf>=0.0.26
