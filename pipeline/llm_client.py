@@ -63,7 +63,7 @@ class LLMClient:
 
         _system = system_prompt or (
             "You are an expert assistant for summarizing Revit SDK C# sample code. "
-            "Always respond in the same language as the user's request."
+            "Always respond in English."
         )
 
         payload: dict[str, Any] = {
