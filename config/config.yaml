@@ -31,6 +31,10 @@ llm:
       model: "google/gemini-3-flash-preview"
       api_key_env: "OPENROUTER_API_KEY"
       base_url: "https://openrouter.ai/api/v1"
+    gemini_flash:
+      model: "google/gemini-3-flash-preview"
+      api_key_env: "OPENROUTER_API_KEY"
+      base_url: "https://openrouter.ai/api/v1"
     deepseek:
       model: "deepseek/deepseek-chat-v3-0324"
       api_key_env: "OPENROUTER_API_KEY"
@@ -81,6 +85,13 @@ intent:
   validate_output: true
   explain_result: true
   language: "zh"
+
+# --- SDK 解析配置 ---
+sdk:
+  stage1_provider: "gemini_flash"   # ReadMe 解析用 (cheap + fast)
+  stage2_provider: "claude"         # Golden code 生成用 (high quality)
+  num_workers_phase1: 10
+  num_workers_phase2: 5
 
 # --- 服务配置 ---
 server:
