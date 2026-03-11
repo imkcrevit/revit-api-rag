@@ -1,12 +1,7 @@
 """
-Revit SDK 示例代码解析器
-对应原 revit_sdk_prund/sdk_prunding.ipynb + extra_data/ 的功能：
-- 遍历 SDK 目录提取 .cs 文件和 ReadMe.rtf
-- 基于正则的代码剪枝（P0）
-- LLM 清洗代码并生成 description（P1）
-- 存入 SQLite
+Revit SDK sample code parser.
 
-使用方法（在 Colab 中）：
+Usage (in Colab):
     from pipeline.sdk_parser.extract import extract_all_sdk_projects, clean_code_with_llm, save_to_sqlite
 
     raw_data = extract_all_sdk_projects("./data/raw/sdk_samples/")
@@ -25,15 +20,14 @@ from pipeline.llm_client import create_llm_client
 
 def extract_cs_files(project_dir: str) -> list[dict]:
     """
-    从单个 SDK 项目目录提取 .cs 文件和 ReadMe
+    Extract .cs files and ReadMe from a single SDK project directory.
 
     Returns:
-        list of {"filename": str, "code": str, "readme": str|None}
+        list of {"filename": str, "code": str, "clean_code": str, "readme": str|None, "project": str}
     """
     project_dir = Path(project_dir)
     results = []
 
-    # 读取 ReadMe
     readme_text = None
     for readme_name in ["ReadMe.rtf", "ReadMe.txt", "README.md"]:
         readme_path = project_dir / readme_name
@@ -44,7 +38,6 @@ def extract_cs_files(project_dir: str) -> list[dict]:
                 pass
             break
 
-    # 读取所有 .cs 文件
     for cs_file in project_dir.rglob("*.cs"):
         try:
             code = cs_file.read_text(encoding="utf-8", errors="ignore")
@@ -65,80 +58,62 @@ def extract_cs_files(project_dir: str) -> list[dict]:
 
 def extract_all_sdk_projects(sdk_root: str) -> list[dict]:
     """
-    遍历 SDK 根目录下所有项目
-
-    Args:
-        sdk_root: SDK 示例代码根目录
+    Walk all project directories under sdk_root and extract .cs files.
 
     Returns:
-        list of extracted code data
+        list of extracted code data dicts
     """
     sdk_root = Path(sdk_root)
     all_data = []
 
-    # SDK 通常按项目文件夹组织
     project_dirs = [d for d in sdk_root.iterdir() if d.is_dir()]
-    print(f"找到 {len(project_dirs)} 个 SDK 项目")
+    print(f"Found {len(project_dirs)} SDK projects")
 
     for project_dir in project_dirs:
         data = extract_cs_files(str(project_dir))
         all_data.extend(data)
 
-    print(f"共提取 {len(all_data)} 个 .cs 文件")
+    print(f"Extracted {len(all_data)} .cs files total")
     return all_data
 
 
 def parse_code_blocks(code: str) -> list[str]:
     """
-    使用 tree-sitter 提取代码中的有效代码块（P2）
-    - 移除 using / namespace 等无关内容
-    - 提取 class/method 级别的“金代码块”
+    Extract method_declaration blocks from C# source via direct AST walk.
+
+    Uses iterative DFS on the tree-sitter AST instead of Query.matches(),
+    so it works with all tree-sitter versions (Query.matches was removed
+    in >= 0.21). Falls back to regex pruning when tree-sitter is unavailable.
     """
     try:
-        from tree_sitter import Language, Parser, Query  # type: ignore
+        from tree_sitter import Language, Parser  # type: ignore
         import tree_sitter_c_sharp  # type: ignore
     except Exception:
-        # 如果未安装 tree-sitter，则回退到简单正则剪枝
         return _fallback_prune_code(code)
 
-    cleaned_for_parse = code
-    if cleaned_for_parse.startswith("\ufeff"):
-        cleaned_for_parse = cleaned_for_parse.lstrip("\ufeff")
+    cleaned = code.lstrip("\ufeff")
 
-    csharp_language = Language(tree_sitter_c_sharp.language())
-    parser = Parser(csharp_language)
-    tree = parser.parse(bytes(cleaned_for_parse, "utf8"))
-    root_node = tree.root_node
+    try:
+        csharp_language = Language(tree_sitter_c_sharp.language())
+        parser = Parser(csharp_language)
+        tree = parser.parse(bytes(cleaned, "utf8"))
+    except Exception:
+        return _fallback_prune_code(code)
 
-    # 查询所有 class_declaration / method_declaration
-    query_string = """
-        (compilation_unit
-            (namespace_declaration
-                body: (declaration_list
-                    (class_declaration
-                        name: (identifier) @class.name
-                        body: (declaration_list
-                            (method_declaration) @method.node
-                        )
-                    )
-                )
-            )
-        )
-    """
-    query = Query(csharp_language, query_string)
-    matches = query.matches(root_node)
-
+    # Iterative DFS: collect all method_declaration nodes anywhere in tree.
+    # Avoids Query.matches() which was removed in tree-sitter >= 0.21.
     blocks: list[str] = []
-    for match in matches:
-        values = match[1]
-        method_nodes = values.get("method.node") or []
-        for node in method_nodes:
-            text = cleaned_for_parse[node.start_byte : node.end_byte]
-            text = text.strip()
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "method_declaration":
+            text = cleaned[node.start_byte: node.end_byte].strip()
             if text:
                 blocks.append(text)
+            # Don't descend — C# has no nested method declarations
+            continue
+        stack.extend(reversed(node.children))
 
-    # 如果 tree-sitter 没有提取到任何块，回退到简单剪枝结果
     if not blocks:
         return _fallback_prune_code(code)
 
@@ -147,12 +122,10 @@ def parse_code_blocks(code: str) -> list[str]:
 
 def _fallback_prune_code(code: str) -> list[str]:
     """
-    P0 正则剪枝实现，作为 tree-sitter 不可用时的回退方案。
+    Regex-based pruning fallback when tree-sitter is unavailable.
+    Strips license headers, using directives, and namespace wrappers.
     """
-    cleaned = code
-
-    if cleaned.startswith("\ufeff"):
-        cleaned = cleaned.lstrip("\ufeff")
+    cleaned = code.lstrip("\ufeff")
 
     license_pattern = r"^\s*/\*[\s\S]*?\*/\s*"
     cleaned = re.sub(license_pattern, "", cleaned, count=1, flags=re.MULTILINE)
@@ -176,22 +149,20 @@ def _fallback_prune_code(code: str) -> list[str]:
             result_lines.append(line.rstrip())
 
     cleaned = "\n".join(result_lines).strip()
-
     return [cleaned] if cleaned else []
 
 
 def clean_code_with_llm(raw_data: list[dict], config: dict[str, Any]) -> list[dict]:
     """
-    使用 LLM 对 SDK 代码进行清洗，生成简短的功能描述 description。
+    Use an LLM to generate a short English description for each SDK file.
 
-    - 输入: extract_all_sdk_projects() 的原始数据（包含 code / clean_code / readme / project / filename）
-    - 输出: 追加了 description 字段的列表，用于后续存入 SQLite
+    Input : list from extract_all_sdk_projects() (fields: code, clean_code, readme, project, filename)
+    Output: same list with an added "description" field, ready for save_to_sqlite()
     """
     if not raw_data:
         return []
 
     client = create_llm_client(config)
-
     cleaned_results: list[dict] = []
 
     for item in raw_data:
@@ -226,8 +197,7 @@ def clean_code_with_llm(raw_data: list[dict], config: dict[str, Any]) -> list[di
             try:
                 description = client.generate_text(prompt).strip()
             except Exception as e:
-                # LLM 失败时保留空描述，不影响整体流程
-                print(f"LLM 清洗失败: {project}/{filename} - {e}")
+                print(f"LLM error: {project}/{filename} - {e}")
                 description = ""
 
         new_item = dict(item)
@@ -238,7 +208,7 @@ def clean_code_with_llm(raw_data: list[dict], config: dict[str, Any]) -> list[di
 
 
 def save_to_sqlite(sdk_data: list[dict], db_path: str):
-    """将清洗后的 SDK 数据存入 SQLite"""
+    """Save cleaned SDK data to SQLite."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
     conn = sqlite3.connect(db_path)
@@ -265,4 +235,4 @@ def save_to_sqlite(sdk_data: list[dict], db_path: str):
 
     conn.commit()
     conn.close()
-    print(f"已保存 {len(sdk_data)} 条数据到 {db_path}")
+    print(f"Saved {len(sdk_data)} records to {db_path}")
