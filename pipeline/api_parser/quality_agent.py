@@ -307,10 +307,14 @@ def _stage1_audit(
         result["_html_found"] = bool(html_excerpt)
         return result
     except Exception as e:
+        err_str = str(e)
+        is_403 = "403" in err_str
+        # 403 means the record was NOT audited — treat as unknown quality
+        # and send to Stage-2 so Claude can attempt a rewrite.
         return {
-            "quality_score": 1.0,
-            "issues": [f"audit_failed: {e}"],
-            "needs_rewrite": False,
+            "quality_score": 0.0 if is_403 else 1.0,
+            "issues": [f"audit_failed: {err_str}"],
+            "needs_rewrite": is_403,
             "_html_found": bool(html_excerpt),
         }
 
@@ -390,7 +394,11 @@ def _stage2_rewrite(
         patch = json.loads(raw_resp)
         return {k: v for k, v in patch.items() if isinstance(v, str)}
     except Exception as e:
-        return {"_rewrite_error": str(e)}
+        err_str = str(e)
+        result = {"_rewrite_error": err_str}
+        if "403" in err_str:
+            result["_is_403"] = True
+        return result
 
 
 # ─────────────────────────────────────────────────────────────
@@ -461,10 +469,12 @@ def _stage2_worker(
     item: dict[str, Any],
     html_dir: str | None,
     claude: LLMClient,
+    failed_403_log: list[str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     单条记录的 Stage-2 处理（在线程中执行）：Claude 重写。
     返回 (原始索引, 更新后的 item)。
+    若 Claude 也返回 403，将 source_file / full_id 追加到 failed_403_log。
     """
     issues = item.get("_quality_issues", [])
     patch = _stage2_rewrite(item, issues, html_dir, claude)
@@ -477,8 +487,18 @@ def _stage2_worker(
                 new_item[k] = v
         new_item["_rewritten"] = True
     elif "_rewrite_error" in patch:
+        err_msg = patch["_rewrite_error"]
         new_item["_quality_issues"] = list(new_item.get("_quality_issues", []))
-        new_item["_quality_issues"].append(f"rewrite_failed: {patch['_rewrite_error']}")
+        new_item["_quality_issues"].append(f"rewrite_failed: {err_msg}")
+        # Log source file for persistent 403 so we can retry later
+        if patch.get("_is_403") and failed_403_log is not None:
+            src = (
+                item.get("_source_file")
+                or item.get("full_id")
+                or item.get("name")
+                or f"idx:{idx}"
+            )
+            failed_403_log.append(str(src))
 
     return (idx, new_item)
 
@@ -490,6 +510,7 @@ def run_quality_agent(
     max_stage2: int = _MAX_STAGE2_ITEMS,
     num_workers: int = _NUM_WORKERS,
     verbose: bool = True,
+    failed_403_log_path: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     对解析后的 API 数据运行两阶段质量 Agent（多线程并发）。
@@ -498,12 +519,14 @@ def run_quality_agent(
     Phase 2: Stage-2 Claude 重写低质量条目（num_workers 线程并发）
 
     Args:
-        api_data:    parse_all_api_html() 的输出
-        config:      完整的 config.yaml dict
-        html_dir:    CHM 解压 HTML 目录
-        max_stage2:  Stage-2 最多处理多少条
-        num_workers: 并发线程数（默认 5）
-        verbose:     是否打印进度和统计
+        api_data:             parse_all_api_html() 的输出
+        config:               完整的 config.yaml dict
+        html_dir:             CHM 解压 HTML 目录
+        max_stage2:           Stage-2 最多处理多少条
+        num_workers:          并发线程数（默认 5）
+        verbose:              是否打印进度和统计
+        failed_403_log_path:  若提供，Stage-2 遭遇 403 时将 source_file 写入此文件
+                              （每行一条，可用于后续逐个重试）
 
     Returns:
         与 api_data 结构完全相同的列表，低质量条目的字段已被补全/重写。
@@ -513,13 +536,15 @@ def run_quality_agent(
           "_rewritten"      : bool
           "_html_found"     : bool
     """
+    import datetime
+
     # ── Pre-flight: connectivity check ──────────────────────────
     if verbose:
         print("Checking connectivity...")
     conn = check_connectivity(config)
     if verbose:
         proxy_status = f"OK ({conn['proxy_addr']})" if conn["proxy_ok"] else (
-            f"DISABLED" if conn["proxy_addr"] == "disabled" else f"FAILED ({conn['error']})"
+            "DISABLED" if conn["proxy_addr"] == "disabled" else f"FAILED ({conn['error']})"
         )
         api_status = "OK" if conn["api_ok"] else f"FAILED ({conn['error']})"
         print(f"  Proxy  : {proxy_status}")
@@ -550,6 +575,8 @@ def run_quality_agent(
         print(f"Quality Agent — {total} records, {num_workers} threads")
         print(f"  Stage-1: {gemini.model}")
         print(f"  Stage-2: {claude.model}")
+        if failed_403_log_path:
+            print(f"  403 log : {failed_403_log_path}")
         print()
 
     # ════════════════════════════════════════════════════════════
@@ -560,9 +587,10 @@ def run_quality_agent(
 
     results: list[dict[str, Any] | None] = [None] * total
 
-    # Progress bar (tqdm) or fallback counter
-    pbar1 = tqdm(total=total, desc="Stage-1 Gemini", unit="rec",
-                 dynamic_ncols=True) if tqdm and verbose else None
+    pbar1 = (
+        tqdm(total=total, desc="Stage-1 Gemini", unit="rec", dynamic_ncols=True)
+        if tqdm and verbose else None
+    )
 
     def _on_stage1_done(future):
         if pbar1:
@@ -592,9 +620,19 @@ def run_quality_agent(
     if pbar1:
         pbar1.close()
 
-    html_found_count = sum(1 for r in results if r and r.get("_html_found"))
+    html_found_count   = sum(1 for r in results if r and r.get("_html_found"))
+    stage1_needs_rewrite = sum(1 for r in results if r and r.get("_needs_rewrite"))
+    stage1_403_count   = sum(
+        1 for r in results if r
+        and any("403" in str(iss) for iss in (r.get("_quality_issues") or []))
+    )
     if verbose:
-        print(f"  Stage-1 complete: {total} records, HTML found: {html_found_count}")
+        print(
+            f"  Stage-1 complete: {total} records | "
+            f"HTML found: {html_found_count} | "
+            f"needs-rewrite: {stage1_needs_rewrite} | "
+            f"403 errors: {stage1_403_count}"
+        )
         print()
 
     # ════════════════════════════════════════════════════════════
@@ -616,8 +654,13 @@ def run_quality_agent(
     if verbose:
         print(f"Phase 2: Stage-2 Claude rewrite — {stage2_total} candidates ({num_workers} threads)...")
 
-    pbar2 = tqdm(total=stage2_total, desc="Stage-2 Claude", unit="rec",
-                 dynamic_ncols=True) if tqdm and verbose and stage2_total > 0 else None
+    # Thread-safe list for Stage-2 403 logging
+    failed_403_log: list[str] = []
+
+    pbar2 = (
+        tqdm(total=stage2_total, desc="Stage-2 Claude", unit="rec", dynamic_ncols=True)
+        if tqdm and verbose and stage2_total > 0 else None
+    )
 
     def _on_stage2_done(future):
         if pbar2:
@@ -627,7 +670,9 @@ def run_quality_agent(
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {}
             for orig_idx, item in stage2_candidates:
-                fut = executor.submit(_stage2_worker, orig_idx, item, html_dir, claude)
+                fut = executor.submit(
+                    _stage2_worker, orig_idx, item, html_dir, claude, failed_403_log
+                )
                 fut.add_done_callback(_on_stage2_done)
                 futures[fut] = orig_idx
 
@@ -644,6 +689,17 @@ def run_quality_agent(
     if pbar2:
         pbar2.close()
 
+    # ── Write 403 log file ───────────────────────────────────────
+    if failed_403_log:
+        log_path = failed_403_log_path or "quality_agent_403_failed.log"
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"# Stage-2 403 failures logged at {ts}\n")
+            for src in failed_403_log:
+                f.write(src + "\n")
+        if verbose:
+            print(f"\n  [403 Log] {len(failed_403_log)} Stage-2 items still got 403 → saved to: {log_path}")
+
     # ── Clean up temporary flag & compute stats ──────────────────
     rewritten_count = 0
     for item in results:
@@ -655,14 +711,18 @@ def run_quality_agent(
     if verbose:
         low_quality = sum(1 for r in results if r and r["_quality_score"] < _QUALITY_THRESHOLD)
         html_total  = sum(1 for r in results if r and r.get("_html_found"))
+        stage2_403_count = len(failed_403_log)
         print(f"\n{'='*60}")
-        print(f"Quality Agent 完成")
-        print(f"  总条数          : {total}")
-        print(f"  并发线程数      : {num_workers}")
-        print(f"  HTML 加载成功   : {html_total}  ({html_total/total*100:.1f}%)")
-        print(f"  低质量条目      : {low_quality}  ({low_quality/total*100:.1f}%)")
-        print(f"  触发 Stage-2    : {stage2_total}")
-        print(f"  成功重写        : {rewritten_count}")
+        print(f"Quality Agent complete")
+        print(f"  Total records   : {total}")
+        print(f"  Threads         : {num_workers}")
+        print(f"  HTML loaded     : {html_total}  ({html_total/total*100:.1f}%)")
+        print(f"  Low quality     : {low_quality}  ({low_quality/total*100:.1f}%)")
+        print(f"  Stage-2 runs    : {stage2_total}")
+        print(f"  Rewritten       : {rewritten_count}")
+        print(f"  Stage-1 403 err : {stage1_403_count}")
+        print(f"  Stage-2 403 err : {stage2_403_count}"
+              + (f"  ← see {failed_403_log_path or 'quality_agent_403_failed.log'}" if stage2_403_count else ""))
         print(f"{'='*60}")
 
     return [r for r in results if r is not None]
