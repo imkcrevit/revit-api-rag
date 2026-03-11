@@ -187,8 +187,10 @@ def clean_code_with_llm(raw_data: list[dict], config: dict[str, Any]) -> list[di
                 prompt_parts.append(readme[:2000])
 
             prompt_parts.append("")
-            prompt_parts.append("Code (pruned):")
-            prompt_parts.append(code[:3000])
+            # clean_code is already pruned to method bodies — send the full text.
+            # If clean_code was empty we fell back to the raw file, cap at 20 000 chars.
+            prompt_parts.append("Code (pruned, full):")
+            prompt_parts.append(code if item.get("clean_code", "").strip() else code[:20_000])
             prompt_parts.append("")
             prompt_parts.append("Output the description text only. No JSON, no code, no bullet points.")
 
