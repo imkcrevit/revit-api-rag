@@ -263,6 +263,15 @@ def _extract_methods_for_class(code: str, target_class: str) -> list[str]:
     target_normalized = re.sub(r"\s+", "", target_class).lower()
     methods: list[str] = []
 
+    def _class_name_matches(name_lower: str) -> bool:
+        """Check if class name matches target (bidirectional containment)."""
+        if name_lower == target_normalized:
+            return True
+        # Bidirectional: "ribbon" in "ribbonsample" OR "ribbonsample" in "ribbon"
+        if len(target_normalized) >= 3 and len(name_lower) >= 3:
+            return target_normalized in name_lower or name_lower in target_normalized
+        return False
+
     # DFS: find class_declaration whose name matches target_class,
     # then collect all method_declaration nodes within it.
     stack = [tree.root_node]
@@ -276,7 +285,7 @@ def _extract_methods_for_class(code: str, target_class: str) -> list[str]:
             if class_name_node:
                 name = cleaned[class_name_node.start_byte: class_name_node.end_byte]
                 name_lower = name.lower()
-                if name_lower == target_normalized or target_normalized in name_lower:
+                if _class_name_matches(name_lower):
                     # Extract all methods from this class
                     inner_stack = [node]
                     while inner_stack:
@@ -294,9 +303,35 @@ def _extract_methods_for_class(code: str, target_class: str) -> list[str]:
         else:
             stack.extend(reversed(node.children))
 
-    # Class not found by name — fall back to all methods
+    # Class not found — try matching as a method name instead
     if not methods:
-        return _extract_all_methods(cleaned, tree)
+        methods = _extract_method_by_name(cleaned, tree, target_normalized)
+    if methods:
+        return methods
+
+    # Nothing found — fall back to all methods
+    return _extract_all_methods(cleaned, tree)
+
+
+def _extract_method_by_name(cleaned: str, tree: Any, target_normalized: str) -> list[str]:
+    """Search for a specific method by name across all classes."""
+    methods: list[str] = []
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "method_declaration":
+            # Get method name
+            method_name_node = next(
+                (c for c in node.children if c.type == "identifier"), None
+            )
+            if method_name_node:
+                name = cleaned[method_name_node.start_byte: method_name_node.end_byte]
+                if name.lower() == target_normalized:
+                    text = cleaned[node.start_byte: node.end_byte].strip()
+                    if text:
+                        methods.append(text)
+            continue
+        stack.extend(reversed(node.children))
     return methods
 
 
