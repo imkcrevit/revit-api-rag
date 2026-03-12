@@ -1,0 +1,973 @@
+# Intent Bridge — Slot Definitions (Bilingual: CN/EN)
+# 8 intents: create_wall, create_floor, create_door, create_window,
+#             create_room, modify_element, query_element, delete_element
+
+intents:
+
+  # ===================================================================
+  # Create Wall / 创建墙体
+  # ===================================================================
+  create_wall:
+    display_name: "创建墙体"
+    display_name_en: "Create Wall"
+    description: "沿指定路径或位置创建墙体"
+    description_en: "Create a wall along a specified path or location"
+    api_method: "Wall.Create"
+    slots:
+      wall_type:
+        type: enum
+        required: true
+        values: [standard, partition, curtain, retaining, stacked]
+        default_strategy: infer_from_context
+        ask_if_missing: "请问要创建什么类型的墙？（标准墙/隔墙/幕墙/挡土墙）"
+        ask_if_missing_en: "What type of wall? (standard / partition / curtain / retaining)"
+        aliases:
+          # Chinese
+          标准墙: standard
+          普通墙: standard
+          隔墙: partition
+          隔断: partition
+          幕墙: curtain
+          玻璃幕墙: curtain
+          挡土墙: retaining
+          承重墙: standard
+          非承重墙: partition
+          # English
+          standard wall: standard
+          normal wall: standard
+          partition wall: partition
+          divider: partition
+          curtain wall: curtain
+          glass curtain wall: curtain
+          retaining wall: retaining
+          load-bearing wall: standard
+          load bearing wall: standard
+          non-load-bearing wall: partition
+          non-structural wall: partition
+          structural wall: standard
+        examples:
+          - input: "加一面隔墙"
+            value: partition
+          - input: "做一面幕墙"
+            value: curtain
+          - input: "add a partition wall"
+            value: partition
+          - input: "create a curtain wall"
+            value: curtain
+
+      location:
+        type: object
+        required: true
+        ask_if_missing: "墙体放在哪里？可以说明房间名称和方位，或给出起止坐标。"
+        ask_if_missing_en: "Where should the wall be placed? Specify room name and direction, or start/end coordinates."
+        sub_slots:
+          method:
+            type: enum
+            required: true
+            values: [along_room_edge, by_coordinates, by_grid_line]
+            default_strategy: infer_from_input
+          room_name:
+            type: string
+            required_if: "method == along_room_edge"
+            ask_if_missing: "在哪个房间？"
+            ask_if_missing_en: "In which room?"
+          edge:
+            type: enum
+            values: [north, south, east, west]
+            required_if: "method == along_room_edge"
+            ask_if_missing: "房间的哪个方向？（东/南/西/北）"
+            ask_if_missing_en: "Which direction? (north / south / east / west)"
+            aliases:
+              # Chinese
+              北: north
+              南: south
+              东: east
+              西: west
+              北边: north
+              南边: south
+              东边: east
+              西边: west
+              北面: north
+              南面: south
+              东面: east
+              西面: west
+              北侧: north
+              南侧: south
+              东侧: east
+              西侧: west
+              # English
+              north side: north
+              south side: south
+              east side: east
+              west side: west
+              northern: north
+              southern: south
+              eastern: east
+              western: west
+              left: west
+              right: east
+              top: north
+              bottom: south
+          start_point:
+            type: list
+            required_if: "method == by_coordinates"
+            ask_if_missing: "起点坐标是多少？格式：(x, y, z)"
+            ask_if_missing_en: "What is the start point? Format: (x, y, z)"
+          end_point:
+            type: list
+            required_if: "method == by_coordinates"
+            ask_if_missing: "终点坐标是多少？格式：(x, y, z)"
+            ask_if_missing_en: "What is the end point? Format: (x, y, z)"
+          grid_line:
+            type: string
+            required_if: "method == by_grid_line"
+            ask_if_missing: "沿哪条轴网线？"
+            ask_if_missing_en: "Along which grid line?"
+        examples:
+          - input: "客厅北边"
+            value: {method: along_room_edge, room_name: "客厅", edge: north}
+          - input: "从(0,0,0)到(5,0,0)"
+            value: {method: by_coordinates, start_point: [0,0,0], end_point: [5,0,0]}
+          - input: "north side of living room"
+            value: {method: along_room_edge, room_name: "living room", edge: north}
+          - input: "from (0,0,0) to (5,0,0)"
+            value: {method: by_coordinates, start_point: [0,0,0], end_point: [5,0,0]}
+
+      height:
+        type: float
+        required: true
+        unit: mm
+        ask_if_missing: "墙体高度是多少？（单位：毫米，如 2400 表示 2.4 米）"
+        ask_if_missing_en: "What is the wall height? (in mm, e.g. 2400 for 2.4m)"
+        aliases:
+          # Chinese
+          高: height
+          墙高: height
+          # English
+          tall: height
+          wall height: height
+        constraints:
+          - "height > 0"
+          - "height <= 20000"
+        examples:
+          - input: "2.4米高"
+            value: 2400
+          - input: "3米"
+            value: 3000
+          - input: "2.4 meters tall"
+            value: 2400
+          - input: "8 feet high"
+            value: 2438
+
+      base_level:
+        type: string
+        required: false
+        default_strategy: use_current_level
+        ask_if_missing: "底部标高？默认使用当前标高。"
+        ask_if_missing_en: "Base level? Defaults to current level."
+        examples:
+          - input: "一层"
+            value: "F1"
+          - input: "二楼"
+            value: "F2"
+          - input: "first floor"
+            value: "F1"
+          - input: "second floor"
+            value: "F2"
+          - input: "ground floor"
+            value: "F1"
+
+      thickness:
+        type: float
+        required: false
+        unit: mm
+        default_strategy: infer_from_wall_type
+        ask_if_missing: "墙体厚度？隔墙默认 100mm，标准墙默认 200mm。"
+        ask_if_missing_en: "Wall thickness? Partition default 100mm, standard default 200mm."
+        constraints:
+          - "thickness > 0"
+          - "thickness <= 1000"
+
+      structural:
+        type: boolean
+        required: false
+        default_strategy: infer_from_wall_type
+        ask_if_missing: "是否为承重墙？"
+        ask_if_missing_en: "Is this a structural (load-bearing) wall?"
+        constraints:
+          - operator: "!="
+            condition: "wall_type == curtain"
+            value: true
+            message: "幕墙不能设为承重墙 / Curtain wall cannot be structural"
+
+      material:
+        type: string
+        required: false
+        default_strategy: null
+        ask_if_missing: "墙体材质？（如：混凝土、砖、石膏板）"
+        ask_if_missing_en: "Wall material? (e.g. concrete, brick, gypsum board)"
+
+  # ===================================================================
+  # Create Floor / 创建楼板
+  # ===================================================================
+  create_floor:
+    display_name: "创建楼板"
+    display_name_en: "Create Floor"
+    description: "通过边界线创建楼板/地面"
+    description_en: "Create a floor/slab from boundary curves"
+    api_method: "Floor.Create"
+    slots:
+      floor_type:
+        type: enum
+        required: true
+        values: [generic, concrete, wood, composite]
+        default_strategy: use_default
+        default_value: generic
+        ask_if_missing: "楼板类型？（普通/混凝土/木质/组合）"
+        ask_if_missing_en: "Floor type? (generic / concrete / wood / composite)"
+        aliases:
+          # Chinese
+          普通楼板: generic
+          混凝土楼板: concrete
+          木楼板: wood
+          组合楼板: composite
+          # English
+          generic floor: generic
+          concrete floor: concrete
+          concrete slab: concrete
+          wood floor: wood
+          wooden floor: wood
+          composite floor: composite
+          standard floor: generic
+          regular floor: generic
+
+      boundary:
+        type: object
+        required: true
+        ask_if_missing: "楼板的边界范围是什么？可以给出房间名或角点坐标。"
+        ask_if_missing_en: "What is the floor boundary? Specify room name or corner point coordinates."
+        sub_slots:
+          method:
+            type: enum
+            values: [by_room, by_points, by_rectangle]
+            required: true
+            default_strategy: infer_from_input
+          room_name:
+            type: string
+            required_if: "method == by_room"
+          points:
+            type: list
+            required_if: "method == by_points"
+            ask_if_missing: "请提供边界角点坐标列表。"
+            ask_if_missing_en: "Please provide boundary corner point coordinates."
+          width:
+            type: float
+            required_if: "method == by_rectangle"
+          length:
+            type: float
+            required_if: "method == by_rectangle"
+
+      level:
+        type: string
+        required: false
+        default_strategy: use_current_level
+        ask_if_missing: "在哪个标高创建楼板？"
+        ask_if_missing_en: "At which level should the floor be created?"
+
+      thickness:
+        type: float
+        required: false
+        unit: mm
+        default_strategy: use_default
+        default_value: 200
+        ask_if_missing: "楼板厚度？默认 200mm。"
+        ask_if_missing_en: "Floor thickness? Default 200mm."
+        constraints:
+          - "thickness > 0"
+          - "thickness <= 1000"
+
+      structural:
+        type: boolean
+        required: false
+        default_strategy: use_default
+        default_value: true
+
+      has_slope:
+        type: boolean
+        required: false
+        default_strategy: use_default
+        default_value: false
+
+      slope_angle:
+        type: float
+        required_if: "has_slope == true"
+        ask_if_missing: "坡度是多少？（百分比，如 1 表示 1%）"
+        ask_if_missing_en: "What is the slope? (percentage, e.g. 1 means 1%)"
+        constraints:
+          - "slope_angle > 0"
+          - "slope_angle <= 45"
+
+      slope_direction:
+        type: string
+        required_if: "has_slope == true"
+        ask_if_missing: "坡向哪个方向？"
+        ask_if_missing_en: "In which direction does the slope go?"
+
+  # ===================================================================
+  # Create Door / 创建门
+  # ===================================================================
+  create_door:
+    display_name: "创建门"
+    display_name_en: "Create Door"
+    description: "在墙上放置门"
+    description_en: "Place a door in a wall"
+    api_method: "FamilyInstance.Create"
+    slots:
+      door_type:
+        type: enum
+        required: true
+        values: [single, double, sliding, folding, revolving]
+        default_strategy: use_default
+        default_value: single
+        ask_if_missing: "什么类型的门？（单开门/双开门/推拉门/折叠门/旋转门）"
+        ask_if_missing_en: "What type of door? (single / double / sliding / folding / revolving)"
+        aliases:
+          # Chinese
+          单开门: single
+          单扇门: single
+          双开门: double
+          双扇门: double
+          推拉门: sliding
+          移门: sliding
+          折叠门: folding
+          旋转门: revolving
+          # English
+          single door: single
+          single swing: single
+          double door: double
+          double swing: double
+          sliding door: sliding
+          pocket door: sliding
+          folding door: folding
+          bi-fold door: folding
+          revolving door: revolving
+          french door: double
+          barn door: sliding
+
+      host_wall:
+        type: string
+        required: true
+        ask_if_missing: "门安装在哪面墙上？请说明墙体位置或标识。"
+        ask_if_missing_en: "Which wall should the door be placed in? Specify wall location or identifier."
+        examples:
+          - input: "客厅南墙"
+            value: "客厅南墙"
+          - input: "主卧的门"
+            value: "主卧"
+          - input: "living room south wall"
+            value: "living room south wall"
+          - input: "master bedroom wall"
+            value: "master bedroom"
+
+      position:
+        type: object
+        required: false
+        default_strategy: center_of_wall
+        ask_if_missing: "门在墙上的位置？默认居中。"
+        ask_if_missing_en: "Position on the wall? Default is centered."
+        sub_slots:
+          offset_from_start:
+            type: float
+            required: false
+            unit: mm
+          center:
+            type: boolean
+            required: false
+            default_strategy: use_default
+            default_value: true
+
+      width:
+        type: float
+        required: false
+        unit: mm
+        default_strategy: infer_from_door_type
+        ask_if_missing: "门宽？单开门默认 900mm，双开门默认 1500mm。"
+        ask_if_missing_en: "Door width? Single default 900mm, double default 1500mm."
+        constraints:
+          - "width > 0"
+          - "width <= 5000"
+
+      height:
+        type: float
+        required: false
+        unit: mm
+        default_strategy: use_default
+        default_value: 2100
+        ask_if_missing: "门高？默认 2100mm。"
+        ask_if_missing_en: "Door height? Default 2100mm."
+        constraints:
+          - "height > 0"
+          - "height <= 5000"
+
+      level:
+        type: string
+        required: false
+        default_strategy: use_current_level
+
+  # ===================================================================
+  # Create Window / 创建窗户
+  # ===================================================================
+  create_window:
+    display_name: "创建窗户"
+    display_name_en: "Create Window"
+    description: "在墙上放置窗户"
+    description_en: "Place a window in a wall"
+    api_method: "FamilyInstance.Create"
+    slots:
+      window_type:
+        type: enum
+        required: true
+        values: [fixed, casement, sliding, awning, bay]
+        default_strategy: use_default
+        default_value: casement
+        ask_if_missing: "什么类型的窗户？（固定窗/平开窗/推拉窗/上悬窗/飘窗）"
+        ask_if_missing_en: "What type of window? (fixed / casement / sliding / awning / bay)"
+        aliases:
+          # Chinese
+          固定窗: fixed
+          平开窗: casement
+          推拉窗: sliding
+          上悬窗: awning
+          飘窗: bay
+          落地窗: fixed
+          大窗户: casement
+          大窗: casement
+          # English
+          fixed window: fixed
+          casement window: casement
+          sliding window: sliding
+          awning window: awning
+          bay window: bay
+          picture window: fixed
+          floor-to-ceiling window: fixed
+          large window: casement
+          big window: casement
+          double-hung window: sliding
+
+      host_wall:
+        type: string
+        required: true
+        ask_if_missing: "窗户安装在哪面墙上？"
+        ask_if_missing_en: "Which wall should the window be placed in?"
+        examples:
+          - input: "南面的墙"
+            value: "南墙"
+          - input: "south wall"
+            value: "south wall"
+          - input: "the wall facing the street"
+            value: "street-facing wall"
+
+      quantity:
+        type: integer
+        required: false
+        default_strategy: use_default
+        default_value: 1
+        ask_if_missing: "需要几扇窗？"
+        ask_if_missing_en: "How many windows?"
+        constraints:
+          - "quantity > 0"
+          - "quantity <= 20"
+        aliases:
+          # Chinese
+          一扇: 1
+          两扇: 2
+          三扇: 3
+          四扇: 4
+          五扇: 5
+          # English
+          one: 1
+          two: 2
+          three: 3
+          four: 4
+          five: 5
+          a pair: 2
+
+      width:
+        type: float
+        required: false
+        unit: mm
+        default_strategy: use_default
+        default_value: 1200
+        ask_if_missing: "窗宽？默认 1200mm。"
+        ask_if_missing_en: "Window width? Default 1200mm."
+        constraints:
+          - "width > 0"
+          - "width <= 6000"
+
+      height:
+        type: float
+        required: false
+        unit: mm
+        default_strategy: use_default
+        default_value: 1500
+        ask_if_missing: "窗高？默认 1500mm。"
+        ask_if_missing_en: "Window height? Default 1500mm."
+        constraints:
+          - "height > 0"
+          - "height <= 5000"
+
+      sill_height:
+        type: float
+        required: false
+        unit: mm
+        default_strategy: use_default
+        default_value: 900
+        ask_if_missing: "窗台高度？默认 900mm。"
+        ask_if_missing_en: "Sill height? Default 900mm."
+        constraints:
+          - "sill_height >= 0"
+          - "sill_height <= 3000"
+
+      level:
+        type: string
+        required: false
+        default_strategy: use_current_level
+
+  # ===================================================================
+  # Create Room / 创建房间
+  # ===================================================================
+  create_room:
+    display_name: "创建房间"
+    display_name_en: "Create Room"
+    description: "在封闭区域内放置房间标记"
+    description_en: "Place a room tag in an enclosed area"
+    api_method: "Room.Create"
+    slots:
+      room_name:
+        type: string
+        required: true
+        ask_if_missing: "房间名称是什么？（如：客厅、主卧、厨房）"
+        ask_if_missing_en: "What is the room name? (e.g. living room, master bedroom, kitchen)"
+        aliases:
+          # Chinese
+          客厅: "客厅"
+          主卧: "主卧"
+          次卧: "次卧"
+          厨房: "厨房"
+          卫生间: "卫生间"
+          阳台: "阳台"
+          书房: "书房"
+          餐厅: "餐厅"
+          玄关: "玄关"
+          # English
+          living room: "living room"
+          master bedroom: "master bedroom"
+          bedroom: "bedroom"
+          guest bedroom: "guest bedroom"
+          kitchen: "kitchen"
+          bathroom: "bathroom"
+          restroom: "bathroom"
+          toilet: "bathroom"
+          balcony: "balcony"
+          study: "study"
+          study room: "study"
+          office: "office"
+          dining room: "dining room"
+          foyer: "foyer"
+          hallway: "hallway"
+          corridor: "corridor"
+          laundry: "laundry"
+          garage: "garage"
+          closet: "closet"
+          pantry: "pantry"
+          utility room: "utility room"
+
+      level:
+        type: string
+        required: false
+        default_strategy: use_current_level
+        ask_if_missing: "在哪个标高？"
+        ask_if_missing_en: "At which level?"
+
+      location:
+        type: object
+        required: false
+        default_strategy: auto_detect
+        ask_if_missing: "房间放在哪个位置？如果有封闭区域会自动检测。"
+        ask_if_missing_en: "Room placement location? Enclosed areas are auto-detected."
+        sub_slots:
+          point:
+            type: list
+            required: false
+            ask_if_missing: "房间标记放置点坐标？"
+            ask_if_missing_en: "Room tag placement point coordinates?"
+
+      area_target:
+        type: float
+        required: false
+        unit: sqm
+        ask_if_missing: "目标面积是多少平方米？"
+        ask_if_missing_en: "What is the target area in square meters?"
+        constraints:
+          - "area_target > 0"
+
+      function:
+        type: enum
+        required: false
+        values: [living, sleeping, kitchen, bathroom, storage, circulation, utility]
+        default_strategy: infer_from_name
+        aliases:
+          # Chinese
+          起居: living
+          睡眠: sleeping
+          烹饪: kitchen
+          卫浴: bathroom
+          储藏: storage
+          交通: circulation
+          设备: utility
+          # English
+          living area: living
+          sleeping area: sleeping
+          cooking: kitchen
+          bath: bathroom
+          washroom: bathroom
+          storage: storage
+          hallway: circulation
+          passage: circulation
+          utility: utility
+          service: utility
+
+  # ===================================================================
+  # Modify Element / 修改元素
+  # ===================================================================
+  modify_element:
+    display_name: "修改元素"
+    display_name_en: "Modify Element"
+    description: "修改已有 Revit 元素的属性"
+    description_en: "Modify properties of an existing Revit element"
+    api_method: "Element.Modify"
+    slots:
+      target:
+        type: object
+        required: true
+        ask_if_missing: "要修改哪个元素？请描述元素类型和位置。"
+        ask_if_missing_en: "Which element to modify? Describe the element type and location."
+        sub_slots:
+          element_type:
+            type: enum
+            required: true
+            values: [wall, floor, door, window, room, column, beam, roof]
+            ask_if_missing: "什么类型的元素？"
+            ask_if_missing_en: "What type of element?"
+            aliases:
+              # Chinese
+              墙: wall
+              墙体: wall
+              楼板: floor
+              地板: floor
+              门: door
+              窗: window
+              窗户: window
+              房间: room
+              柱: column
+              柱子: column
+              梁: beam
+              屋顶: roof
+              # English
+              wall: wall
+              walls: wall
+              floor: floor
+              floors: floor
+              slab: floor
+              door: door
+              doors: door
+              window: window
+              windows: window
+              room: room
+              rooms: room
+              column: column
+              columns: column
+              pillar: column
+              beam: beam
+              beams: beam
+              roof: roof
+              roofs: roof
+          identifier:
+            type: string
+            required: true
+            ask_if_missing: "哪一个？请给出标识（如位置、名称、编号）。"
+            ask_if_missing_en: "Which one? Provide an identifier (location, name, or ID)."
+          scope:
+            type: enum
+            values: [single, all_matching, filtered]
+            required: false
+            default_strategy: use_default
+            default_value: single
+            aliases:
+              # Chinese
+              所有: all_matching
+              全部: all_matching
+              这个: single
+              那个: single
+              # English
+              all: all_matching
+              every: all_matching
+              each: all_matching
+              this: single
+              that: single
+              specific: single
+
+      property_name:
+        type: string
+        required: true
+        ask_if_missing: "要修改什么属性？（如：高度、类型、材质）"
+        ask_if_missing_en: "Which property to modify? (e.g. height, type, material)"
+        aliases:
+          # Chinese
+          高度: height
+          类型: type
+          材质: material
+          宽度: width
+          厚度: thickness
+          名称: name
+          # English
+          height: height
+          type: type
+          material: material
+          width: width
+          thickness: thickness
+          name: name
+          color: color
+          size: size
+
+      new_value:
+        type: string
+        required: true
+        ask_if_missing: "修改为什么值？"
+        ask_if_missing_en: "What is the new value?"
+
+      filter_condition:
+        type: string
+        required_if: "target.scope == filtered"
+        ask_if_missing: "筛选条件是什么？"
+        ask_if_missing_en: "What is the filter condition?"
+        examples:
+          - input: "承重墙"
+            value: "structural == true"
+          - input: "非承重墙"
+            value: "structural == false"
+          - input: "load-bearing walls"
+            value: "structural == true"
+          - input: "non-structural walls"
+            value: "structural == false"
+
+  # ===================================================================
+  # Query Element / 查询元素
+  # ===================================================================
+  query_element:
+    display_name: "查询元素"
+    display_name_en: "Query Element"
+    description: "查询 Revit 模型中元素的属性信息"
+    description_en: "Query property information of elements in the Revit model"
+    api_method: "Element.Query"
+    slots:
+      target:
+        type: object
+        required: true
+        ask_if_missing: "要查询什么元素？"
+        ask_if_missing_en: "Which element to query?"
+        sub_slots:
+          element_type:
+            type: enum
+            required: true
+            values: [wall, floor, door, window, room, column, beam, roof, level, grid]
+            ask_if_missing: "什么类型的元素？"
+            ask_if_missing_en: "What type of element?"
+            aliases:
+              # Chinese
+              墙: wall
+              楼板: floor
+              门: door
+              窗: window
+              窗户: window
+              房间: room
+              柱: column
+              梁: beam
+              屋顶: roof
+              标高: level
+              轴网: grid
+              # English
+              wall: wall
+              walls: wall
+              floor: floor
+              slab: floor
+              door: door
+              doors: door
+              window: window
+              windows: window
+              room: room
+              rooms: room
+              column: column
+              beam: beam
+              roof: roof
+              level: level
+              levels: level
+              grid: grid
+              grids: grid
+          identifier:
+            type: string
+            required: false
+            ask_if_missing: "哪一个？不指定则查询所有。"
+            ask_if_missing_en: "Which one? Leave blank to query all."
+
+      query_properties:
+        type: list
+        required: true
+        ask_if_missing: "要查询哪些属性？（如：面积、高度、数量）"
+        ask_if_missing_en: "Which properties to query? (e.g. area, height, count)"
+        aliases:
+          # Chinese
+          面积: area
+          高度: height
+          宽度: width
+          数量: count
+          长度: length
+          厚度: thickness
+          类型: type
+          材质: material
+          体积: volume
+          周长: perimeter
+          # English
+          area: area
+          height: height
+          width: width
+          count: count
+          number: count
+          how many: count
+          length: length
+          thickness: thickness
+          type: type
+          material: material
+          volume: volume
+          perimeter: perimeter
+          size: area
+          dimension: area
+          how big: area
+          how tall: height
+          how wide: width
+          how thick: thickness
+          how long: length
+        examples:
+          - input: "面积多大"
+            value: ["area"]
+          - input: "有多少"
+            value: ["count"]
+          - input: "how big is it"
+            value: ["area"]
+          - input: "how many are there"
+            value: ["count"]
+
+  # ===================================================================
+  # Delete Element / 删除元素
+  # ===================================================================
+  delete_element:
+    display_name: "删除元素"
+    display_name_en: "Delete Element"
+    description: "删除 Revit 模型中的元素"
+    description_en: "Delete elements from the Revit model"
+    api_method: "Element.Delete"
+    slots:
+      target:
+        type: object
+        required: true
+        ask_if_missing: "要删除什么元素？"
+        ask_if_missing_en: "Which element to delete?"
+        sub_slots:
+          element_type:
+            type: enum
+            required: true
+            values: [wall, floor, door, window, room, column, beam, roof]
+            ask_if_missing: "什么类型的元素？"
+            ask_if_missing_en: "What type of element?"
+            aliases:
+              # Chinese
+              墙: wall
+              墙体: wall
+              楼板: floor
+              门: door
+              窗: window
+              窗户: window
+              房间: room
+              柱: column
+              柱子: column
+              梁: beam
+              屋顶: roof
+              # English
+              wall: wall
+              walls: wall
+              floor: floor
+              slab: floor
+              door: door
+              doors: door
+              window: window
+              windows: window
+              room: room
+              rooms: room
+              column: column
+              pillar: column
+              beam: beam
+              roof: roof
+          identifier:
+            type: string
+            required: false
+            ask_if_missing: "哪一个？请描述位置或标识。"
+            ask_if_missing_en: "Which one? Describe location or identifier."
+          scope:
+            type: enum
+            values: [single, all_matching, filtered]
+            required: false
+            default_strategy: infer_from_input
+            aliases:
+              # Chinese
+              所有: all_matching
+              全部: all_matching
+              这个: single
+              那个: single
+              # English
+              all: all_matching
+              every: all_matching
+              all of: all_matching
+              this: single
+              that: single
+
+      filter_condition:
+        type: string
+        required_if: "target.scope == filtered or target.scope == all_matching"
+        ask_if_missing: "删除条件是什么？请描述筛选规则。"
+        ask_if_missing_en: "What is the deletion filter? Describe the selection criteria."
+        examples:
+          - input: "非承重墙"
+            value: "structural == false"
+          - input: "二层的"
+            value: "level == F2"
+          - input: "non-structural walls"
+            value: "structural == false"
+          - input: "on the second floor"
+            value: "level == F2"
+
+      confirm_delete:
+        type: boolean
+        required: true
+        default_strategy: must_confirm
+        ask_if_missing: "确认要删除吗？此操作不可撤销。"
+        ask_if_missing_en: "Confirm deletion? This action cannot be undone."
+        constraints:
+          - operator: "=="
+            value: true
+            message: "必须确认才能执行删除操作 / Deletion must be confirmed before execution"
+
+      level:
+        type: string
+        required: false
+        ask_if_missing: "在哪个标高的元素？"
+        ask_if_missing_en: "At which level?"

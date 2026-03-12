@@ -37,6 +37,7 @@ async def chat(req: ChatRequest):
 
 @router.post("/t2r/chat")
 async def t2r_chat(req: ChatRequest):
+    """Legacy Text2Revit endpoint. Use /api/v1/intent/* instead."""
     store = get_session_store()
     session = store.get_or_create(req.session_id)
 
@@ -46,6 +47,7 @@ async def t2r_chat(req: ChatRequest):
         headers={
             "Cache-Control": "no-cache",
             "X-Session-Id": session.session_id,
+            "X-Deprecated": "Use /api/v1/intent/parse or /api/v1/intent/session instead",
         },
     )
 

@@ -86,6 +86,25 @@ intent:
   explain_result: true
   language: "zh"
 
+# --- Intent Bridge (Module 2) ---
+intent_bridge:
+  llm:
+    primary:
+      model: "google/gemini-3-flash-preview"
+      temperature: 0.1
+    fallback:
+      model: "deepseek/deepseek-chat-v3-0324"
+      temperature: 0.1
+    timeout: 60
+    max_retries: 2
+    max_tokens: 4096
+  session:
+    max_turns: 10
+    timeout_seconds: 600
+  logging:
+    level: "INFO"
+    log_llm_calls: true
+
 # --- SDK 解析配置 ---
 sdk:
   stage1_provider: "gemini_flash"   # ReadMe 解析用 (cheap + fast)

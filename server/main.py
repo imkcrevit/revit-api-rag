@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from server.app.api.routes import router
 from server.app.deps import get_config
+from intent_bridge.router import intent_router
 
 
 def create_app() -> FastAPI:
@@ -31,6 +32,9 @@ def create_app() -> FastAPI:
 
     # API routes
     fastapi_app.include_router(router)
+
+    # Intent Bridge routes
+    fastapi_app.include_router(intent_router)
 
     # Health check
     @fastapi_app.get("/health")

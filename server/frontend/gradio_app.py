@@ -1,5 +1,5 @@
 """
-Gradio UI — Tab A: Code Generation + Tab B: Text2Revit
+Gradio UI — Tab A: Code Generation + Tab B: Text2Revit (Legacy) + Tab C: Intent Bridge
 
 Claude / AI Studio 风格：全宽聊天区、底部输入、设置折叠。
 自动从 .env 读取 API Key。Model 使用 OpenAI 格式模型名。
@@ -94,6 +94,16 @@ def create_gradio_app() -> gr.Blocks:
         # State
         session_id = gr.State(lambda: uuid.uuid4().hex)
 
+        # --- Injected CSS (Gradio 6 doesn't support css= in Blocks) ---
+        gr.HTML(
+            '<style>'
+            '.input-row { align-items: center !important; gap: 8px !important; }'
+            '.input-row .input-textbox textarea { min-height: 40px !important; max-height: 40px !important; padding: 8px 12px !important; }'
+            '.input-row .input-textbox { min-height: 40px !important; }'
+            '.input-row .input-btn { height: 40px !important; min-height: 40px !important; max-height: 40px !important; }'
+            '</style>'
+        )
+
         # --- Header ---
         gr.HTML(
             '<div class="app-header">'
@@ -135,44 +145,54 @@ def create_gradio_app() -> gr.Blocks:
             # ==========================================================
             with gr.Tab("Code Generation"):
                 chatbot_code = gr.Chatbot(
-                    height=550,
+                    height=420,
                     show_label=False,
                     elem_classes=["main-chat-area"],
                     render_markdown=True,
                 )
-                with gr.Row(elem_classes=["input-bar"]):
+                with gr.Row(equal_height=True, elem_classes=["input-row"]):
                     msg_code = gr.Textbox(
                         placeholder="Ask about Revit API...",
                         show_label=False,
                         scale=6,
                         lines=1,
-                        max_lines=5,
-                        autoscroll=False,
+                        max_lines=1,
+                        elem_classes=["input-textbox"],
                     )
-                    send_code = gr.Button("Send", scale=1, variant="primary", size="sm")
-                    clear_code = gr.Button("Clear", scale=1, size="sm")
+                    send_code = gr.Button("发送 Send", scale=1, variant="primary", min_width=80, elem_classes=["input-btn"])
+                    clear_code = gr.Button("清除 Clear", scale=1, min_width=80, elem_classes=["input-btn"])
 
             # ==========================================================
-            # Tab B: Text2Revit
+            # Tab B: Text2Revit (Legacy)
             # ==========================================================
-            with gr.Tab("Text2Revit"):
+            with gr.Tab("Text2Revit (Legacy)"):
                 chatbot_t2r = gr.Chatbot(
-                    height=550,
+                    height=420,
                     show_label=False,
                     elem_classes=["main-chat-area"],
                     render_markdown=True,
                 )
-                with gr.Row(elem_classes=["input-bar"]):
+                with gr.Row(equal_height=True, elem_classes=["input-row"]):
                     msg_t2r = gr.Textbox(
                         placeholder="Describe what to create in Revit... (wall, column, beam, floor, door, window)",
                         show_label=False,
                         scale=6,
                         lines=1,
-                        max_lines=5,
-                        autoscroll=False,
+                        max_lines=1,
+                        elem_classes=["input-textbox"],
                     )
-                    send_t2r = gr.Button("Send", scale=1, variant="primary", size="sm")
-                    clear_t2r = gr.Button("Clear", scale=1, size="sm")
+                    send_t2r = gr.Button("发送 Send", scale=1, variant="primary", min_width=80, elem_classes=["input-btn"])
+                    clear_t2r = gr.Button("清除 Clear", scale=1, min_width=80, elem_classes=["input-btn"])
+
+            # ==========================================================
+            # Tab C: Intent Bridge
+            # ==========================================================
+            with gr.Tab("Intent Bridge"):
+                try:
+                    from intent_bridge.frontend.app import create_intent_bridge_tab
+                    create_intent_bridge_tab()
+                except ImportError:
+                    gr.Markdown("Intent Bridge module not available.")
 
         # ==============================================================
         # Event handlers
