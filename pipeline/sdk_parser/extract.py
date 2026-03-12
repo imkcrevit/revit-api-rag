@@ -264,12 +264,13 @@ def _extract_methods_for_class(code: str, target_class: str) -> list[str]:
     methods: list[str] = []
 
     def _class_name_matches(name_lower: str) -> bool:
-        """Check if class name matches target (bidirectional containment)."""
+        """Check if class name matches target (bidirectional containment with ratio guard)."""
         if name_lower == target_normalized:
             return True
-        # Bidirectional: "ribbon" in "ribbonsample" OR "ribbonsample" in "ribbon"
-        if len(target_normalized) >= 3 and len(name_lower) >= 3:
-            return target_normalized in name_lower or name_lower in target_normalized
+        shorter, longer = sorted([target_normalized, name_lower], key=len)
+        # Only allow substring match if shorter is >= 60% of longer (avoid "App" matching "ExternalApplication")
+        if len(shorter) >= 3 and len(shorter) / len(longer) >= 0.6:
+            return shorter in longer
         return False
 
     # DFS: find class_declaration whose name matches target_class,
@@ -306,11 +307,9 @@ def _extract_methods_for_class(code: str, target_class: str) -> list[str]:
     # Class not found — try matching as a method name instead
     if not methods:
         methods = _extract_method_by_name(cleaned, tree, target_normalized)
-    if methods:
-        return methods
 
-    # Nothing found — fall back to all methods
-    return _extract_all_methods(cleaned, tree)
+    # Return matched methods only — no greedy fallback to all methods
+    return methods
 
 
 def _extract_method_by_name(cleaned: str, tree: Any, target_normalized: str) -> list[str]:
@@ -542,11 +541,15 @@ def generate_golden_code(
         detail_code_analysis=code_details[:80_000],
     )
 
-    try:
-        raw = claude_client.generate_text(prompt, system_prompt=_GOLDEN_CODE_SYSTEM)
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
-        raw = re.sub(r"\s*```$", "", raw.strip())
-        result = json.loads(raw)
+    def _try_parse_golden(raw_text: str) -> dict | None:
+        """Clean and parse LLM JSON response."""
+        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text.strip(), flags=re.IGNORECASE)
+        raw_text = re.sub(r"\s*```$", "", raw_text.strip())
+        # Fix common JSON issues: unescaped newlines/tabs inside string values
+        raw_text = re.sub(r'(?<=: ")(.*?)(?="[,}])',
+                          lambda m: m.group(0).replace('\n', '\\n').replace('\t', '\\t'),
+                          raw_text, flags=re.DOTALL)
+        result = json.loads(raw_text)
         summary = (result.get("summary") or "").strip()
         content = (result.get("content") or "").strip()
         if not summary or not content:
@@ -560,10 +563,25 @@ def generate_golden_code(
                 ensure_ascii=False,
             ),
         }
-    except Exception as e:
-        with _PRINT_LOCK:
-            print(f"  [Claude error] {matched_data['project_name']}: {e}")
-        return None
+
+    # Try up to 2 times
+    for attempt in range(2):
+        try:
+            raw = claude_client.generate_text(prompt, system_prompt=_GOLDEN_CODE_SYSTEM)
+            parsed = _try_parse_golden(raw)
+            if parsed:
+                return parsed
+        except json.JSONDecodeError as e:
+            if attempt == 0:
+                continue  # retry once
+            with _PRINT_LOCK:
+                print(f"  [Claude JSON error] {matched_data['project_name']}: {e}")
+            return None
+        except Exception as e:
+            with _PRINT_LOCK:
+                print(f"  [Claude error] {matched_data['project_name']}: {e}")
+            return None
+    return None
 
 
 # ---------------------------------------------------------------------------
