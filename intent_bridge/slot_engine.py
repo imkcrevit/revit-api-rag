@@ -25,6 +25,7 @@ import yaml
 
 from intent_bridge.llm_adapter import LLMAdapter
 from intent_bridge.models import (
+    ActionStep,
     IntentState,
     QuestionItem,
     SessionState,
@@ -223,105 +224,170 @@ def _format_api_context(api_docs: list[dict]) -> str:
 # LLM Prompt — RAG-enhanced, ONE call, returns ALL questions
 # ===================================================================
 
-_ANALYZE_PROMPT = """你是一个 Revit 建筑设计助手 Agent / You are a Revit architectural design assistant agent.
+_ANALYZE_PROMPT = """You are a Revit architectural design assistant agent.
 
-## 语言规则 / Language Rule (MANDATORY — HIGHEST PRIORITY):
-检测用户输入的语言：
-- 如果用户使用**中文**，你的**所有输出必须是纯中文**。包括：问题文本、选项文本、参数值描述。
-  **禁止**出现英文型号名（如 Casement_W_1200x1500, Fixed, Sliding）。
-  正确示例：options=["平开窗 1200×1500", "推拉窗 1800×1500", "固定窗 900×1200", "其他 (自定义)"]
-  错误示例：options=["Casement W_1200x1500", "Sliding W_1800x1500", "Fixed", "其他"]
-- If user writes in **English**, ALL output must be in **pure English**.
+## LANGUAGE RULE (HIGHEST PRIORITY):
+Detect the user's input language:
+- If Chinese input -> ALL question text, option labels, and descriptions MUST be in Chinese.
+  FORBIDDEN: English model names like "Casement_W_1200x1500", "Fixed", "Sliding".
+  CORRECT: options=["平开窗 1200×1500", "推拉窗 1800×1500", "固定窗 900×1200", "其他 (自定义)"]
+  WRONG:   options=["Casement W_1200x1500", "Sliding W_1800x1500"]
+- If English input -> ALL output in pure English.
 
 ## Available intents:
 {intent_list}
 
 {rag_context}
 
-## Your task:
-Analyze the user's input and use the **retrieved Revit API documentation** above to determine
-what parameters are actually needed for this operation.
+## YOUR TASK:
+Analyze the user input. Use the Revit API documentation above to determine the EXACT API method
+and ALL its required parameters.
 
 Do ALL of these in ONE response:
+1. Classify intent from the available list.
+2. Identify the specific API method (from the documentation above).
+3. List ALL parameters of that API method.
+4. Extract any parameter values the user already provided.
+5. For EVERY remaining parameter, create a question. DO NOT skip or default ANY parameter.
 
-1. **Classify intent** — pick from the available intents.
-2. **Extract parameters** — get everything you can from the user's input.
-   Match parameters to the ACTUAL API signature shown in the documentation above.
-3. **Plan ALL remaining questions** — based on the real API parameters:
-   - Check which API parameters are still missing from the user's input.
-   - For each missing parameter, create a question with sensible options.
-   - The parameter names in your output should match the API documentation.
+## AMBIGUITY DETECTION (MANDATORY):
 
-## ⚠️ 歧义检测规则 (MANDATORY — MUST FOLLOW):
+Scan the user input for these ambiguous Chinese terms. If ANY are found, questions[0] MUST be
+a disambiguation question. Never assume meaning silently.
 
-你**必须**扫描用户输入中的以下歧义词。如果发现任何一个，**第一个问题必须是歧义澄清问题**。
-不要假设用户的意思，不要静默选择一个解释。**必须询问**。
+| User text | Possible meanings | Must ask |
+|-----------|-------------------|----------|
+| 背面 | 北面(north) vs 背面(rear of building) | Which one? |
+| 前面 | 南面(south) vs 前面(entrance side) | Which one? |
+| 左边/右边 | Depends on viewing direction | From which direction? |
+| 那面墙/这个/那个 | Ambiguous reference | Must specify exactly |
+| 大的/小的/标准 | Unknown dimensions | Must give concrete sizes |
 
-**必须检测的歧义词列表：**
-| 用户原文 | 可能含义 | 必须提问 |
-|---------|---------|---------|
-| 背面    | 北面(朝北) 或 背面(后方) | "您是指**北面（朝北方向）**还是**背面（建筑后方）**？" |
-| 前面    | 南面(朝南) 或 前面(入口方向) | "您是指**南面（朝南方向）**还是**前面（入口方向）**？" |
-| 左边/右边 | 取决于观察方向 | "从哪个方向看的左/右？" |
-| 那面墙/这个/那个 | 指代不明 | 必须要求用户明确指定 |
-| 大的/小的/标准 | 具体尺寸不明 | 必须给出具体尺寸选项 |
+## PARAMETER RULES (CRITICAL — MUST FOLLOW ALL):
 
-**判断流程：**
-1. 逐字扫描用户输入
-2. 如果包含上表中任何词语 → questions[0] 必须是歧义澄清
-3. 如果不包含 → 跳过此步骤
+### Rule 1: Ask about EVERY parameter — no silent defaults
+For each parameter in the API method signature, you MUST either:
+  a) Extract its value from the user's input (put in "slots"), OR
+  b) Create a question for it (put in "questions")
+DO NOT silently default ANY parameter. Even "structuralType" or "level" must be asked if not stated.
 
-## 问题规划规则：
+### Rule 2: Parameter values must be Revit-executable types
+Every parameter value must be a type that Revit API can actually consume:
+- ElementId parameters -> user must provide an actual ElementId (integer number)
+- XYZ/coordinate parameters -> numeric coordinates (e.g., "1000,500,0")
+- Enum parameters -> valid enum member name
+- Type parameters -> FamilySymbol name or type name
 
-**优先级顺序：**
-a) **歧义澄清** — 如上表，必须第一个问
-b) **位置/朝向** — 如果用户没有明确指定位置，**必须**询问。永远不要跳过位置问题。
-c) **类型/规格选择** — 基于 API 文档中的参数要求
-d) **其他 API 参数** — 用户未指定的
-e) 只跳过有明显默认值且建筑上不重要的参数
+NOTE: This system is NOT connected to a live Revit session. The user needs to provide
+ElementId numbers directly (they can look them up in Revit). Do NOT accept vague descriptions
+like "客厅背面" or "living room back wall" as parameter values.
 
-**你来决定需要多少个问题 — 没有上限。** 询问所有 API 要求但用户未指定的参数。
+### Rule 3: Host element / ElementId parameters
+For parameters that require an Element or ElementId (e.g., host wall for door/window):
+- The question MUST explain that an ElementId is required.
+- Chinese example: "请输入宿主墙体的 ElementId（在 Revit 中选择墙体可查看其 Id）"
+- English example: "Enter the host wall ElementId (select the wall in Revit to see its Id)"
+- Provide "其他 (自定义)" / "Other (custom)" as the ONLY option so user enters the ElementId.
+  This is because ElementId values are project-specific and cannot be pre-filled.
+- WRONG: slots.host = "客厅背面" (vague text, not an ElementId)
+- CORRECT: Ask user to input ElementId, value will be like "12345"
 
-## ⚠️ 位置参数规则 (CRITICAL):
+### Rule 4: Type/family parameters are mandatory
+Wall type, window type, door type, floor type etc. are NEVER optional.
+Always ask about them with concrete options showing dimensions and properties.
 
-Revit API 中的位置参数需要 **ElementId 或坐标**，不能使用模糊描述（如"客厅背面"、"墙体后方"）。
-当用户提到位置时，你必须将其转化为 Revit 可执行的参数：
+### Rule 5: Question options format
+Each question MUST have:
+- 3-6 concrete options with details (dimensions, specs)
+- Last option: "其他 (自定义)" (Chinese) or "Other (custom)" (English)
+- Options in the user's language (Chinese options for Chinese input)
 
-**对于需要宿主元素的操作（如在墙上插入门/窗）：**
-- slot 名称用 `host_wall`，值应该是具体的墙体描述（如"客厅北墙"、"卧室南墙"）
-- 不要使用 "墙体背面" 这种无法映射到 ElementId 的表达
-- 提问选项示例：["客厅北墙", "客厅南墙", "客厅东墙", "客厅西墙", "其他 (自定义)"]
+GOOD options: ["平开窗 1200×1500", "推拉窗 1800×1500", "固定窗 900×1200", "其他 (自定义)"]
+BAD options:  ["窗户类型？"] (no concrete choices)
+BAD options:  ["Casement_W_1200x1500"] (English model name for Chinese user)
 
-**对于需要坐标的操作（如放置构件）：**
-- 使用 `position_on_wall`（在墙上的位置）: "居中"、"偏左1/3"、"偏右1/3"
-- 使用 `height_offset`（距地面高度）: 具体数值如 900、1200
+### Rule 6: Question ordering priority
+a) Ambiguity disambiguation (if any found above)
+b) Host element / location
+c) Type / family selection
+d) Dimensions and properties
+e) Other API parameters
 
-**每个问题必须有具体的选项，最后一个选项必须是 "其他 (自定义)" / "Other (custom)"。**
-选项示例（中文输入时）：
-- 好的：options=["平开窗 1200×1500", "推拉窗 1800×1500", "固定窗 900×1200", "其他 (自定义)"]
-- 好的：options=["居中", "偏左 1/3", "偏右 1/3", "其他 (自定义)"]
-- 坏的：options=["Casement_W_1200x1500", "Sliding_W_1800x1500"]  ← 禁止英文型号
-- 坏的：slots 中 location="客厅背面" ← 不可执行，必须拆分为 host_wall + position
+## MULTI-ACTION DECOMPOSITION (CRITICAL):
 
-**如果不需要问题**（所有参数都已提供或有合理默认值），设 questions=[] 并提供 summary。
-**summary 中不要包含"请确认"或"点击确认"等提示，只描述将执行的操作。**
+Some user requests require MULTIPLE sequential API calls. You MUST detect these and decompose
+them into an action plan. Examples:
 
-## Output (pure JSON, no other text):
+| User request | Requires | Action plan |
+|---|---|---|
+| "Create a room" | Room needs enclosed walls | Step 1: Check/create walls -> Step 2: Create room |
+| "Add a door to the new wall" | Wall + door | Step 1: Create wall -> Step 2: Place door |
+| "Create a room with a window" | Walls + room + window | Step 1: Create walls -> Step 2: Create room -> Step 3: Place window |
+
+For composite actions, use "action_plan" in the output (array of steps).
+Each step has its own intent, api_method, and questions.
+
+For a SINGLE action (most cases), just use the flat format (no action_plan field).
+
+**Room creation specifically:**
+- Room.Create / NewRoom requires enclosed walls (boundary).
+- Ask user: center point, desired area or length+width, wall height, wall type.
+- Step 1: create 4 walls forming a closed rectangle.
+- Step 2: create room inside the boundary.
+
+## OUTPUT FORMAT (pure JSON, no markdown, no other text):
+
+For SINGLE action:
 {{
   "intent": "intent_name",
   "confidence": 0.0-1.0,
-  "api_method": "the Revit API method to call (from documentation above)",
-  "slots": {{ "param_name": "value" }},
+  "api_method": "exact Revit API method",
+  "slots": {{ "param_name": "extracted_value" }},
   "questions": [
     {{
-      "slot": "api_parameter_name",
-      "text": "question text in user's language",
-      "options": ["选项A (细节)", "选项B (细节)", "其他 (自定义)"],
+      "slot": "parameter_name",
+      "text": "question in user's language",
+      "options": ["Option A", "Option B", "其他 (自定义)"],
       "values": ["value_a", "value_b", "custom"]
     }}
   ],
-  "summary": "complete action sentence (only if questions is empty)"
+  "summary": "action description (ONLY when questions is empty)"
 }}
+
+For MULTI-ACTION (composite operations):
+{{
+  "intent": "composite",
+  "confidence": 0.0-1.0,
+  "action_plan": [
+    {{
+      "step": 1,
+      "intent": "create_wall",
+      "display_name": "创建闭合墙体 / Create enclosed walls",
+      "api_method": "Wall.Create",
+      "description": "Create 4 walls forming a rectangle",
+      "questions": [
+        {{
+          "slot": "center_point",
+          "text": "question text",
+          "options": ["..."],
+          "values": ["..."]
+        }}
+      ]
+    }},
+    {{
+      "step": 2,
+      "intent": "create_room",
+      "display_name": "创建房间 / Create room",
+      "api_method": "NewRoom",
+      "description": "Create room inside the walls",
+      "questions": [...]
+    }}
+  ],
+  "summary": ""
+}}
+
+IMPORTANT: "summary" should ONLY appear when ALL questions across ALL steps are empty.
+Do NOT include "please confirm" in the summary.
 
 ## User input:
 "{user_input}"
@@ -389,6 +455,13 @@ class ConversationOrchestrator:
 
         intent_name = result.get("intent", "unknown")
         confidence = result.get("confidence", 0.0)
+        action_plan_raw = result.get("action_plan")
+
+        # --- Multi-action plan ---
+        if intent_name == "composite" and action_plan_raw:
+            return await self._init_action_plan(session, result, lang)
+
+        # --- Single action (original flow) ---
         api_method = result.get("api_method", "")
         extracted_slots = result.get("slots", {})
         questions_raw = result.get("questions", [])
@@ -411,15 +484,7 @@ class ConversationOrchestrator:
         self._apply_slots(session.intent, extracted_slots)
 
         # Parse questions into queue
-        session.pending_questions = []
-        for q in questions_raw:
-            session.pending_questions.append(QuestionItem(
-                slot=q.get("slot", ""),
-                text=q.get("text", ""),
-                options=q.get("options", []),
-                values=q.get("values", []),
-                allow_custom=q.get("allow_custom", True),
-            ))
+        session.pending_questions = self._parse_questions(questions_raw)
 
         # If no questions → complete immediately
         if not session.pending_questions:
@@ -433,7 +498,7 @@ class ConversationOrchestrator:
     ) -> TurnResponse:
         """
         Answer current question — fills slot, pops next question or completes.
-        LLM call only on final completion (for summary).
+        For multi-action plans: advances to next action step when current step's questions are done.
         """
         session.touch()
         first_msg = next((m["content"] for m in session.history if m["role"] == "user"), "")
@@ -441,6 +506,9 @@ class ConversationOrchestrator:
 
         question = session.pop_question()
         if not question:
+            # Try to advance to next action step
+            if session.action_plan:
+                return await self._advance_action_plan(session, lang)
             return await self._complete(session, "", lang)
 
         # Resolve value from option index
@@ -461,14 +529,194 @@ class ConversationOrchestrator:
             display=display_text or str(resolved_value),
         )
 
+        # Also store in current action step's filled_slots
+        if session.action_plan and session.current_action_index < len(session.action_plan):
+            step = session.action_plan[session.current_action_index]
+            step.filled_slots[slot_name] = session.intent.slots[slot_name]
+
         # Record in history
         session.add_message("user", display_text or str(value))
 
-        # Next question or complete
+        # Next question or advance action plan
         if session.pending_questions:
             return await self._next_question_response(session, lang)
+        elif session.action_plan:
+            return await self._advance_action_plan(session, lang)
         else:
             return await self._complete(session, "", lang)
+
+    # -------------------------------------------------------------------
+    # Multi-action plan helpers
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_questions(questions_raw: list[dict]) -> list[QuestionItem]:
+        """Parse raw question dicts into QuestionItem list."""
+        items = []
+        for q in questions_raw:
+            items.append(QuestionItem(
+                slot=q.get("slot", ""),
+                text=q.get("text", ""),
+                options=q.get("options", []),
+                values=q.get("values", []),
+                allow_custom=q.get("allow_custom", True),
+            ))
+        return items
+
+    async def _init_action_plan(
+        self, session: SessionState, result: dict, lang: str,
+    ) -> TurnResponse:
+        """Initialize a multi-action plan from LLM response."""
+        confidence = result.get("confidence", 0.0)
+        plan_raw = result.get("action_plan", [])
+
+        # Build action steps
+        session.action_plan = []
+        for step_data in plan_raw:
+            step = ActionStep(
+                step=step_data.get("step", len(session.action_plan) + 1),
+                intent=step_data.get("intent", ""),
+                display_name=step_data.get("display_name", ""),
+                api_method=step_data.get("api_method", ""),
+                description=step_data.get("description", ""),
+                slots=step_data.get("slots", {}),
+                questions=self._parse_questions(step_data.get("questions", [])),
+            )
+            session.action_plan.append(step)
+
+        session.current_action_index = 0
+        total_steps = len(session.action_plan)
+
+        # Set intent to composite
+        session.intent = IntentState(
+            name="composite",
+            display_name=_bilingual(
+                f"组合操作 ({total_steps} 步)",
+                f"Composite ({total_steps} steps)",
+                lang,
+            ),
+            confidence=confidence,
+        )
+
+        # Load first action step
+        return await self._load_action_step(session, lang)
+
+    async def _load_action_step(
+        self, session: SessionState, lang: str,
+    ) -> TurnResponse:
+        """Load the current action step's questions into the session queue."""
+        idx = session.current_action_index
+        if idx >= len(session.action_plan):
+            return await self._complete_action_plan(session, lang)
+
+        step = session.action_plan[idx]
+        total = len(session.action_plan)
+
+        # Update intent display to show current step
+        session.intent.display_name = _bilingual(
+            f"步骤 {idx + 1}/{total}: {step.display_name}",
+            f"Step {idx + 1}/{total}: {step.display_name}",
+            lang,
+        )
+
+        # Store step's api_method
+        session.intent.slots["_api_method"] = SlotState(name="_api_method")
+        session.intent.slots["_api_method"].fill(step.api_method, source=SlotSource.inferred)
+
+        # Apply any pre-filled slots
+        for key, value in step.slots.items():
+            if value is not None:
+                if key not in session.intent.slots:
+                    session.intent.slots[key] = SlotState(name=key)
+                session.intent.slots[key].fill(value, source=SlotSource.user_input)
+
+        # Load questions into queue
+        session.pending_questions = list(step.questions)
+
+        # Add step header message to chat
+        step_msg = _bilingual(
+            f"📋 步骤 {idx + 1}/{total}: {step.description}",
+            f"📋 Step {idx + 1}/{total}: {step.description}",
+            lang,
+        )
+        session.add_message("assistant", step_msg)
+
+        if not session.pending_questions:
+            # No questions for this step, advance
+            step.completed = True
+            session.current_action_index += 1
+            return await self._load_action_step(session, lang)
+
+        return await self._next_question_response(session, lang)
+
+    async def _advance_action_plan(
+        self, session: SessionState, lang: str,
+    ) -> TurnResponse:
+        """Mark current action step as complete, move to next."""
+        idx = session.current_action_index
+        if idx < len(session.action_plan):
+            session.action_plan[idx].completed = True
+
+        session.current_action_index += 1
+
+        if session.current_action_index >= len(session.action_plan):
+            return await self._complete_action_plan(session, lang)
+
+        # Clear step-specific slots (keep _api_method and shared ones)
+        # but load next step
+        return await self._load_action_step(session, lang)
+
+    async def _complete_action_plan(
+        self, session: SessionState, lang: str,
+    ) -> TurnResponse:
+        """All action steps completed — build final output."""
+        # Collect all steps' outputs
+        all_steps = []
+        for step in session.action_plan:
+            step_output = {
+                "step": step.step,
+                "intent": step.intent,
+                "api_method": step.api_method,
+                "description": step.description,
+                "parameters": {
+                    name: slot.value
+                    for name, slot in step.filled_slots.items()
+                },
+            }
+            all_steps.append(step_output)
+
+        structured = {
+            "$schema": "intent_bridge_output_v1",
+            "intent": "composite",
+            "confidence": session.intent.confidence,
+            "action_plan": all_steps,
+            "metadata": {
+                "session_id": session.session_id,
+                "turns": session.turn_count,
+                "total_steps": len(session.action_plan),
+            },
+        }
+
+        # Use LLM to generate a natural summary of all steps
+        summary = await self._llm_summary(session, lang)
+
+        session.status = SessionStatus.complete
+        session.add_message("assistant", summary)
+
+        return TurnResponse(
+            session_id=session.session_id,
+            turn=session.turn_count,
+            status=SessionStatus.complete,
+            intent={
+                "name": "composite",
+                "display_name": session.intent.display_name,
+                "confidence": session.intent.confidence,
+            },
+            slots=self._build_slots_display(session.intent),
+            summary=summary,
+            structured_output=structured,
+            questions_remaining=0,
+        )
 
     # -------------------------------------------------------------------
     # Response builders

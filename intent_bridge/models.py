@@ -101,6 +101,19 @@ class QuestionItem(BaseModel):
     allow_custom: bool = False                             # allow free-text input
 
 
+class ActionStep(BaseModel):
+    """One step in a multi-action plan."""
+    step: int = 1
+    intent: str = ""
+    display_name: str = ""
+    api_method: str = ""
+    description: str = ""
+    slots: dict[str, Any] = Field(default_factory=dict)
+    questions: list[QuestionItem] = Field(default_factory=list)
+    completed: bool = False
+    filled_slots: dict[str, SlotState] = Field(default_factory=dict)
+
+
 class MissingSlotInfo(BaseModel):
     slot: str
     question: str
@@ -159,6 +172,9 @@ class SessionState(BaseModel):
     history: list[dict[str, str]] = Field(default_factory=list)
     # Question queue (filled by LLM once, consumed one at a time)
     pending_questions: list[QuestionItem] = Field(default_factory=list)
+    # Multi-action plan
+    action_plan: list[ActionStep] = Field(default_factory=list)
+    current_action_index: int = 0
 
     def touch(self):
         self.last_active = time.time()

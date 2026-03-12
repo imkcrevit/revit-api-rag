@@ -1,13 +1,12 @@
 """
 Intent Bridge — Gradio UI with Question Wizard
 
-Layout (Right panel):
-  1. Intent card header (name + confidence)
-  2. Slot status (filled params overview)
-  3. Question text
-  4. Option buttons (click = auto-advance) — uses button VALUE to pass option text
-  5. Custom text input (appears when "其他" clicked)
-  6. Confirm button + JSON accordion
+Layout:
+  LEFT (scale=3): Chat history + input box
+  RIGHT (scale=2): Intent card + question buttons + JSON output
+
+Custom input flow: when user clicks "其他", the question text updates to
+prompt for custom input and the RIGHT-SIDE custom textbox + submit button appear.
 """
 from __future__ import annotations
 
@@ -78,6 +77,8 @@ def create_intent_bridge_tab():
     session_id = gr.State(value=None)
     card_data = gr.State(value={})
     current_q = gr.State(value=None)
+    # Track whether we are in custom-input mode
+    custom_mode = gr.State(value=False)
 
     with gr.Row():
         # === LEFT: Chat ===
@@ -104,14 +105,15 @@ def create_intent_bridge_tab():
             option_btns = []
             for i in range(_MAX_OPTIONS):
                 option_btns.append(gr.Button(f"Option {i+1}", visible=False, size="sm"))
-            # Custom text input — individual components, no Row wrapper
+            # Custom input — ALWAYS visible, toggled via interactive
+            # (Gradio has a bug where visible=False -> visible=True doesn't render)
             custom_input = gr.Textbox(
-                placeholder="输入自定义值... / Enter custom value...",
-                show_label=False, lines=1, visible=False,
-                elem_classes=["input-textbox"],
+                placeholder="",
+                show_label=False, lines=1, visible=True, interactive=False,
+                value="", elem_id="custom-input",
             )
             custom_submit = gr.Button(
-                "确定 OK", variant="primary", size="sm", visible=False,
+                "确定 OK", variant="primary", size="sm", visible=True, interactive=False,
             )
             # Bottom
             confirm_btn = gr.Button(
@@ -138,41 +140,47 @@ def create_intent_bridge_tab():
         return out
 
     def _pack_send(history, sid, card, q_obj,
-                   q_text="", q_vis=False, btn_list=None, custom_vis=False,
-                   confirm=None, json_str="", acc_open=False):
+                   q_text="", q_vis=False, btn_list=None,
+                   custom_active=False, custom_placeholder="",
+                   confirm=None, json_str="", acc_open=False,
+                   is_custom=False):
         if btn_list is None:
             btn_list = _hide_btns()
         if confirm is None:
             confirm = gr.Button(interactive=False, visible=False)
+        ph = custom_placeholder if custom_active else ""
         return (
             history, "", sid,
             _render_card_header(card),
             _render_slots_status(card),
             gr.update(value=q_text, visible=q_vis),
             *btn_list,
-            gr.update(visible=custom_vis, value=""),   # custom_input
-            gr.update(visible=custom_vis),              # custom_submit
+            gr.update(value="", interactive=custom_active, placeholder=ph),
+            gr.update(interactive=custom_active),
             confirm, json_str, gr.Accordion(open=acc_open),
-            card, q_obj,
+            card, q_obj, is_custom,
         )
 
     def _pack_answer(history, sid, card, q_obj,
-                     q_text="", q_vis=False, btn_list=None, custom_vis=False,
-                     confirm=None, json_str="", acc_open=False):
+                     q_text="", q_vis=False, btn_list=None,
+                     custom_active=False, custom_placeholder="",
+                     confirm=None, json_str="", acc_open=False,
+                     is_custom=False):
         if btn_list is None:
             btn_list = _hide_btns()
         if confirm is None:
             confirm = gr.Button(interactive=False, visible=False)
+        ph = custom_placeholder if custom_active else ""
         return (
             history, sid,
             _render_card_header(card),
             _render_slots_status(card),
             gr.update(value=q_text, visible=q_vis),
             *btn_list,
-            gr.update(visible=custom_vis, value=""),   # custom_input
-            gr.update(visible=custom_vis),              # custom_submit
+            gr.update(value="", interactive=custom_active, placeholder=ph),
+            gr.update(interactive=custom_active),
             confirm, json_str, gr.Accordion(open=acc_open),
-            card, q_obj,
+            card, q_obj, is_custom,
         )
 
     def _card_from(data: dict) -> dict:
@@ -217,10 +225,16 @@ def create_intent_bridge_tab():
     # Event handlers
     # -----------------------------------------------------------------------
 
-    async def handle_send(message: str, history: list, sid: str | None, cur_card: dict):
+    async def handle_send(message: str, history: list, sid: str | None, cur_card: dict, is_custom: bool, cur_q):
+        """Handle both normal send AND custom value submit (via left input box)."""
         if not message.strip():
             return _pack_send(history, sid, cur_card or {}, None)
 
+        # If in custom mode, treat as answering current question
+        if is_custom and sid and cur_q:
+            return await _do_answer(message.strip(), -1, sid, history, cur_card)
+
+        # Normal: new user message
         history = history + [{"role": "user", "content": message}]
 
         async with httpx.AsyncClient(timeout=_API_TIMEOUT) as client:
@@ -273,7 +287,7 @@ def create_intent_bridge_tab():
         return ("", gr.Accordion(open=True), gr.Button(interactive=False, visible=True))
 
     # -----------------------------------------------------------------------
-    # Option button click — uses BUTTON TEXT to find option, not index
+    # Option button click
     # -----------------------------------------------------------------------
 
     async def option_handler(btn_text: str, sid, cur_q, history, cur_card):
@@ -283,11 +297,26 @@ def create_intent_bridge_tab():
         options = cur_q.get("options", [])
         values = cur_q.get("values", [])
 
-        # "Other" → show custom input, hide buttons
+        # "Other" → show custom input textbox on right panel
         if _is_other(btn_text):
-            q_text = f"### 💬 {cur_q.get('text', '')}  \n*输入自定义值 Enter custom value:*"
+            slot_name = cur_q.get("slot", "")
+            q_original = cur_q.get("text", "")
+
+            # Build contextual placeholder based on parameter type
+            if any(kw in slot_name.lower() for kw in ("host", "element", "wall", "id")):
+                placeholder = f"输入 ElementId (例: 12345) / Enter ElementId for {slot_name}"
+            elif any(kw in slot_name.lower() for kw in ("xyz", "location", "point", "position")):
+                placeholder = f"输入坐标 (例: 1000,500,0) / Enter XYZ coordinates"
+            elif any(kw in slot_name.lower() for kw in ("height", "width", "offset", "length")):
+                placeholder = f"输入数值 (毫米) / Enter value in mm"
+            else:
+                placeholder = f"输入 {slot_name} 的自定义值 / Enter custom value for {slot_name}"
+
+            q_text = f"### 💬 {q_original}  \n*请在下方输入框输入自定义值:*"
             return _pack_answer(history, sid, cur_card or {}, cur_q,
-                                q_text=q_text, q_vis=True, custom_vis=True)
+                                q_text=q_text, q_vis=True,
+                                custom_active=True, custom_placeholder=placeholder,
+                                is_custom=True)
 
         # Find index by matching button text to options
         idx = -1
@@ -310,7 +339,7 @@ def create_intent_bridge_tab():
         *option_btns,
         custom_input, custom_submit,
         confirm_btn, json_output, json_accordion,
-        card_data, current_q,
+        card_data, current_q, custom_mode,
     ]
     answer_outputs = [
         chatbot, session_id,
@@ -318,11 +347,15 @@ def create_intent_bridge_tab():
         *option_btns,
         custom_input, custom_submit,
         confirm_btn, json_output, json_accordion,
-        card_data, current_q,
+        card_data, current_q, custom_mode,
     ]
 
-    send_btn.click(handle_send, [msg_input, chatbot, session_id, card_data], send_outputs)
-    msg_input.submit(handle_send, [msg_input, chatbot, session_id, card_data], send_outputs)
+    send_btn.click(handle_send,
+                   [msg_input, chatbot, session_id, card_data, custom_mode, current_q],
+                   send_outputs)
+    msg_input.submit(handle_send,
+                     [msg_input, chatbot, session_id, card_data, custom_mode, current_q],
+                     send_outputs)
 
     for btn in option_btns:
         btn.click(option_handler,

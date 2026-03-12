@@ -101,6 +101,8 @@ def create_gradio_app() -> gr.Blocks:
             '.input-row .input-textbox textarea { min-height: 40px !important; max-height: 40px !important; padding: 8px 12px !important; }'
             '.input-row .input-textbox { min-height: 40px !important; }'
             '.input-row .input-btn { height: 40px !important; min-height: 40px !important; max-height: 40px !important; }'
+            '#custom-input textarea:disabled { background: #f9fafb !important; border-color: #e5e7eb !important; cursor: default !important; }'
+            '#custom-input textarea:disabled::placeholder { color: transparent !important; }'
             '</style>'
         )
 
