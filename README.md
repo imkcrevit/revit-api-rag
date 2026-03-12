@@ -14,293 +14,141 @@ The original project is an invaluable resource licensed under the **MIT License*
 
 The original copyright notice and full license text can be found in the `NOTICE` and `LICENSE` files in this project's root directory.
 
-# 2025.10.23 Update
-## SDK Embedding Setup
-1. Add New File [Revit SDK Kernel](./revit_sdk_prund/sdk_prunding.ipynb)
-2. Use `tree-sitter` to get the gold-code block , and remove the `using` , `namespace` or some `summary`
-3. Use A LLM to read all gold-code block and generation a clean code 
-4. Use The LLM json output format 
-5. Save Data To [Sqlit File](./revit_sdk_collection/revit_sdk.db)
-![workflow](./RAG-Workflow-Update.jpg)
+# Revit API RAG
 
-## Main Workflow 
-1. Embedding the sdk file , And Save To [chromadb1022_code_1](./chromadb1022_code_1.db/)
-2. Add New Setuo Will Generation A  Simple Code If user Want To Complete Code , Can input the target-character to get 
-3. Remove The API Key Files
-4. Update The Prompt To Mian Workflow
-5. The Result OutPut [output_text.md](./output_text_1023.md)
-![workflow](./rag-main-workflow.jpg)
+基于 Revit API 文档和 SDK 示例代码的 RAG（检索增强生成）系统，帮助开发者快速生成 Revit C# 插件代码。
 
-# revit-api-rag
-this is a rag project to use revit api
+## 2025.03 重大更新
 
-[TOC]
+### 项目重构
+- 旧版代码（AutoDL 本地训练）已迁移至 `legacy/` 目录保留
+- 新版 Pipeline 迁移至 **Google Colab** 运行，利用免费 GPU + Google Drive 存储
+- 项目结构重新组织，分离 `pipeline/`（训练）和 `server/`（部署）
 
-## Tip 
+### 架构概览
 
-- This is a small rag project that can split revit api and make the databse to rag
-- token need to get file content which you save as
+```
+revit-api-rag/
+├── pipeline/              # 数据处理 & 训练（Colab 运行）
+│   ├── run_all.ipynb      # 主训练 Notebook
+│   ├── api_parser/        # API 文档解析
+│   │   ├── parse_chm.py   # CHM HTML → 结构化数据
+│   │   └── quality_agent.py  # LLM 质量剪枝
+│   ├── sdk_parser/        # SDK 代码解析
+│   │   ├── extract.py     # .cs 源码提取
+│   │   └── quality_agent.py  # Golden code 生成
+│   ├── embedder/          # 向量化
+│   │   └── embed.py       # SQLite → ChromaDB
+│   ├── retriever.py       # 两层检索器
+│   └── llm_client.py      # LLM 客户端（OpenRouter）
+├── config/                # 配置
+│   └── config.yaml
+├── data/                  # 生成的数据库文件
+│   ├── sqlite/            # SQLite（API + SDK 结构化数据）
+│   └── legacy_db/         # 旧版数据库（保留参考）
+├── server/                # Web 服务（部署用）
+├── legacy/                # 旧版代码（AutoDL 时期）
+└── docs/                  # 文档
+```
 
-## Enviorment
-`./requirements.txt`
-## Revit Version
-`2026`
-## Graphics Platform
-- `https://www.autodl.com/`
-- graphics : 5090
-- cuda : 12.8 
-- embedding & rerank model : QWen 0.6B
-- embedding database : chromadb
-- database : sqlite
+## 数据处理 Pipeline
 
-## Split The RevitAPI File
-![RevitAPI](RevitAPI.png)
-### Setup
-1. Get RevitAPI.chm and unzip it by 7-zip or other tools
-2. Get The Data Folder -> `./html`
-3. use `./split_revit.ipynb` to get the class data 
-    - class name
-    - class info 
-    - class summary 
-    - class remark 
-    - parameters 
-    - exception
-4. save data
-    - `name - info` to embedding and save to `python_revit_train/chromadb0815_api_1.db`
-    - other context to `python_revit_train/revit_api.db`
-    - ![database](RevitEembeddingDatabse.png)
+### API 文档处理
+```
+Revit 2026 API CHM
+    ↓ 7z 解压
+HTML 文件 (~4000+ 页)
+    ↓ parse_chm.py 解析
+结构化数据 (name, summary, syntax, parameters, remarks...)
+    ↓ quality_agent.py (Gemini Flash 剪枝)
+revit_api.db (SQLite)
+    ↓ embed.py
+ChromaDB 向量库 (API)
+```
 
-## Split The SDK Smaple Code
-![SDK](RevitSDK.png)
-### Setup
-1. Look Up ALL Folder
-2. Get `ReadMe.rtf` And all `.cs` files
-3. use the `./extra_data/` to get all code
-4. save the data to `./extra_data/project_dataset.json`
-5. save to chromadb database . `python_revit_train/chromadb0818_code_1.db`
+- **解析**: 从 CHM 解压的 HTML 中提取类名、方法签名、参数、备注等结构化信息
+- **剪枝**: 使用 Gemini Flash 对低质量/冗余条目进行清洗，保留高质量 API 参考
+- **存储**: SQLite 存储全量结构化数据，ChromaDB 存储 `name + summary` 的语义向量
 
-## workflow in RAG
-![Workflow](workflow.png)
+### SDK 代码处理
+```
+Revit SDK Samples (~200+ 项目)
+    ↓ extract.py (tree-sitter 解析)
+.cs 源码 → 类/方法提取
+    ↓ quality_agent.py (Gemini 生成 Golden Code)
+SDK golden code (JSON)
+    ↓ SQLite 存储
+revit_api.db (sdk_code 表)
+    ↓ embed.py
+ChromaDB 向量库 (Code)
+```
 
-### Setup
-1. the user input :  `query: 创建结构柱`
-2. retrieve the use input ust prompt setting `Keywords: structural columns, create, NewFamilyInstance, Level, XYZ, FamilySymbol` 
-    ```
-    f"""
-    you are a professional bim engineer, you are good at Revit API, you can answer any question about Revit API.
-    also you have a good skill in c# and algorithm in graph 2d, you can write code in c# to solve the problem.
-    and can translate the user question to english if the user question is not in english.
+- **提取**: 使用 tree-sitter 解析 C# 源码，提取类定义、方法签名、关键代码块
+- **Golden Code**: LLM 阅读项目 README + 源码，生成精炼的示例代码
+- **存储**: SQLite 存储 golden code + 元数据，ChromaDB 存储代码语义向量
 
-    you think chain need to by thi step and check it :
-    1. Understand the user question and translate it to English if necessary.
-    2. Retrieve relevant information from the Revit API database using the provided query.
-    3. Generate the keyword will help databse to find the best api reference.
-    4. need output just one line answer to the user question
+### Embedding 策略
+- **API 向量化**: `name + summary` → OpenRouter Embedding API → ChromaDB
+- **Code 向量化**: `golden_code summary` → OpenRouter Embedding API → ChromaDB
+- **检索**: 查询 → ChromaDB 语义搜索 (top_k) → SQLite 回查全文内容
+- **重排序**: 可选 rerank 模型对结果精排
 
-    example:
-    User Question:  结构柱着色的命令是什么?
-    Step 1: Translate to English: "What is the command for coloring structural columns in Revit?" 
-    Step 2: May Be User Need Api Keyword: "structural columns, coloring Override Element Graphics"
-    Step 3: Generate keywords: "structural columns, coloring Override Element Graphics , View Filter"
-    Step 4: Output the answer in one line.
+## RAG 检索 & 代码生成
 
+```
+用户查询: "创建结构柱"
+    ↓ Query Rewriting (LLM 提取 API 关键词)
+改写: "structural column, NewFamilyInstance, FamilySymbol, Level"
+    ↓ ChromaDB 语义搜索
+API 结果: 15 条  |  SDK 结果: 5 条
+    ↓ 上下文组装
+Prompt = API Reference + SDK Code + User Query
+    ↓ LLM 流式生成 (Gemini Flash / Claude)
+输出: C# 插件代码（简洁模式 / 完整模式）
+```
 
-    output format:
+## 环境要求
 
-    Keywords: structural columns, coloring Override Element Graphics , View Filter , OverrideGraphicSettings ,  SetElementOverrides
+- **训练环境**: Google Colab (免费版即可)
+- **Revit 版本**: 2026
+- **LLM**: OpenRouter (Gemini Flash / Claude / GPT)
+- **Embedding**: OpenRouter Embedding API
+- **存储**: Google Drive (ChromaDB + SQLite ~100MB)
 
-    Remember:
-    - Only provide the keywords in the output.
-    - Do not include any additional text or explanations.
-    - Ensure the keywords are relevant to the user's question and can help in retrieving the best API references.
-    - The keywords should be concise and directly related to Revit API functionalities.
-    - Avoid using generic terms
+## 快速开始
 
-    """
-    ```
-2. embedding the retrieve query
-3. get the top_k result from `python_revit_train/chromadb0818_code_1.db` and `python_revit_train/chromadb0815_api_1.db`
-    - apis : 30
-    - codes : 5
-4. rerank by query get a half of result 
-    - apis : 15
-    - codes : 3
-5. use the answer pormpt
-    - **in this prompt . i tell the llm need to think with the four setup , and then output the answer , use this way , will make the llm re-check the response **
-    ```
-    f"""
-    you are a professional bim engineer, you are good at Revit API, you can answer any question about Revit API.
-    also you have a good skill in c# and algorithm in graph 2d, you can write code in c# to solve the problem.
+### 训练（Colab）
+1. 打开 `pipeline/run_all.ipynb` in Google Colab
+2. 按顺序运行所有 Cell
+3. 生成的数据库文件自动保存到 Google Drive
 
-    you need to base on this four reference to answer the question:
-    1. Completeness: It includes the entire process from start to submission
-    2. Professionalism: Correctly handle the characteristics of Revit structural elements
-    3. Robustness: It includes error handling and boundary condition checking
-    4. Scalability: The code structure makes it easy to add more functions
-    5. Best practice: Follow the Revit API development specifications
+### 部署（本地/GCP）
+```bash
+# 安装依赖
+pip install -r requirements-server.txt
 
+# 启动服务
+python -m server.main
+```
 
-    this is the reference of Revit API :
-    {"api reference".join(rerank_api_chunks)}
-    {"code and doc reference".join(rerank_code_docs_chunks)}
+---
 
-    you will combine the revit api and c# code to generation a true add-in plugins and check the parameters and logic.
+## 更新日志
 
-    Give User a professional answer to the question, if you can not find the answer in the reference, please say "I don't know" or "I can't find the answer in the reference".
-    Also Give Code to solve the problem, if you can not generate the code in the reference, please say "I don't know" or "I can't find the code in the reference".
+### 2025.03 — V2 重大重构
+- 旧版代码迁移至 `legacy/`
+- Pipeline 迁移至 Google Colab
+- 新增 SDK Pipeline V2（tree-sitter + LLM golden code）
+- 新增 Quality Agent（API + SDK 数据剪枝）
+- 新增 Query Rewriting（查询改写）
+- 新增流式代码生成（简洁模式 / 完整模式）
 
-    Remember : 1. Must Be True to the reference, 2. do not generate code that is not in the reference and RevitAPI. 3.  Konw What User Want , 4. Give User A Complete Code Solution
+### 2025.10.23 — SDK Embedding
+- 使用 tree-sitter 提取 SDK 代码块
+- LLM 生成 clean code JSON
+- 数据存储至 SQLite
 
-"""
-    ```
-6. output result
-    ```
-    Based on the references provided, I can give you a complete solution for creating structural columns in Revit using the Revit API. Here's a professional implementation following all the best practices:
-
-        ```csharp
-        using Autodesk.Revit.DB;
-        using Autodesk.Revit.DB.Structure;
-        using Autodesk.Revit.UI;
-        using System;
-
-        namespace ColumnCreator
-        {
-            public class ColumnCreatorCommand : IExternalCommand
-            {
-                public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
-                {
-                    try
-                    {
-                        // Get the active document and application
-                        UIApplication uiApp = commandData.Application;
-                        Document doc = uiApp.ActiveUIDocument.Document;
-
-                        // Start a transaction
-                        using (Transaction trans = new Transaction(doc, "Create Structural Columns"))
-                        {
-                            trans.Start();
-
-                            // Get the first level (you could also prompt user to select)
-                            Level level = GetFirstLevel(doc);
-                            if (level == null)
-                            {
-                                message = "No levels found in project";
-                                return Result.Failed;
-                            }
-
-                            // Find the column family symbol (replace with your family name and type)
-                            FamilySymbol columnType = FindFamilySymbol(doc, "M_Wood Timber Column", "191 x 292mm");
-                            if (columnType == null)
-                            {
-                                message = "Column family not found";
-                                return Result.Failed;
-                            }
-
-                            // Ensure the family symbol is active
-                            if (!columnType.IsActive)
-                                columnType.Activate();
-
-                            // Create column at origin point (0,0,0)
-                            XYZ location = new XYZ(0, 0, 0);
-                            FamilyInstance column = doc.Create.NewFamilyInstance(
-                                location,
-                                columnType,
-                                level,
-                                StructuralType.Column);
-
-                            // Set column parameters if needed
-                            SetColumnParameters(column, level);
-
-                            trans.Commit();
-                        }
-
-                        return Result.Succeeded;
-                    }
-                    catch (Exception ex)
-                    {
-                        message = ex.Message;
-                        return Result.Failed;
-                    }
-                }
-
-                private Level GetFirstLevel(Document doc)
-                {
-                    FilteredElementCollector collector = new FilteredElementCollector(doc);
-                    collector.OfClass(typeof(Level));
-                    return collector.FirstElement() as Level;
-                }
-
-                private FamilySymbol FindFamilySymbol(Document doc, string familyName, string symbolName)
-                {
-                    FilteredElementCollector collector = new FilteredElementCollector(doc);
-                    collector.OfClass(typeof(Family));
-
-                    foreach (Family family in collector)
-                    {
-                        if (family.Name == familyName)
-                        {
-                            foreach (ElementId symbolId in family.GetFamilySymbolIds())
-                            {
-                                FamilySymbol symbol = doc.GetElement(symbolId) as FamilySymbol;
-                                if (symbol.Name == symbolName)
-                                {
-                                    return symbol;
-                                }
-                            }
-                        }
-                    }
-                    return null;
-                }
-
-                private void SetColumnParameters(FamilyInstance column, Level baseLevel)
-                {
-                    // Set base and top level parameters
-                    Parameter baseLevelParam = column.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_PARAM);
-                    Parameter topLevelParam = column.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_PARAM);
-                    
-                    if (baseLevelParam != null)
-                        baseLevelParam.Set(baseLevel.Id);
-                    
-                    if (topLevelParam != null)
-                        topLevelParam.Set(baseLevel.Id); // Using same level for top for simplicity
-
-                    // Set offsets if needed
-                    Parameter baseOffsetParam = column.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_OFFSET_PARAM);
-                    Parameter topOffsetParam = column.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM);
-                    
-                    if (baseOffsetParam != null)
-                        baseOffsetParam.Set(0.0);
-                    
-                    if (topOffsetParam != null)
-                        topOffsetParam.Set(10.0); // Example: 10 feet height
-                }
-            }
-        }
-        ```
-
-    This code demonstrates:
-
-    1. **Completeness**: Shows the entire process from command execution to column creation
-    2. **Professionalism**: Properly handles structural column creation with all necessary parameters
-    3. **Robustness**: Includes error handling and null checks
-    4. **Scalability**: Easy to extend with more parameters or multiple column creation
-    5. **Best Practices**: Follows Revit API standards and uses transactions properly
-
-    Key API elements used:
-    - `Document.Create.NewFamilyInstance()` with XYZ location, FamilySymbol, Level and StructuralType
-    - Proper parameter setting for structural columns
-    - Element filtering to find levels and family symbols
-    - Transaction management
-
-    You can extend this to create multiple columns by:
-    1. Adding a loop for multiple locations
-    2. Prompting user for input locations
-    3. Adding more sophisticated parameter setting logic
-
-    The code matches exactly with the API references provided, particularly:
-    - `FamilyInstanceCreationData(XYZ, FamilySymbol, Level, StructuralType)`
-    - `Document.NewFamilyInstance(XYZ, FamilySymbol, Element, Level, StructuralType)`
-    - Proper handling of structural parameters from the reference examples
-
-    ```
-    
+### 初始版本 — API RAG
+- Revit API CHM 解析 → SQLite + ChromaDB
+- SDK 代码解析 → ChromaDB
+- 基础 RAG 检索 + 代码生成
