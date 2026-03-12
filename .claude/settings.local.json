@@ -32,7 +32,9 @@
       "Read(//c/Program Files \\(x86\\)/GitHub CLI/**)",
       "Bash(cmd.exe /c \"where gh\")",
       "Bash(winget install:*)",
-      "Bash(export PATH=\"$PATH:/c/Program Files/GitHub CLI\" && gh auth status 2>&1)"
+      "Bash(export PATH=\"$PATH:/c/Program Files/GitHub CLI\" && gh auth status 2>&1)",
+      "Bash(cd \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" && find server -type f -name \"*.py\" ! -name \"__init__.py\" | sort && echo \"===\" && find server -name \"__init__.py\" -exec sh -c 'if [ -s \"$1\" ]; then echo \"$1 \\(has content\\)\"; fi' _ {} \\\\;)",
+      "Bash(taskkill //F //PID 37228 2>/dev/null; pkill -f \"server.main\" 2>/dev/null; echo \"stopped\")"
     ]
   }
 }

@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.venv
+venv
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# Data archives (use extracted dirs only)
+data/chromadb_api.tar.gz
+data/chromadb_code.tar.gz
+
+# Legacy
+legacy/
+
+# Pipeline training data (not needed at runtime)
+data/raw/
+data/knowledge/
+pipeline/embedder/
+pipeline/parser/
+pipeline/cleaner/
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints
+
+# Docs
+*.md
+!config/*.md
+
+# Misc
+.env
+.claude/

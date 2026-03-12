@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  revit-api-rag:
+    build: .
+    ports:
+      - "7860:7860"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - DATA_DIR=/app/data
+    volumes:
+      # Local dev: mount data directory to avoid baking into image
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/chromadb:/app/data/chromadb
+    restart: unless-stopped
