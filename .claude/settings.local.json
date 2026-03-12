@@ -7,7 +7,10 @@
       "Bash(git push:*)",
       "Bash(find /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/server -type f -name \"*.py\" -exec wc -l {} \\\\; | sort -rn | head -20)",
       "Bash(find /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag -type f -name \"*.py\" | xargs wc -l | sort -rn | head -15)",
-      "Bash(grep -n \"embed_query\\\\|embed_texts\\\\|class.*Embedding\" /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/pipeline/embedder/providers/*.py)"
+      "Bash(grep -n \"embed_query\\\\|embed_texts\\\\|class.*Embedding\" /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/pipeline/embedder/providers/*.py)",
+      "Bash(python3 << 'EOF'\nimport json\n\nwith open\\('/F/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/pipeline/run_all.ipynb'\\) as f:\n    nb = json.load\\(f\\)\n\n# Find cells containing generate_code\nfor i, cell in enumerate\\(nb['cells']\\):\n    if cell.get\\('cell_type'\\) == 'code':\n        source = ''.join\\(cell.get\\('source', []\\)\\)\n        if 'generate_code' in source or 'llm_client' in source and 'prompt' in source:\n            print\\(f\"\\\\n{'='*60}\"\\)\n            print\\(f\"CELL {i} \\(type: {cell.get\\('cell_type'\\)}\\)\"\\)\n            print\\(f\"{'='*60}\"\\)\n            print\\(source[:2000]\\)\n            if len\\(source\\) > 2000:\n                print\\(\"... [truncated]\"\\)\nEOF)",
+      "Bash(python3 << 'EOF'\nimport json\nimport sys\n\nwith open\\('/F/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/pipeline/run_all.ipynb'\\) as f:\n    nb = json.load\\(f\\)\n\n# Find cells containing generate_code\nfound = False\nfor i, cell in enumerate\\(nb['cells']\\):\n    if cell.get\\('cell_type'\\) == 'code':\n        source = ''.join\\(cell.get\\('source', []\\)\\)\n        if 'def generate_code' in source:\n            found = True\n            print\\(f\"CELL {i}: generate_code definition\"\\)\n            print\\(source\\)\n            print\\(\"\\\\n\" + \"=\"*70 + \"\\\\n\"\\)\n            \nif not found:\n    print\\(\"generate_code not found in notebook cells\"\\)\nEOF)",
+      "Bash(find /F/DevProjects/imkcrevit/revit-api-rag/revit-api-rag -type f -name \"*.py\" ! -path \"*__pycache__*\" | xargs grep -l \"stream.*response\\\\|streaming\")"
     ]
   }
 }

@@ -12,8 +12,10 @@
 """
 from __future__ import annotations
 
+import json
 import os
-from typing import Any
+import sys
+from typing import Any, Generator
 
 import httpx
 
@@ -47,17 +49,17 @@ class LLMClient:
         else:
             self._client = httpx.Client(timeout=timeout)
 
-    def generate_text(self, prompt: str, system_prompt: str | None = None) -> str:
-        """
-        使用 OpenRouter 兼容的 Chat Completions 接口生成文本。
-        兼容 Claude / OpenAI / Gemini / DeepSeek 等所有 OpenRouter 模型。
-        只返回第一条 message 的 content。
-        """
+    def _build_request(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        stream: bool = False,
+    ) -> tuple[str, dict, dict]:
+        """Build request URL, headers, and payload."""
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            # OpenRouter 推荐携带，便于使用统计
             "X-Title": "revit-api-rag",
         }
 
@@ -74,7 +76,17 @@ class LLMClient:
             ],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "stream": stream,
         }
+        return url, headers, payload
+
+    def generate_text(self, prompt: str, system_prompt: str | None = None) -> str:
+        """
+        使用 OpenRouter 兼容的 Chat Completions 接口生成文本。
+        兼容 Claude / OpenAI / Gemini / DeepSeek 等所有 OpenRouter 模型。
+        只返回第一条 message 的 content。
+        """
+        url, headers, payload = self._build_request(prompt, system_prompt, stream=False)
 
         resp = self._client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
@@ -87,6 +99,43 @@ class LLMClient:
         message = choices[0].get("message") or {}
         content = message.get("content") or ""
         return str(content)
+
+    def generate_stream(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> Generator[str, None, None]:
+        """
+        流式生成文本，逐 token yield。
+        使用 SSE (Server-Sent Events) 协议解析。
+        """
+        url, headers, payload = self._build_request(prompt, system_prompt, stream=True)
+
+        with self._client.stream("POST", url, headers=headers, json=payload) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]  # strip "data: "
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    token = delta.get("content", "")
+                    if token:
+                        yield token
+                except (json.JSONDecodeError, IndexError):
+                    continue
+
+    def stream_print(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> str:
+        """流式生成并实时打印，返回完整文本。"""
+        full_text = []
+        for token in self.generate_stream(prompt, system_prompt):
+            print(token, end="", flush=True)
+            full_text.append(token)
+        print()  # final newline
+        return "".join(full_text)
 
 
 def create_llm_client(config: dict[str, Any], provider_override: str | None = None) -> LLMClient:
