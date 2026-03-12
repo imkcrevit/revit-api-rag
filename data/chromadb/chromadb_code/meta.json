@@ -1,9 +1,0 @@
-{
-  "revit_version": "2026",
-  "embedding_provider": "openai",
-  "embedding_model": "openai/text-embedding-3-large",
-  "embedding_dimension": 3072,
-  "created_at": "2026-03-12T02:51:24.521961",
-  "record_count": 153,
-  "source": "RevitSDK Samples"
-}

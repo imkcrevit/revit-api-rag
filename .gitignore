@@ -207,6 +207,7 @@ marimo/_lsp/
 __marimo__/
 gemini_api.env
 data/raw/
+data/chromadb/
 data/chromadb_api.tar.gz
 data/chromadb_code.tar.gz
 data/sqlite/*.db
