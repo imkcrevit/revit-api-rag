@@ -5,7 +5,8 @@ Architecture:
     ChromaDB holds lightweight embeddings (summary-based) + document IDs.
     SQLite holds the full content (code, API docs, parameters, etc.).
     At query time:
-        1. Embed the query and search ChromaDB → ranked IDs + scores
+        0. (Optional) LLM query rewriting: extract Revit API keywords from user query
+        1. Embed the rewritten query and search ChromaDB → ranked IDs + scores
         2. Batch-fetch full records from SQLite by ID
         3. Assemble structured context dicts ready for prompt injection
 
@@ -16,6 +17,8 @@ Public API:
 """
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
@@ -47,6 +50,7 @@ class RetrievedItem:
 class SearchResults:
     """Container for all retrieval results."""
     query: str
+    rewritten_query: str = ""
     api_items: list[RetrievedItem] = field(default_factory=list)
     sdk_items: list[RetrievedItem] = field(default_factory=list)
 
@@ -69,6 +73,7 @@ class RAGRetriever:
     ):
         from pipeline.embedder.providers import create_embedding
         self._embedder = create_embedding(config)
+        self._config = config
 
         # ChromaDB collections
         self._api_collection = (
@@ -87,6 +92,9 @@ class RAGRetriever:
         # Detect SDK schema
         self._sdk_new_schema = self._detect_sdk_schema()
 
+        # Query rewriting LLM (lazy init)
+        self._rewrite_client = None
+
     def _detect_sdk_schema(self) -> bool:
         """Check if sdk_db uses the new sdk_info table."""
         try:
@@ -98,6 +106,62 @@ class RAGRetriever:
             return False
 
     # ------------------------------------------------------------------
+    # Query rewriting
+    # ------------------------------------------------------------------
+
+    _REWRITE_PROMPT = """\
+You are a Revit API expert. Given a user query (possibly in Chinese), extract the most relevant \
+Revit API class names, method names, and English technical keywords for semantic search.
+
+Rules:
+1. Translate non-English terms to their exact Revit API equivalents
+2. Include the primary Revit API class/namespace (e.g. FamilyInstance, Wall, Document)
+3. Include relevant method names (e.g. NewFamilyInstance, Create)
+4. Keep it concise — output ONLY a JSON object, no explanation
+
+Examples:
+- "结构柱" → {{"keywords": "structural column FamilyInstance BuiltInCategory.OST_StructuralColumns", "api_terms": ["FamilyInstance", "StructuralColumn", "NewFamilyInstance"]}}
+- "创建墙体" → {{"keywords": "create wall Wall.Create Wall WallType", "api_terms": ["Wall", "Wall.Create", "WallType"]}}
+- "获取房间面积" → {{"keywords": "room area Room get_Area SpatialElement", "api_terms": ["Room", "Area", "SpatialElement"]}}
+
+User query: {query}
+"""
+
+    def _get_rewrite_client(self):
+        """Lazy-init the query rewriting LLM client."""
+        if self._rewrite_client is None:
+            from pipeline.llm_client import create_llm_client
+            self._rewrite_client = create_llm_client(
+                self._config, provider_override="gemini_flash"
+            )
+            self._rewrite_client.max_tokens = 256
+            self._rewrite_client.temperature = 0.1
+        return self._rewrite_client
+
+    def rewrite_query(self, query: str) -> str:
+        """
+        Use LLM to extract Revit API keywords from user query.
+        Returns enriched query string for embedding.
+        Falls back to original query on any error.
+        """
+        try:
+            client = self._get_rewrite_client()
+            raw = client.generate_text(
+                self._REWRITE_PROMPT.format(query=query),
+                system_prompt="You are a Revit API keyword extractor. Output JSON only.",
+            )
+            raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+            raw = re.sub(r"\s*```$", "", raw.strip())
+            result = json.loads(raw)
+            keywords = result.get("keywords", "")
+            api_terms = result.get("api_terms", [])
+            # Combine: original query + extracted keywords + API terms
+            enriched = f"{query} {keywords} {' '.join(api_terms)}"
+            return enriched.strip()
+        except Exception:
+            return query
+
+    # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
 
@@ -106,12 +170,15 @@ class RAGRetriever:
         query: str,
         api_top_k: int = 15,
         code_top_k: int = 5,
+        rewrite: bool = True,
     ) -> SearchResults:
         """
+        Tier 0: (Optional) LLM query rewriting for better keyword alignment.
         Tier 1: Embed query → search both ChromaDB collections.
         Tier 2: Fetch full records from SQLite by matched IDs.
         """
-        query_embedding = self._embedder.embed_query(query)
+        search_query = self.rewrite_query(query) if rewrite else query
+        query_embedding = self._embedder.embed_query(search_query)
 
         api_raw = self._api_collection.query(
             query_embeddings=[query_embedding],
@@ -125,7 +192,10 @@ class RAGRetriever:
         api_items = self._hydrate_api(api_raw)
         sdk_items = self._hydrate_sdk(code_raw)
 
-        return SearchResults(query=query, api_items=api_items, sdk_items=sdk_items)
+        return SearchResults(
+            query=query, rewritten_query=search_query,
+            api_items=api_items, sdk_items=sdk_items,
+        )
 
     # ------------------------------------------------------------------
     # Hydrate from SQLite
@@ -280,6 +350,10 @@ class RAGRetriever:
     def format_results(self, results: SearchResults) -> str:
         """Format search results for display."""
         lines = []
+        if results.rewritten_query and results.rewritten_query != results.query:
+            lines.append(f"原始查询: {results.query}")
+            lines.append(f"改写查询: {results.rewritten_query}")
+            lines.append("")
         lines.append("=" * 60)
         lines.append("API 检索结果：")
         lines.append("=" * 60)

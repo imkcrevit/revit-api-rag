@@ -4,7 +4,10 @@
       "Bash(curl:*)",
       "Bash(python:*)",
       "Bash(git remote:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(find /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/server -type f -name \"*.py\" -exec wc -l {} \\\\; | sort -rn | head -20)",
+      "Bash(find /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag -type f -name \"*.py\" | xargs wc -l | sort -rn | head -15)",
+      "Bash(grep -n \"embed_query\\\\|embed_texts\\\\|class.*Embedding\" /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/pipeline/embedder/providers/*.py)"
     ]
   }
 }
