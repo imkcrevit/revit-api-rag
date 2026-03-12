@@ -10,7 +10,21 @@
       "Bash(grep -n \"embed_query\\\\|embed_texts\\\\|class.*Embedding\" /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/pipeline/embedder/providers/*.py)",
       "Bash(python3 << 'EOF'\nimport json\n\nwith open\\('/F/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/pipeline/run_all.ipynb'\\) as f:\n    nb = json.load\\(f\\)\n\n# Find cells containing generate_code\nfor i, cell in enumerate\\(nb['cells']\\):\n    if cell.get\\('cell_type'\\) == 'code':\n        source = ''.join\\(cell.get\\('source', []\\)\\)\n        if 'generate_code' in source or 'llm_client' in source and 'prompt' in source:\n            print\\(f\"\\\\n{'='*60}\"\\)\n            print\\(f\"CELL {i} \\(type: {cell.get\\('cell_type'\\)}\\)\"\\)\n            print\\(f\"{'='*60}\"\\)\n            print\\(source[:2000]\\)\n            if len\\(source\\) > 2000:\n                print\\(\"... [truncated]\"\\)\nEOF)",
       "Bash(python3 << 'EOF'\nimport json\nimport sys\n\nwith open\\('/F/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/pipeline/run_all.ipynb'\\) as f:\n    nb = json.load\\(f\\)\n\n# Find cells containing generate_code\nfound = False\nfor i, cell in enumerate\\(nb['cells']\\):\n    if cell.get\\('cell_type'\\) == 'code':\n        source = ''.join\\(cell.get\\('source', []\\)\\)\n        if 'def generate_code' in source:\n            found = True\n            print\\(f\"CELL {i}: generate_code definition\"\\)\n            print\\(source\\)\n            print\\(\"\\\\n\" + \"=\"*70 + \"\\\\n\"\\)\n            \nif not found:\n    print\\(\"generate_code not found in notebook cells\"\\)\nEOF)",
-      "Bash(find /F/DevProjects/imkcrevit/revit-api-rag/revit-api-rag -type f -name \"*.py\" ! -path \"*__pycache__*\" | xargs grep -l \"stream.*response\\\\|streaming\")"
+      "Bash(find /F/DevProjects/imkcrevit/revit-api-rag/revit-api-rag -type f -name \"*.py\" ! -path \"*__pycache__*\" | xargs grep -l \"stream.*response\\\\|streaming\")",
+      "Bash(ls -la /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/*.py 2>/dev/null)",
+      "Bash(find \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" -type f -name \"*.py\" | xargs grep -l \"def.*query\\\\|def.*search\\\\|class.*RAG\" 2>/dev/null | head -10)",
+      "Bash(ls -la \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" | grep -E \"\\\\.py$|\\\\.ipynb$\")",
+      "Bash(find \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" -type f -name \"*.ipynb\" -o -name \"*.py\" | xargs grep -l \"clarif\\\\|ambig\\\\|refine\\\\|dialog\\\\|turn\\\\|conver\" 2>/dev/null | head -15)",
+      "Bash(grep -r \"uvicorn\\\\|FastAPI\\\\|Gradio\" /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag --include=\"*.ipynb\" --include=\"*.py\" 2>/dev/null | head -20)",
+      "Bash(find /f/DevProjects/imkcrevit/revit-api-rag -type f \\\\\\( -name \"main.py\" -o -name \"app.py\" -o -name \"server.py\" -o -name \"Dockerfile\" -o -name \"docker-compose.yml\" -o -name \"*.yaml\" -o -name \"*.yml\" \\\\\\) ! -path \"*/.git/*\" ! -path \"*/__pycache__/*\" 2>/dev/null | head -30)",
+      "Bash(git log:*)",
+      "Bash(find \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" -type f -name \"*.py\" -size +10c | xargs grep -l \"load_config\\\\|get_config\" | head -5)",
+      "Bash(grep -l \"load_config\\\\|get_config\" \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\"/check_api.py \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\"/pipeline/*.py 2>/dev/null)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/**)",
+      "Bash(done)",
+      "Bash(cd \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" && python -c \"\nimport json\nwith open\\('pipeline/run_all.ipynb', 'r', encoding='utf-8'\\) as f:\n    nb = json.load\\(f\\)\nfor i, cell in enumerate\\(nb['cells']\\):\n    src = ''.join\\(cell['source']\\)\n    if 'Based on the references' in src:\n        print\\(f'=== Cell {i} ==='\\)\n        for j, line in enumerate\\(cell['source']\\):\n            print\\(f'{j}: {repr\\(line\\)}'\\)\n        print\\(\\)\n\")"
     ]
   }
 }
