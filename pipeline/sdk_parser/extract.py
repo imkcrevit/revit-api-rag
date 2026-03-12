@@ -259,7 +259,8 @@ def _extract_methods_for_class(code: str, target_class: str) -> list[str]:
     except Exception:
         return _fallback_extract_methods(code)
 
-    target_lower = target_class.lower()
+    # Normalize: strip spaces so "Query Storage" matches "QueryStorage"
+    target_normalized = re.sub(r"\s+", "", target_class).lower()
     methods: list[str] = []
 
     # DFS: find class_declaration whose name matches target_class,
@@ -274,7 +275,8 @@ def _extract_methods_for_class(code: str, target_class: str) -> list[str]:
             )
             if class_name_node:
                 name = cleaned[class_name_node.start_byte: class_name_node.end_byte]
-                if name.lower() == target_lower or target_lower in name.lower():
+                name_lower = name.lower()
+                if name_lower == target_normalized or target_normalized in name_lower:
                     # Extract all methods from this class
                     inner_stack = [node]
                     while inner_stack:
@@ -323,6 +325,7 @@ def _fallback_extract_methods(code: str) -> list[str]:
 def match_and_extract(
     project: dict[str, Any],
     readme_analysis: dict[str, Any],
+    verbose: bool = False,
 ) -> dict[str, Any] | None:
     """
     Phase 1b: Match target files from ReadMe analysis to actual .cs files,
@@ -333,14 +336,21 @@ def match_and_extract(
     target_files: list[str] = readme_analysis.get("target_files", [])
     key_classes: list[str] = readme_analysis.get("key_classes_and_methods", [])
     all_cs_files: list[Path] = project["all_cs_files"]
+    proj_name = project["project_name"]
 
     # Build a filename -> Path map
     file_map: dict[str, Path] = {p.name: p for p in all_cs_files}
 
     all_class_details: list[dict[str, Any]] = []
 
-    for class_name in key_classes:
+    for ci, class_name in enumerate(key_classes, 1):
         class_found = False
+
+        if verbose:
+            with _PRINT_LOCK:
+                print(f"    [{ci}/{len(key_classes)}] class: {class_name}")
+
+        # First pass: search in target_files from ReadMe
         for target_file in target_files:
             full_path = file_map.get(target_file)
             if full_path is None:
@@ -366,11 +376,37 @@ def match_and_extract(
                     "methods": methods,
                 })
                 class_found = True
+                if verbose:
+                    with _PRINT_LOCK:
+                        print(f"      ✓ found in {full_path.name} ({len(methods)} methods)")
                 break
+
+        # Second pass: search ALL .cs files if not found in target_files
+        if not class_found:
+            searched_files = {t.lower() for t in target_files}
+            for fpath in all_cs_files:
+                if fpath.name.lower() in searched_files:
+                    continue
+                try:
+                    code = fpath.read_text(encoding="utf-8-sig", errors="ignore")
+                except Exception:
+                    continue
+                methods = _extract_methods_for_class(code, class_name)
+                if methods:
+                    all_class_details.append({
+                        "class_name": class_name,
+                        "filename": fpath.name,
+                        "methods": methods,
+                    })
+                    class_found = True
+                    if verbose:
+                        with _PRINT_LOCK:
+                            print(f"      ✓ found in {fpath.name} (fallback, {len(methods)} methods)")
+                    break
 
         if not class_found:
             with _PRINT_LOCK:
-                print(f"  [match] cant find class: {class_name} in {project['project_name']}")
+                print(f"  [miss] class: {class_name} in {proj_name}")
 
     if not all_class_details:
         return None
@@ -575,21 +611,20 @@ def run_sdk_pipeline(
     if verbose:
         print(f"\nPhase 1b: Matching files and extracting methods")
 
-    pbar1b = (
-        _tqdm(projects, desc="Matching files", unit="proj", dynamic_ncols=True)
-        if _tqdm and verbose else projects
-    )
-
     skipped_no_readme = 0
     skipped_no_match = 0
 
-    for proj in pbar1b:
+    for pi, proj in enumerate(projects, 1):
         name = proj["project_name"]
         readme_analysis = readme_results.get(name)
         if readme_analysis is None:
             skipped_no_readme += 1
             continue
-        matched = match_and_extract(proj, readme_analysis)
+        num_classes = len(readme_analysis.get("key_classes_and_methods", []))
+        num_files = len(proj["all_cs_files"])
+        if verbose:
+            print(f"  [{pi}/{len(projects)}] {name} — {num_files} files, {num_classes} classes")
+        matched = match_and_extract(proj, readme_analysis, verbose=verbose)
         if matched is None:
             skipped_no_match += 1
             continue
