@@ -25,7 +25,14 @@
       "Read(//f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/**)",
       "Bash(done)",
       "Bash(cd \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" && python -c \"\nimport json\nwith open\\('pipeline/run_all.ipynb', 'r', encoding='utf-8'\\) as f:\n    nb = json.load\\(f\\)\nfor i, cell in enumerate\\(nb['cells']\\):\n    src = ''.join\\(cell['source']\\)\n    if 'Based on the references' in src:\n        print\\(f'=== Cell {i} ==='\\)\n        for j, line in enumerate\\(cell['source']\\):\n            print\\(f'{j}: {repr\\(line\\)}'\\)\n        print\\(\\)\n\")",
-      "Bash(cd \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" && python -c \"\nimport json\nwith open\\('pipeline/run_all.ipynb', 'r', encoding='utf-8'\\) as f:\n    nb = json.load\\(f\\)\nfor i, cell in enumerate\\(nb['cells']\\):\n    src = ''.join\\(cell['source']\\)\n    preview = src[:120].replace\\('\\\\n', ' | '\\)\n    print\\(f'[{i:3d}] {cell[\\\\\"cell_type\\\\\"]:8s} {preview}'\\)\n\")"
+      "Bash(cd \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" && python -c \"\nimport json\nwith open\\('pipeline/run_all.ipynb', 'r', encoding='utf-8'\\) as f:\n    nb = json.load\\(f\\)\nfor i, cell in enumerate\\(nb['cells']\\):\n    src = ''.join\\(cell['source']\\)\n    preview = src[:120].replace\\('\\\\n', ' | '\\)\n    print\\(f'[{i:3d}] {cell[\\\\\"cell_type\\\\\"]:8s} {preview}'\\)\n\")",
+      "Bash(cd \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" && gh auth status 2>&1 | head -5)",
+      "Bash(where gh:*)",
+      "Read(//c/Program Files/GitHub CLI/**)",
+      "Read(//c/Program Files \\(x86\\)/GitHub CLI/**)",
+      "Bash(cmd.exe /c \"where gh\")",
+      "Bash(winget install:*)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/GitHub CLI\" && gh auth status 2>&1)"
     ]
   }
 }

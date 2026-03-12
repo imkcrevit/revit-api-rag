@@ -21,7 +21,7 @@ The original copyright notice and full license text can be found in the `NOTICE`
 ## 2025.03 重大更新
 
 ### 项目重构
-- 旧版代码（AutoDL 本地训练）已迁移至 `legacy/` 目录保留
+- 旧版代码（AutoDL 本地训练）已迁移至 [`legacy/`](./legacy/) 目录保留 — **[查看旧版完整文档及逻辑图](./legacy/README.md)**
 - 新版 Pipeline 迁移至 **Google Colab** 运行，利用免费 GPU + Google Drive 存储
 - 项目结构重新组织，分离 `pipeline/`（训练）和 `server/`（部署）
 
@@ -53,7 +53,12 @@ revit-api-rag/
 
 ## 数据处理 Pipeline
 
+> V1 旧版 Pipeline 的详细逻辑图和 Prompt 设计请参考 [legacy/README.md](./legacy/README.md)
+
 ### API 文档处理
+
+![RevitAPI 解析流程](./docs/images/RevitAPI.png)
+
 ```
 Revit 2026 API CHM
     ↓ 7z 解压
@@ -70,7 +75,12 @@ ChromaDB 向量库 (API)
 - **剪枝**: 使用 Gemini Flash 对低质量/冗余条目进行清洗，保留高质量 API 参考
 - **存储**: SQLite 存储全量结构化数据，ChromaDB 存储 `name + summary` 的语义向量
 
+![数据库结构](./docs/images/RevitEembeddingDatabse.png)
+
 ### SDK 代码处理
+
+![RevitSDK 解析流程](./docs/images/RevitSDK.png)
+
 ```
 Revit SDK Samples (~200+ 项目)
     ↓ extract.py (tree-sitter 解析)
@@ -95,6 +105,8 @@ ChromaDB 向量库 (Code)
 
 ## RAG 检索 & 代码生成
 
+![RAG 主流程](./docs/images/workflow.png)
+
 ```
 用户查询: "创建结构柱"
     ↓ Query Rewriting (LLM 提取 API 关键词)
@@ -105,6 +117,29 @@ API 结果: 15 条  |  SDK 结果: 5 条
 Prompt = API Reference + SDK Code + User Query
     ↓ LLM 流式生成 (Gemini Flash / Claude)
 输出: C# 插件代码（简洁模式 / 完整模式）
+```
+
+![V2 完整工作流](./docs/images/RAG-Workflow-Update.jpg)
+
+## 训练产出文件
+
+训练完成后产出 4 个数据库文件，已上传至 [GitHub Release (v2.0-data)](https://github.com/imkcrevit/revit-api-rag/releases/tag/v2.0-data)：
+
+| 文件 | 大小 | 说明 |
+|------|------|------|
+| `revit_api.db` | 33 MB | API 结构化数据（name, summary, syntax, parameters, remarks...） |
+| `revit_sdk.db` | 932 KB | SDK Golden Code + 元数据 |
+| `chromadb_api.tar.gz` | 286 MB | API 语义向量库（27596 条 embedding） |
+| `chromadb_code.tar.gz` | 1.8 MB | SDK 代码语义向量库（153 条 embedding） |
+
+下载后放置到对应目录：
+```
+data/
+├── sqlite/
+│   ├── revit_api.db          # API 结构化数据
+│   └── revit_sdk.db          # SDK golden code
+├── chromadb_api/              # 解压 chromadb_api.tar.gz
+└── chromadb_code/             # 解压 chromadb_code.tar.gz
 ```
 
 ## 环境要求
@@ -136,19 +171,19 @@ python -m server.main
 ## 更新日志
 
 ### 2025.03 — V2 重大重构
-- 旧版代码迁移至 `legacy/`
+- 旧版代码迁移至 [`legacy/`](./legacy/) — [查看旧版文档](./legacy/README.md)
 - Pipeline 迁移至 Google Colab
 - 新增 SDK Pipeline V2（tree-sitter + LLM golden code）
 - 新增 Quality Agent（API + SDK 数据剪枝）
 - 新增 Query Rewriting（查询改写）
 - 新增流式代码生成（简洁模式 / 完整模式）
 
-### 2025.10.23 — SDK Embedding
+### 2025.10.23 — SDK Embedding ([详细文档](./legacy/README.md#2025-10-23-update))
 - 使用 tree-sitter 提取 SDK 代码块
 - LLM 生成 clean code JSON
 - 数据存储至 SQLite
 
-### 初始版本 — API RAG
+### 初始版本 — API RAG ([详细文档](./legacy/README.md#revit-api-rag-v1))
 - Revit API CHM 解析 → SQLite + ChromaDB
 - SDK 代码解析 → ChromaDB
 - 基础 RAG 检索 + 代码生成
