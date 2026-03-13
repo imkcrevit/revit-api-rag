@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from server.app.api.routes import router
 from server.app.deps import get_config
 from intent_bridge.router import intent_router
+from mcp_bridge.router import bridge_router
 
 
 def create_app() -> FastAPI:
@@ -35,6 +36,9 @@ def create_app() -> FastAPI:
 
     # Intent Bridge routes
     fastapi_app.include_router(intent_router)
+
+    # MCP Bridge routes (code generation + execution + tool solidification)
+    fastapi_app.include_router(bridge_router)
 
     # Health check
     @fastapi_app.get("/health")
