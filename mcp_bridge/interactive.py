@@ -150,7 +150,7 @@ class RevitQueryExecutor:
             '    .OfClass(typeof(Level))\n'
             '    .Cast<Level>()\n'
             '    .OrderBy(l => l.Elevation)\n'
-            '    .Select(l => new { Id = l.Id.IntegerValue, Name = l.Name, '
+            '    .Select(l => new { Id = l.Id.Value, Name = l.Name, '
             'ElevationMm = Math.Round(l.Elevation * 304.8, 1) })\n'
             '    .ToList();\n'
             'return levels;'

@@ -1,18 +1,28 @@
 # 致谢与源代码归属 (Acknowledgements and Source Attribution)
 
-本 RAG 项目的部分代码和文件实现，参考或直接使用了来自 Jeremy Tammik 的 [RevitSdkSamples](https://github.com/jeremytammik/RevitSdkSamples) 项目。
+本项目参考或直接使用了以下开源项目的代码和设计，在此致谢：
 
-该项目是基于 **MIT License** 授权的优秀资源，为本项目提供了巨大的帮助。
+### 1. RevitSdkSamples — Jeremy Tammik
 
-原始项目的版权和授权详情，请参阅本项目根目录下的 `NOTICE` 和 `LICENSE` 文件。
+本 RAG 项目的训练数据（SDK 示例代码）来自 Jeremy Tammik 的 [RevitSdkSamples](https://github.com/jeremytammik/RevitSdkSamples) 项目。
 
-# Acknowledgements and Source Attribution
+- **License**: MIT License
+- **用途**: 提取 C# 示例代码用于 RAG 检索和 Golden Code 生成
+- 原始版权和授权详情，请参阅本项目根目录下的 `NOTICE` 和 `LICENSE` 文件
 
-Portions of this RAG project are based on code and files from Jeremy Tammik's [RevitSdkSamples](https://github.com/jeremytammik/RevitSdkSamples).
+### 2. mcp-servers-for-revit — sparx-fire & mcp-servers-for-revit
 
-The original project is an invaluable resource licensed under the **MIT License**.
+本项目的 Revit 插件（`mcp_bridge` 模块）基于 [mcp-servers-for-revit](https://github.com/mcp-servers-for-revit/mcp-servers-for-revit) 项目的 Revit Plugin 和 CommandSet 组件。
 
-The original copyright notice and full license text can be found in the `NOTICE` and `LICENSE` files in this project's root directory.
+- **License**: MIT License — Copyright (c) 2026 sparx-fire, mcp-servers-for-revit
+- **用途**: 直接使用其编译的 Revit 插件 DLL（RevitMCPPlugin、RevitMCPCommandSet）作为 Revit 端的 TCP Socket 服务和命令执行器
+- **参考内容**:
+  - `plugin/Core/SocketService.cs` — TCP JSON-RPC 2.0 通信协议
+  - `commandset/Commands/ExecuteDynamicCode/` — Roslyn 动态代码编译执行
+  - `command.json` — 23 个预置命令定义
+- **原始项目**: Fork of [revit-mcp](https://github.com/mcp-servers-for-revit/revit-mcp)
+
+---
 
 # Revit API RAG
 

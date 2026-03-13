@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "revit-rag-bridge": {
+      "command": "python",
+      "args": ["-m", "mcp_bridge.mcp_server"],
+      "cwd": "F:\\DevProjects\\imkcrevit\\revit-api-rag\\revit-api-rag",
+      "env": {
+        "OPENROUTER_API_KEY": "your-openrouter-api-key-here"
+      }
+    }
+  }
+}

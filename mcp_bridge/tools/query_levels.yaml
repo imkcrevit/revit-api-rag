@@ -1,0 +1,25 @@
+name: query_levels
+display_name: Query Levels
+description: List all levels in the model with their elevations.
+code_template: |
+  var levels = new FilteredElementCollector(document)
+      .OfClass(typeof(Level))
+      .Cast<Level>()
+      .OrderBy(l => l.Elevation)
+      .Select(l => new {
+          Id = l.Id.Value,
+          Name = l.Name,
+          ElevationMm = Math.Round(l.Elevation * 304.8, 1)
+      })
+      .ToList();
+
+  return levels;
+parameters: []
+tags:
+  - query
+  - levels
+  - utility
+created_at: '2026-03-13T00:00:00'
+source_query: list all levels
+execution_count: 0
+last_used: ''

@@ -1,0 +1,303 @@
+{
+  "commands": [
+    {
+      "commandName": "say_hello",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Displays a greeting dialog",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "get_available_family_types",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "get available family types",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "get_current_view_elements",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "get current view elements",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "get_current_view_info",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "get current view info",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "get_selected_elements",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "get selected elements",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "create_point_based_element",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Create point-based elements like furniture",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "create_line_based_element",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Create line based element such as wall",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "create_surface_based_element",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Create surface-based elements like floors",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "color_splash",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Color elements by parameter value",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "tag_walls",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Tag all the walls in the model",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "delete_element",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Deletes elements using ElementId",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "ai_element_filter",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "AI element filter for querying elements by criteria",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "operate_element",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Operate on elements (select, color, hide, isolate, etc)",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "export_room_data",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Extract all rooms with detailed properties including area, volume, perimeter, and parameters",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "get_material_quantities",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Calculate material quantities and takeoffs with area and volume calculations per material",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "analyze_model_statistics",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Analyze model complexity with element counts by category, type, family, and level",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "create_grid",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Create grid system with smart spacing generation for project layout (alphabetic/numeric naming)",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "create_structural_framing_system",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Create structural beam framing system with configurable spacing and direction",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "create_room",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Create and place rooms at specified locations with custom names, numbers, and properties",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "tag_rooms",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Create tags for all rooms in the current view displaying room name and number",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "create_level",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Create levels at specified elevations with automatic floor plan view generation",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "send_code_to_revit",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Execute dynamic C# code in Revit with access to the Document and Revit API",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    },
+    {
+      "commandName": "create_dimensions",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Create dimension annotations between elements or points in the current view",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
+    }
+  ]
+}

@@ -112,6 +112,13 @@ sdk:
   num_workers_phase1: 10
   num_workers_phase2: 5
 
+# --- MCP Bridge (Revit 插件通信) ---
+mcp_bridge:
+  revit_host: "localhost"
+  revit_port: 18080
+  command_timeout: 60
+  connect_timeout: 5
+
 # --- 服务配置 ---
 server:
   host: "0.0.0.0"

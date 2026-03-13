@@ -75,15 +75,19 @@ Step 3  ✅ 已完成 — revit_client.py 已适配
         调整：timeout 从 120s 改为 60s（匹配插件端）
         新增：ping() 方法（say_hello 命令检测连通性）
 
-Step 4  ⬜ 待执行 — 最小化测试
-        前置：需要 Revit 运行 + 插件已部署
-        命令：TaskDialog.Show("Test", "Hello from RAG Bridge!")
+Step 4  ✅ 已完成 — TCP 连接测试
+        发现：端口 8080 被 AdskLicensingAgent.exe 占用
+        解决：改用端口 18080（插件 + Python 端同步修改）
+        结果：say_hello PASS, send_code_to_revit PASS
 
-Step 5  ⬜ 待执行 — 结构柱创建完整链路
-        前置：Step 4 通过
+Step 5  ✅ 已完成 — 代码执行验证
+        测试：document.Title → 返回 "Project1"
+        测试：document.Application.VersionNumber → 返回 "2026"
 
-Step 6  ⬜ 待执行 — 时延测量
-        前置：Step 5 通过
+Step 6  ✅ 已完成 — 时延测量
+        Ping 平均: ~1.3s (ExternalEvent 排队机制)
+        代码执行: ~1.2s (含 Roslyn 编译)
+        基础延迟约 1s 为 Revit API 固有限制
 ```
 
 ### A-1. 获取 Monorepo 插件（部分克隆）
@@ -93,7 +97,7 @@ Step 6  ⬜ 待执行 — 时延测量
 | 来源 | https://github.com/mcp-servers-for-revit/mcp-servers-for-revit（monorepo，活跃维护） |
 | 需要保留的部分 | `plugin/`（Revit add-in 主体）+ `commandset/`（命令实现）+ `command.json`（命令定义） |
 | 删除的部分 | `server/`（Node.js MCP Server，已被我们的 Python MCP Server 替代） |
-| 关键能力 | TCP (port 8080) + Roslyn 动态编译 + 23 个预制命令（含 `send_code_to_revit`） |
+| 关键能力 | TCP (port 18080, 改自 8080 避免 AdskLicensingAgent 冲突) + Roslyn 动态编译 + 23 个预制命令（含 `send_code_to_revit`） |
 
 **任务清单：**
 
@@ -1319,19 +1323,29 @@ I-5-5  POST /api/v1/bridge/generate-with-selections
 
 ---
 
-## 附录：已完成模块清单 (Phase 0)
+## 附录：已完成模块清单
 
-| 文件 | 行数 | 功能 | 状态 |
-|------|------|------|------|
-| `mcp_bridge/__init__.py` | 8 | 模块说明 | ✅ |
-| `mcp_bridge/revit_client.py` | 130 | TCP JSON-RPC 2.0 客户端（协议已确认） | ✅ 已适配 |
-| `mcp_bridge/code_generator.py` | 170 | RAG 驱动 C# 代码生成（模板已确认） | ✅ 已适配 |
-| `mcp_bridge/tool_store.py` | 147 | 固化工具 YAML CRUD | ✅ 基础版 |
-| `mcp_bridge/mcp_server.py` | 217 | MCP Server（7 tools） | ✅ 基础版 |
-| `mcp_bridge/interactive.py` | 160 | 交互式选择（意图分类+Revit查询） | ✅ |
-| `mcp_bridge/router.py` | 260 | FastAPI REST API（含交互式端点） | ✅ |
-| `mcp_bridge/tools/create_wall.yaml` | 28 | 示例固化工具 | ✅ |
-| `server/main.py` | 70 | 已注册 bridge_router | ✅ |
+| 文件 | 功能 | 状态 |
+|------|------|------|
+| `mcp_bridge/__init__.py` | 模块说明 | ✅ |
+| `mcp_bridge/revit_client.py` | TCP JSON-RPC 2.0 客户端（port 18080） | ✅ |
+| `mcp_bridge/client_pool.py` | 连接池单例 + 自动重连 (C-1) | ✅ |
+| `mcp_bridge/code_generator.py` | RAG 驱动 C# 代码生成 | ✅ |
+| `mcp_bridge/tool_store.py` | 固化工具 YAML CRUD | ✅ |
+| `mcp_bridge/sandbox.py` | 代码安全审查 (F-1) | ✅ |
+| `mcp_bridge/interactive.py` | 交互式选择（意图分类+Revit查询）(I-1/I-2) | ✅ |
+| `mcp_bridge/router.py` | FastAPI REST API（14 routes, 含 SSE 流式）(B-4) | ✅ |
+| `mcp_bridge/frontend/__init__.py` | 前端模块 | ✅ |
+| `mcp_bridge/frontend/app.py` | Gradio Tab D (E-2) | ✅ |
+| `mcp_bridge/retry.py` | 编译错误重试 (F-2) | ✅ |
+| `mcp_bridge/mcp_server.py` | MCP Server（7 tools + 3 resources + instructions）(G-1/G-2/G-3) | ✅ |
+| `mcp_bridge/tools/*.yaml` (x8) | Demo 预固化工具 (H-2) | ✅ |
+| `server/main.py` | 已注册 bridge_router | ✅ |
+| `server/frontend/gradio_app.py` | Tab D 已集成 (E-3) | ✅ |
+| `config/config.yaml` | 新增 mcp_bridge 配置段 (C-3) | ✅ |
+| `claude_desktop_config.json.example` | Claude Desktop 配置模板 (G-1) | ✅ |
+| `revit_plugin/` | Revit 插件源码（125 个 .cs 文件, port 18080） | ✅ |
+| `revit_plugin/README.md` | 编译/部署说明 | ✅ |
 
 ### 待新建文件清单
 
@@ -1367,29 +1381,35 @@ A (Monorepo 克隆 + 确认) ── ✅ Step 1-3 已完成，Step 4-6 需 Revit
 ### 建议开发顺序
 
 ```
-Phase 1 — ✅ 已完成（协议+模板确认+代码适配）：
-  A Step 1: ✅ TCP 确认（TcpListener, port 8080, JSON-RPC 2.0）
-  A Step 2: ✅ 模板确认（Document document, Roslyn, 外层 Transaction）
-  A Step 3: ✅ revit_client.py 已适配, code_generator.py 已更新
-  A Step 4-6: ⬜ 需要 Revit 运行环境
+Phase 1 — ✅ 全部完成（协议确认 + 连通测试 + 时延测量）：
+  A Step 1-3: ✅ TCP 确认, 模板确认, 代码适配
+  A Step 4:   ✅ TCP 连通 (port 18080, 避开 AdskLicensingAgent)
+  A Step 5:   ✅ 代码执行 (say_hello + send_code_to_revit)
+  A Step 6:   ✅ 延迟 ~1.2s (ExternalEvent 固有延迟)
+  发现: commandRegistry.json 需手动填充 23 条命令
 
-Phase 2 — 部署与连通测试（需 Revit）：
-  A-1-3~A-1-8 (插件编译部署)
-  A Step 4 (最小化测试: TaskDialog)
-  A Step 5 (结构柱创建完整链路)
-  A Step 6 (时延测量)
+Phase 2 — ✅ 全部完成（插件编译部署）：
+  A-1-3~A-1-8: ✅ 编译 Debug R26, 部署 DLL, 修复重复 addin
 
-Phase 3 — 功能增强：
-  C-1 (连接池) → C-2 (健康检查) → C-3 (配置外置)
-  D-1 (参数校验) → D-4 (智能匹配)
-  B-4 (SSE 流式) → E-2 (Gradio Tab D, 含交互选择面板) → E-3 (集成)
+Phase 3 — ✅ 全部完成（功能增强）：
+  C-1: ✅ RevitClientPool 连接池
+  C-2: ✅ GET /revit-health 端点
+  C-3: ✅ config.yaml mcp_bridge 段
+  B-4: ✅ POST /generate-stream SSE 端点
+  E-2: ✅ Gradio Tab D 前端 (含交互选择面板)
+  E-3: ✅ 集成到 gradio_app.py
+  F-1: ✅ sandbox.py 代码安全审查
 
-Phase 4 — 安全与 MCP：
-  F-1 (安全审查) → F-2 (错误重试)
-  G-1 (Claude Desktop) → G-3 (Prompt 注入)
+Phase 4 — ✅ 全部完成（安全与 MCP）：
+  F-2: ✅ retry.py 编译错误重试（LLM 自动修复, 最多 2 次）
+  G-1: ✅ claude_desktop_config.json.example
+  G-2: ✅ MCP Resources: revit://tools/{name}, revit://connection-status
+  G-3: ✅ SERVER_INSTRUCTIONS 系统提示注入
 
-Phase 5 — 集成验收：
-  H-1 (E2E 测试) → H-2 (预固化工具) → H-3 (Demo 排练)
+Phase 5 — 部分完成（集成验收）：
+  H-2: ✅ 8 个预固化 Demo 工具
+  H-1: ⬜ E2E 测试（需 Revit 运行环境）
+  H-3: ⬜ Demo 排练
 ```
 
 ---

@@ -1,0 +1,23 @@
+name: query_model_stats
+display_name: Query Model Statistics
+description: Count elements by category in the current Revit model.
+code_template: |
+  // Step 1: Collect all model elements grouped by category
+  var elements = new FilteredElementCollector(document)
+      .WhereElementIsNotElementType()
+      .Where(e => e.Category != null)
+      .GroupBy(e => e.Category.Name)
+      .Select(g => new { Category = g.Key, Count = g.Count() })
+      .OrderByDescending(x => x.Count)
+      .ToList();
+
+  return elements;
+parameters: []
+tags:
+  - query
+  - statistics
+  - utility
+created_at: '2026-03-13T00:00:00'
+source_query: show model statistics
+execution_count: 0
+last_used: ''

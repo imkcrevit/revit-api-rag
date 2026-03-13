@@ -1,0 +1,59 @@
+name: create_floor
+display_name: Create Floor
+description: Create a rectangular floor slab at specified coordinates and dimensions.
+code_template: |
+  // Step 1: Get floor type
+  var floorType = new FilteredElementCollector(document)
+      .OfClass(typeof(FloorType))
+      .Cast<FloorType>()
+      .FirstOrDefault();
+  if (floorType == null)
+      return new { Status = "Error", Message = "No floor type found" };
+
+  // Step 2: Get level
+  var level = new FilteredElementCollector(document)
+      .OfClass(typeof(Level))
+      .Cast<Level>()
+      .OrderBy(l => l.Elevation)
+      .First();
+
+  // Step 3: Create rectangular profile (mm -> feet)
+  double x0 = {x} / 304.8, y0 = {y} / 304.8;
+  double w = {width} / 304.8, h = {length} / 304.8;
+  var profile = new List<Curve>();
+  profile.Add(Line.CreateBound(new XYZ(x0, y0, 0), new XYZ(x0 + w, y0, 0)));
+  profile.Add(Line.CreateBound(new XYZ(x0 + w, y0, 0), new XYZ(x0 + w, y0 + h, 0)));
+  profile.Add(Line.CreateBound(new XYZ(x0 + w, y0 + h, 0), new XYZ(x0, y0 + h, 0)));
+  profile.Add(Line.CreateBound(new XYZ(x0, y0 + h, 0), new XYZ(x0, y0, 0)));
+  var curveLoop = CurveLoop.Create(profile);
+
+  // Step 4: Create floor
+  var floor = Floor.Create(document, new List<CurveLoop> { curveLoop },
+                           floorType.Id, level.Id);
+
+  return new { ElementId = floor.Id.Value, Status = "Created" };
+parameters:
+  - name: x
+    type: double
+    description: Floor origin X (mm)
+    default: '0'
+  - name: y
+    type: double
+    description: Floor origin Y (mm)
+    default: '0'
+  - name: width
+    type: double
+    description: Floor width (mm)
+    default: '6000'
+  - name: length
+    type: double
+    description: Floor length (mm)
+    default: '8000'
+tags:
+  - floor
+  - create
+  - basic
+created_at: '2026-03-13T00:00:00'
+source_query: create a floor slab
+execution_count: 0
+last_used: ''

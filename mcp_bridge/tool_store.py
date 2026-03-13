@@ -123,15 +123,65 @@ class ToolStore:
         data["last_used"] = datetime.now().isoformat()
         path.write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
+    # -- Validation ------------------------------------------------------------
+
+    def validate_params(
+        self, name: str, params: dict | None = None,
+    ) -> tuple[bool, list[str], dict]:
+        """Validate and fill default values for tool parameters.
+
+        Returns (valid, errors, filled_params):
+          - valid: True if all checks pass
+          - errors: list of human-readable error strings
+          - filled_params: params dict with defaults filled in
+        """
+        tool = self.load(name)
+        if not tool:
+            return False, [f"Tool '{name}' not found"], {}
+
+        params = dict(params or {})
+        errors: list[str] = []
+
+        for pdef in tool.parameters:
+            pname = pdef["name"]
+            ptype = pdef.get("type", "string").lower()
+            has_default = "default" in pdef
+
+            if pname not in params:
+                if has_default:
+                    params[pname] = pdef["default"]
+                else:
+                    errors.append(f"Missing required parameter: {pname}")
+                    continue
+
+            # Type coercion check for numeric types
+            if pname in params and ptype in ("double", "number", "float", "int", "integer"):
+                try:
+                    float(params[pname])
+                except (ValueError, TypeError):
+                    errors.append(
+                        f"Parameter '{pname}' expects {ptype}, got {params[pname]!r}"
+                    )
+
+        return (len(errors) == 0, errors, params)
+
     # -- Render ----------------------------------------------------------------
 
     def render_code(self, name: str, params: dict | None = None) -> str | None:
-        """Load tool and fill parameter placeholders in code template."""
+        """Load tool and fill parameter placeholders in code template.
+
+        Validates params first; returns None if validation fails.
+        """
         tool = self.load(name)
         if not tool:
             return None
+
+        valid, errors, filled = self.validate_params(name, params)
+        if not valid:
+            return None
+
         code = tool.code_template
-        for k, v in (params or {}).items():
+        for k, v in filled.items():
             code = code.replace(f"{{{k}}}", str(v))
         return code
 
@@ -144,3 +194,14 @@ class ToolStore:
             if query_lower in searchable:
                 results.append(tool)
         return results
+
+    def match_tool(self, user_query: str) -> SolidifiedTool | None:
+        """Smart tool matching: return a tool only if there is exactly one
+        keyword match that has been successfully executed before.
+
+        Returns None when the caller should fall back to RAG generation.
+        """
+        matches = self.search(user_query)
+        if len(matches) == 1 and matches[0].execution_count > 0:
+            return matches[0]
+        return None

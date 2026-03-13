@@ -1,0 +1,8 @@
+# Build artifacts — compiled DLLs are distributed via GitHub Release
+plugin/bin/
+plugin/obj/
+commandset/bin/
+commandset/obj/
+
+# NuGet packages
+*.nupkg

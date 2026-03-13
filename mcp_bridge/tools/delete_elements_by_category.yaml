@@ -1,0 +1,36 @@
+name: delete_elements_by_category
+display_name: Delete Elements By Category
+description: Delete all elements of a specified built-in category (e.g. OST_Walls,
+  OST_StructuralColumns).
+code_template: |
+  // Step 1: Collect elements by category
+  var category = (BuiltInCategory)Enum.Parse(typeof(BuiltInCategory), "{category}");
+  var elements = new FilteredElementCollector(document)
+      .OfCategory(category)
+      .WhereElementIsNotElementType()
+      .ToList();
+
+  if (elements.Count == 0)
+      return new { Status = "NoElements", Message = "No elements found in category {category}" };
+
+  // Step 2: Delete all found elements
+  int deleted = 0;
+  foreach (var elem in elements)
+  {
+      document.Delete(elem.Id);
+      deleted++;
+  }
+
+  return new { Status = "Deleted", Count = deleted, Category = "{category}" };
+parameters:
+  - name: category
+    type: string
+    description: 'BuiltInCategory name (e.g. OST_Walls, OST_StructuralColumns, OST_Floors)'
+tags:
+  - delete
+  - batch
+  - utility
+created_at: '2026-03-13T00:00:00'
+source_query: delete all walls
+execution_count: 0
+last_used: ''

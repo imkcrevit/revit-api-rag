@@ -1,0 +1,33 @@
+name: modify_wall_height
+display_name: Modify Wall Height
+description: Change the height of a wall by ElementId.
+code_template: |
+  // Step 1: Get wall by ID
+  var elementId = new ElementId({element_id});
+  var wall = document.GetElement(elementId) as Wall;
+  if (wall == null)
+      return new { Status = "Error", Message = "Wall not found with ID {element_id}" };
+
+  // Step 2: Set new height (mm -> feet)
+  var heightParam = wall.get_Parameter(BuiltInParameter.WALL_USER_HEIGHT_PARAM);
+  double oldHeight = Math.Round(heightParam.AsDouble() * 304.8, 1);
+  heightParam.Set({height} / 304.8);
+
+  return new { ElementId = {element_id}, Status = "Modified",
+               OldHeightMm = oldHeight, NewHeightMm = {height} };
+parameters:
+  - name: element_id
+    type: integer
+    description: Wall ElementId (integer)
+  - name: height
+    type: double
+    description: New wall height (mm)
+    default: '3000'
+tags:
+  - wall
+  - modify
+  - utility
+created_at: '2026-03-13T00:00:00'
+source_query: change wall height
+execution_count: 0
+last_used: ''

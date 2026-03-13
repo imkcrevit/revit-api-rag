@@ -3,7 +3,7 @@ Revit TCP Client — JSON-RPC 2.0 over raw TCP socket to Revit plugin.
 
 Protocol confirmed from monorepo SocketService.cs:
 - Transport: TcpListener / TcpClient (NOT WebSocket)
-- Port: 8080 (hard-coded in plugin)
+- Port: 18080 (changed from 8080 — 8080 conflicts with AdskLicensingAgent)
 - Message format: JSON-RPC 2.0, UTF-8, no delimiter (raw read)
 - Buffer: 8192 bytes per read on plugin side
 - send_code_to_revit timeout: 60s (plugin-side RaiseAndWaitForCompletion)
@@ -29,7 +29,7 @@ class RevitResponse:
 class RevitClient:
     """Async TCP client that speaks JSON-RPC 2.0 to the Revit plugin."""
 
-    def __init__(self, host: str = "localhost", port: int = 8080,
+    def __init__(self, host: str = "localhost", port: int = 18080,
                  timeout: float = 60.0, connect_timeout: float = 5.0):
         self.host = host
         self.port = port

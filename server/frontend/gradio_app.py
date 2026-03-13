@@ -196,6 +196,16 @@ def create_gradio_app() -> gr.Blocks:
                 except ImportError:
                     gr.Markdown("Intent Bridge module not available.")
 
+            # ==========================================================
+            # Tab D: MCP Bridge (Code Execution)
+            # ==========================================================
+            with gr.Tab("MCP Bridge"):
+                try:
+                    from mcp_bridge.frontend.app import create_bridge_tab
+                    create_bridge_tab()
+                except ImportError:
+                    gr.Markdown("MCP Bridge module not available.")
+
         # ==============================================================
         # Event handlers
         # ==============================================================

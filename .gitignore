@@ -212,3 +212,12 @@ data/chromadb_api.tar.gz
 data/chromadb_code.tar.gz
 data/sqlite/*.db
 !data/sqlite/revit-api-*/
+
+# Revit plugin build artifacts (distributed via GitHub Release)
+revit_plugin/plugin/bin/
+revit_plugin/plugin/obj/
+revit_plugin/commandset/bin/
+revit_plugin/commandset/obj/
+
+# Temporary analysis scripts
+scratch/

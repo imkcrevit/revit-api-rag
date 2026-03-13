@@ -1,0 +1,63 @@
+name: create_beam
+display_name: Create Beam
+description: Create a structural beam between two points using first available beam
+  family type.
+code_template: |
+  // Step 1: Get beam family symbol
+  var symbol = new FilteredElementCollector(document)
+      .OfClass(typeof(FamilySymbol))
+      .OfCategory(BuiltInCategory.OST_StructuralFraming)
+      .Cast<FamilySymbol>()
+      .FirstOrDefault();
+  if (symbol == null)
+      return new { Status = "Error", Message = "No beam type found" };
+  if (!symbol.IsActive) symbol.Activate();
+
+  // Step 2: Get level
+  var level = new FilteredElementCollector(document)
+      .OfClass(typeof(Level))
+      .Cast<Level>()
+      .OrderBy(l => l.Elevation)
+      .First();
+
+  // Step 3: Create beam line (mm -> feet)
+  XYZ start = new XYZ({start_x} / 304.8, {start_y} / 304.8, {elevation} / 304.8);
+  XYZ end = new XYZ({end_x} / 304.8, {end_y} / 304.8, {elevation} / 304.8);
+  Line beamLine = Line.CreateBound(start, end);
+
+  // Step 4: Create beam instance
+  var beam = document.Create.NewFamilyInstance(
+      beamLine, symbol, level,
+      Autodesk.Revit.DB.Structure.StructuralType.Beam);
+
+  return new { ElementId = beam.Id.Value, Status = "Created",
+               FamilyType = symbol.Name };
+parameters:
+  - name: start_x
+    type: double
+    description: Beam start X (mm)
+    default: '0'
+  - name: start_y
+    type: double
+    description: Beam start Y (mm)
+    default: '0'
+  - name: end_x
+    type: double
+    description: Beam end X (mm)
+    default: '5000'
+  - name: end_y
+    type: double
+    description: Beam end Y (mm)
+    default: '0'
+  - name: elevation
+    type: double
+    description: Beam elevation (mm)
+    default: '3000'
+tags:
+  - beam
+  - structural
+  - create
+created_at: '2026-03-13T00:00:00'
+source_query: create a structural beam
+execution_count: 0
+last_used: ''

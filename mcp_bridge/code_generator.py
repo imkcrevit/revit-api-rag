@@ -61,13 +61,14 @@ System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB, Autodesk.Rev
 6. All coordinates in Revit internal units (feet).
    User mm -> divide by 304.8. User m -> divide by 0.3048.
 7. Return a meaningful result:
-   `return new {{ ElementId = element.Id.IntegerValue, Status = "Created" }};`
+   `return new {{ ElementId = element.Id.Value, Status = "Created" }};`
 8. Structure code with numbered step comments:
    `// Step 1: [purpose] — [which API and why]`
 9. Common pitfalls:
    - FamilySymbol must call Activate() before placing instances
    - FilteredElementCollector needs OfClass() or OfCategory()
    - Do NOT use `using` statements for Revit objects
+   - Revit 2024+: use `ElementId.Value` (long), NOT `ElementId.IntegerValue` (removed)
 10. If the code needs user-supplied values, use placeholders: `{{{{param_name}}}}`.
 {selections_context}
 ## Retrieved API Documentation

@@ -1,43 +1,42 @@
 name: create_wall
 display_name: Create Wall
-description: Create a wall between two points with specified height and wall type.
+description: Create a wall between two points with specified height. Uses first available
+  wall type and first level.
 code_template: |
-  using(Transaction tx = new Transaction(doc, "Create Wall"))
-  {
-      tx.Start();
+  // Step 1: Get first level
+  var level = new FilteredElementCollector(document)
+      .OfClass(typeof(Level))
+      .Cast<Level>()
+      .OrderBy(l => l.Elevation)
+      .First();
 
-      // Get level
-      FilteredElementCollector levelCollector = new FilteredElementCollector(doc);
-      Level level = levelCollector.OfClass(typeof(Level)).FirstElement() as Level;
+  // Step 2: Create wall line from mm coordinates
+  XYZ start = new XYZ({start_x} / 304.8, {start_y} / 304.8, 0);
+  XYZ end = new XYZ({end_x} / 304.8, {end_y} / 304.8, 0);
+  Line wallLine = Line.CreateBound(start, end);
 
-      // Create line for wall
-      XYZ start = new XYZ({start_x} / 304.8, {start_y} / 304.8, 0);
-      XYZ end = new XYZ({end_x} / 304.8, {end_y} / 304.8, 0);
-      Line wallLine = Line.CreateBound(start, end);
+  // Step 3: Create wall (Transaction already active — do NOT create one)
+  Wall wall = Wall.Create(document, wallLine, level.Id, false);
+  wall.get_Parameter(BuiltInParameter.WALL_USER_HEIGHT_PARAM)
+      .Set({height} / 304.8);
 
-      // Create wall
-      Wall wall = Wall.Create(doc, wallLine, level.Id, false);
-      wall.get_Parameter(BuiltInParameter.WALL_USER_HEIGHT_PARAM)
-          .Set({height} / 304.8);
-
-      tx.Commit();
-  }
+  return new { ElementId = wall.Id.Value, Status = "Created" };
 parameters:
   - name: start_x
     type: double
-    description: Wall start point X coordinate (mm)
+    description: Wall start X (mm)
     default: '0'
   - name: start_y
     type: double
-    description: Wall start point Y coordinate (mm)
+    description: Wall start Y (mm)
     default: '0'
   - name: end_x
     type: double
-    description: Wall end point X coordinate (mm)
+    description: Wall end X (mm)
     default: '5000'
   - name: end_y
     type: double
-    description: Wall end point Y coordinate (mm)
+    description: Wall end Y (mm)
     default: '0'
   - name: height
     type: double
@@ -48,6 +47,6 @@ tags:
   - create
   - basic
 created_at: '2026-03-13T00:00:00'
-source_query: create a 3m high wall
+source_query: create a wall
 execution_count: 0
 last_used: ''

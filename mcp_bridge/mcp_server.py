@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -29,7 +30,7 @@ if _root not in sys.path:
 from mcp.server.fastmcp import FastMCP
 
 from mcp_bridge.tool_store import ToolStore
-from mcp_bridge.revit_client import RevitClient
+from mcp_bridge.client_pool import RevitClientPool
 
 # Lazy-loaded singletons
 _retriever = None
@@ -56,10 +57,61 @@ def _get_llm():
 
 # ── MCP Server ───────────────────────────────────────────────────────────────
 
+SERVER_INSTRUCTIONS = """\
+You are a Revit API assistant powered by the Revit-RAG-Bridge MCP server.
+You have access to the following capabilities:
+
+## Available Tools
+
+1. **search_revit_api** — Semantic search across 27,596 Revit 2026 API documentation entries.
+   Returns method signatures, parameters, return types, and usage notes.
+
+2. **get_code_examples** — Retrieve real C# code samples from the official Revit SDK.
+   These are golden examples that demonstrate correct API usage patterns.
+
+3. **generate_code** — Generate executable C# code for Revit using RAG context.
+   Combines API docs + SDK examples + LLM to produce ready-to-run code.
+
+4. **execute_code** — Send C# code to a running Revit instance for execution via TCP (port 18080).
+   The code runs inside Revit's ExternalEvent handler with full API access.
+
+5. **solidify_tool** — Save a successfully executed code snippet as a reusable named tool.
+   Tools are stored as YAML with parameterized code templates.
+
+6. **list_tools** — List all solidified (saved) tools available for execution.
+
+7. **run_tool** — Execute a previously solidified tool by name, filling in parameter values.
+
+## Recommended Workflow
+
+1. **Search** — Use `search_revit_api` to find relevant API classes and methods.
+2. **Examples** — Use `get_code_examples` to see how the SDK uses those APIs.
+3. **Generate** — Use `generate_code` to create C# code for the user's request.
+4. **Execute** — Use `execute_code` to run the code in Revit and verify it works.
+5. **Solidify** — If execution succeeds, use `solidify_tool` to save it for reuse.
+6. **Reuse** — Next time, use `list_tools` + `run_tool` to execute saved tools directly.
+
+## Resources
+
+- `revit://stats` — Knowledge base and tool statistics.
+- `revit://tools/{name}` — View the YAML definition of a solidified tool.
+- `revit://connection-status` — Check whether Revit is connected and reachable.
+
+## Notes
+
+- All generated code targets **Revit 2026** APIs.
+- The Revit plugin listens on **localhost:18080** (TCP, JSON-RPC 2.0).
+- Code executes inside a Revit `ExternalEvent` handler — it has full access to
+  `UIApplication`, `Document`, and all Revit API namespaces.
+- Always prefer searching the API docs before generating code to ensure correct
+  class names, method signatures, and parameter types.
+"""
+
 mcp = FastMCP(
     "Revit-RAG-Bridge",
     version="1.0.0",
     description="RAG-powered Revit code generation, execution, and tool solidification",
+    instructions=SERVER_INSTRUCTIONS,
 )
 
 
@@ -102,11 +154,10 @@ def generate_code(user_request: str) -> str:
 
 @mcp.tool()
 async def execute_code(code: str, parameters: list | None = None) -> str:
-    """Send C# code to Revit for execution via TCP socket (port 8080).
+    """Send C# code to Revit for execution via TCP socket (port 18080).
     Returns execution result or error message."""
-    client = RevitClient()
     try:
-        await client.connect()
+        client = await RevitClientPool.get_client()
         resp = await client.send_code(code, parameters)
         return json.dumps({
             "success": resp.success,
@@ -115,8 +166,6 @@ async def execute_code(code: str, parameters: list | None = None) -> str:
         }, ensure_ascii=False, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
-    finally:
-        await client.disconnect()
 
 
 # ── Solidification Tools ─────────────────────────────────────────────────────
@@ -179,10 +228,9 @@ async def run_tool(name: str, params: str = "{}") -> str:
     if code is None:
         return json.dumps({"success": False, "error": f"Tool '{name}' not found."})
 
-    # Execute
-    client = RevitClient()
+    # Execute via client pool
     try:
-        await client.connect()
+        client = await RevitClientPool.get_client()
         resp = await client.send_code(code)
         if resp.success:
             _tool_store.record_usage(name)
@@ -194,11 +242,9 @@ async def run_tool(name: str, params: str = "{}") -> str:
         }, ensure_ascii=False, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
-    finally:
-        await client.disconnect()
 
 
-# ── Resource: API Stats ──────────────────────────────────────────────────────
+# ── Resources ────────────────────────────────────────────────────────────────
 
 @mcp.resource("revit://stats")
 def api_stats() -> str:
@@ -208,6 +254,29 @@ def api_stats() -> str:
         f"API docs: 27,596 entries | SDK examples: 153 | Revit 2026\n"
         f"Solidified tools: {len(tools)}"
     )
+
+
+@mcp.resource("revit://tools/{name}")
+def tool_resource(name: str) -> str:
+    """Returns the YAML definition of a solidified tool by name."""
+    safe_name = re.sub(r"[^\w\-]", "_", name)
+    tool_path = _tool_store._tool_path(safe_name)
+    if not tool_path.exists():
+        return json.dumps({"error": f"Tool '{name}' not found."})
+    return tool_path.read_text(encoding="utf-8")
+
+
+@mcp.resource("revit://connection-status")
+async def connection_status() -> str:
+    """Check whether the Revit plugin is reachable on localhost:18080."""
+    reachable = await RevitClientPool.ping()
+    status = {
+        "host": "localhost",
+        "port": 18080,
+        "reachable": reachable,
+        "status": "connected" if reachable else "disconnected",
+    }
+    return json.dumps(status, indent=2)
 
 
 # ── Entry Point ──────────────────────────────────────────────────────────────
