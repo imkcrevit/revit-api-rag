@@ -110,6 +110,15 @@ def _list_tools() -> list[dict]:
         return []
 
 
+def _get_tool_choices(name: str) -> dict:
+    """Fetch dynamic parameter choices from Revit for a tool."""
+    try:
+        resp = httpx.get(_bridge_url(f"/tools/{name}/choices"), timeout=30)
+        return resp.json()
+    except Exception:
+        return {}
+
+
 def _run_tool(name: str, params: dict) -> dict:
     try:
         resp = httpx.post(_bridge_url(f"/tools/{name}/run"),
@@ -198,7 +207,15 @@ def create_bridge_tab():
         )
         with gr.Row():
             run_tool_name = gr.Textbox(label="Tool Name", placeholder="e.g. create_wall")
-            run_tool_params = gr.Textbox(label="Params (JSON)", placeholder='{"height": 3000}')
+            load_choices_btn = gr.Button("Load Choices", size="sm", scale=0)
+        tool_choices_state = gr.State({})
+        tool_choices_display = gr.JSON(label="Dynamic Choices (from Revit)", visible=False)
+        run_tool_params = gr.Textbox(
+            label="Params (JSON)",
+            placeholder='{"level_name": "L1", "height": 3000}',
+            lines=3,
+        )
+        with gr.Row():
             run_tool_btn = gr.Button("Run Tool", variant="primary")
         run_tool_result = gr.Textbox(label="Tool Result", interactive=False)
 
@@ -338,6 +355,23 @@ def create_bridge_tab():
             ])
         return rows
 
+    def on_load_choices(name):
+        if not name.strip():
+            return {}, gr.update(visible=False), ""
+        choices = _get_tool_choices(name)
+        if not choices:
+            return {}, gr.update(visible=False), ""
+        # Pre-fill params JSON with first available choice for each dynamic param
+        prefill = {}
+        for param_name, items in choices.items():
+            if items:
+                prefill[param_name] = items[0]["value"]
+        return (
+            choices,
+            gr.update(visible=True, value=choices),
+            json.dumps(prefill, indent=2, ensure_ascii=False),
+        )
+
     def on_run_tool(name, params_json):
         if not name.strip():
             return "Please enter a tool name."
@@ -379,5 +413,10 @@ def create_bridge_tab():
     )
 
     tools_refresh_btn.click(on_refresh_tools, outputs=[tools_table])
+    load_choices_btn.click(
+        on_load_choices,
+        inputs=[run_tool_name],
+        outputs=[tool_choices_state, tool_choices_display, run_tool_params],
+    )
     run_tool_btn.click(on_run_tool, inputs=[run_tool_name, run_tool_params],
                        outputs=[run_tool_result])

@@ -3,12 +3,13 @@ display_name: Create Wall
 description: Create a wall between two points with specified height. Uses first available
   wall type and first level.
 code_template: |
-  // Step 1: Get first level
+  // Step 1: Get level by name
   var level = new FilteredElementCollector(document)
       .OfClass(typeof(Level))
       .Cast<Level>()
-      .OrderBy(l => l.Elevation)
-      .First();
+      .FirstOrDefault(l => l.Name == "{level_name}");
+  if (level == null)
+      return new { Status = "Error", Message = "Level '{level_name}' not found" };
 
   // Step 2: Create wall line from mm coordinates
   XYZ start = new XYZ({start_x} / 304.8, {start_y} / 304.8, 0);
@@ -20,8 +21,12 @@ code_template: |
   wall.get_Parameter(BuiltInParameter.WALL_USER_HEIGHT_PARAM)
       .Set({height} / 304.8);
 
-  return new { ElementId = wall.Id.Value, Status = "Created" };
+  return new { ElementId = wall.Id.Value, Status = "Created", Level = level.Name };
 parameters:
+  - name: level_name
+    type: string
+    description: Target level name
+    choices_from: levels
   - name: start_x
     type: double
     description: Wall start X (mm)

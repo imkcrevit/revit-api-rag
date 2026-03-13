@@ -18,7 +18,8 @@ code_template: |
 parameters:
   - name: element_id
     type: integer
-    description: Wall ElementId (integer)
+    description: Wall ElementId
+    choices_from: elements:OST_Walls
   - name: height
     type: double
     description: New wall height (mm)

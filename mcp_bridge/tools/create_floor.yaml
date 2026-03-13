@@ -2,20 +2,21 @@ name: create_floor
 display_name: Create Floor
 description: Create a rectangular floor slab at specified coordinates and dimensions.
 code_template: |
-  // Step 1: Get floor type
+  // Step 1: Get floor type by name
   var floorType = new FilteredElementCollector(document)
       .OfClass(typeof(FloorType))
       .Cast<FloorType>()
-      .FirstOrDefault();
+      .FirstOrDefault(ft => ft.Name == "{type_name}");
   if (floorType == null)
-      return new { Status = "Error", Message = "No floor type found" };
+      return new { Status = "Error", Message = "Floor type '{type_name}' not found" };
 
-  // Step 2: Get level
+  // Step 2: Get level by name
   var level = new FilteredElementCollector(document)
       .OfClass(typeof(Level))
       .Cast<Level>()
-      .OrderBy(l => l.Elevation)
-      .First();
+      .FirstOrDefault(l => l.Name == "{level_name}");
+  if (level == null)
+      return new { Status = "Error", Message = "Level '{level_name}' not found" };
 
   // Step 3: Create rectangular profile (mm -> feet)
   double x0 = {x} / 304.8, y0 = {y} / 304.8;
@@ -31,8 +32,17 @@ code_template: |
   var floor = Floor.Create(document, new List<CurveLoop> { curveLoop },
                            floorType.Id, level.Id);
 
-  return new { ElementId = floor.Id.Value, Status = "Created" };
+  return new { ElementId = floor.Id.Value, Status = "Created",
+               FloorType = floorType.Name, Level = level.Name };
 parameters:
+  - name: type_name
+    type: string
+    description: Floor type name
+    choices_from: floor_types
+  - name: level_name
+    type: string
+    description: Target level name
+    choices_from: levels
   - name: x
     type: double
     description: Floor origin X (mm)

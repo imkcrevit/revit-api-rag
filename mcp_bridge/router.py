@@ -350,6 +350,83 @@ async def run_tool(name: str, req: RunToolRequest):
         raise HTTPException(502, "Cannot connect to Revit plugin (port 18080)")
 
 
+@bridge_router.get("/tools/{name}/choices")
+async def get_tool_choices(name: str):
+    """Query Revit for dynamic parameter choices (levels, family types, elements).
+
+    Returns {param_name: [{label, value}, ...]} for each dynamic parameter.
+    """
+    dynamic_params = _tool_store.get_dynamic_params(name)
+    if not dynamic_params:
+        return {}
+
+    try:
+        client = await _get_revit_client()
+        executor = RevitQueryExecutor(client)
+        choices: dict[str, list[dict]] = {}
+
+        for p in dynamic_params:
+            source = p["choices_from"]
+            items: list[dict] = []
+
+            if source == "levels":
+                levels = await executor.get_levels()
+                items = [
+                    {"label": f"{lv.get('Name', '?')} ({lv.get('ElevationMm', 0)}mm)",
+                     "value": lv.get("Name", "")}
+                    for lv in levels
+                ]
+            elif source.startswith("family_types:"):
+                category = source.split(":", 1)[1]
+                types = await executor.get_family_types([category])
+                items = [
+                    {"label": t.get("name", t.get("Name", str(t))),
+                     "value": t.get("name", t.get("Name", str(t)))}
+                    for t in types
+                ]
+            elif source == "floor_types":
+                code = (
+                    'var types = new FilteredElementCollector(document)\n'
+                    '    .OfClass(typeof(FloorType))\n'
+                    '    .Cast<FloorType>()\n'
+                    '    .Select(ft => new { Name = ft.Name, Id = ft.Id.Value })\n'
+                    '    .ToList();\n'
+                    'return types;'
+                )
+                resp = await client.send_code(code)
+                if resp.success and resp.result:
+                    data = resp.result if isinstance(resp.result, list) else [resp.result]
+                    items = [
+                        {"label": ft.get("Name", str(ft)),
+                         "value": ft.get("Name", str(ft))}
+                        for ft in data
+                    ]
+            elif source.startswith("elements:"):
+                category = source.split(":", 1)[1]
+                code = (
+                    f'var elems = new FilteredElementCollector(document)\n'
+                    f'    .OfCategory(BuiltInCategory.{category})\n'
+                    f'    .WhereElementIsNotElementType()\n'
+                    f'    .Select(e => new {{ Id = e.Id.Value, Name = e.Name }})\n'
+                    f'    .ToList();\n'
+                    f'return elems;'
+                )
+                resp = await client.send_code(code)
+                if resp.success and resp.result:
+                    data = resp.result if isinstance(resp.result, list) else [resp.result]
+                    items = [
+                        {"label": f"{el.get('Name', '?')} (ID: {el.get('Id', '?')})",
+                         "value": el.get("Id", "")}
+                        for el in data
+                    ]
+
+            choices[p["name"]] = items
+
+        return choices
+    except (ConnectionError, OSError):
+        raise HTTPException(502, "Cannot connect to Revit plugin (port 18080)")
+
+
 @bridge_router.delete("/tools/{name}")
 async def delete_tool(name: str):
     """Delete a solidified tool."""

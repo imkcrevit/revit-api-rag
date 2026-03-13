@@ -215,9 +215,68 @@ def list_tools() -> str:
 
 
 @mcp.tool()
+async def get_tool_choices(name: str) -> str:
+    """Query Revit for dynamic parameter choices of a solidified tool.
+    Call this BEFORE run_tool to discover available levels, family types, etc.
+    Returns {param_name: [{label, value}, ...]} for parameters that need selection."""
+    from mcp_bridge.interactive import RevitQueryExecutor
+    dynamic_params = _tool_store.get_dynamic_params(name)
+    if not dynamic_params:
+        return json.dumps({"message": f"Tool '{name}' has no dynamic parameters"})
+
+    try:
+        client = await RevitClientPool.get_client()
+        executor = RevitQueryExecutor(client)
+        choices: dict[str, list[dict]] = {}
+
+        for p in dynamic_params:
+            source = p["choices_from"]
+            items: list[dict] = []
+
+            if source == "levels":
+                levels = await executor.get_levels()
+                items = [{"label": f"{lv.get('Name','?')} ({lv.get('ElevationMm',0)}mm)",
+                          "value": lv.get("Name", "")} for lv in levels]
+            elif source.startswith("family_types:"):
+                category = source.split(":", 1)[1]
+                types = await executor.get_family_types([category])
+                items = [{"label": t.get("name", t.get("Name", str(t))),
+                          "value": t.get("name", t.get("Name", str(t)))} for t in types]
+            elif source == "floor_types":
+                code = ('var types = new FilteredElementCollector(document)\n'
+                        '    .OfClass(typeof(FloorType)).Cast<FloorType>()\n'
+                        '    .Select(ft => new { Name = ft.Name, Id = ft.Id.Value }).ToList();\n'
+                        'return types;')
+                resp = await client.send_code(code)
+                if resp.success and resp.result:
+                    data = resp.result if isinstance(resp.result, list) else [resp.result]
+                    items = [{"label": ft.get("Name", str(ft)),
+                              "value": ft.get("Name", str(ft))} for ft in data]
+            elif source.startswith("elements:"):
+                category = source.split(":", 1)[1]
+                code = (f'var elems = new FilteredElementCollector(document)\n'
+                        f'    .OfCategory(BuiltInCategory.{category})\n'
+                        f'    .WhereElementIsNotElementType()\n'
+                        f'    .Select(e => new {{ Id = e.Id.Value, Name = e.Name }}).ToList();\n'
+                        f'return elems;')
+                resp = await client.send_code(code)
+                if resp.success and resp.result:
+                    data = resp.result if isinstance(resp.result, list) else [resp.result]
+                    items = [{"label": f"{el.get('Name','?')} (ID: {el.get('Id','?')})",
+                              "value": el.get("Id", "")} for el in data]
+
+            choices[p["name"]] = items
+
+        return json.dumps(choices, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
 async def run_tool(name: str, params: str = "{}") -> str:
     """Execute a solidified tool by name with given parameters.
-    params: JSON object of parameter values, e.g. {"height": 3000}"""
+    IMPORTANT: Call get_tool_choices first for parameters with dynamic choices.
+    params: JSON object of parameter values, e.g. {"level_name": "L1", "height": 3000}"""
     import json as _json
     try:
         param_dict = _json.loads(params) if params else {}

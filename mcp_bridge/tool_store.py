@@ -185,6 +185,24 @@ class ToolStore:
             code = code.replace(f"{{{k}}}", str(v))
         return code
 
+    def get_dynamic_params(self, name: str) -> list[dict]:
+        """Extract parameters that need dynamic choices from Revit.
+
+        Returns list of dicts: [{name, choices_from, description}, ...]
+        """
+        tool = self.load(name)
+        if not tool:
+            return []
+        return [
+            {
+                "name": p["name"],
+                "choices_from": p["choices_from"],
+                "description": p.get("description", ""),
+            }
+            for p in tool.parameters
+            if "choices_from" in p
+        ]
+
     def search(self, query: str) -> list[SolidifiedTool]:
         """Simple keyword search across tool names, descriptions, and tags."""
         query_lower = query.lower()
