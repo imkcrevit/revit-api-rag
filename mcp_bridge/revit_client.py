@@ -1,7 +1,12 @@
 """
-Revit TCP Client — JSON-RPC 2.0 over TCP socket to Revit plugin (port 8080).
+Revit TCP Client — JSON-RPC 2.0 over raw TCP socket to Revit plugin.
 
-Translated from revit-mcp SocketClient.ts + ConnectionManager.ts.
+Protocol confirmed from monorepo SocketService.cs:
+- Transport: TcpListener / TcpClient (NOT WebSocket)
+- Port: 8080 (hard-coded in plugin)
+- Message format: JSON-RPC 2.0, UTF-8, no delimiter (raw read)
+- Buffer: 8192 bytes per read on plugin side
+- send_code_to_revit timeout: 60s (plugin-side RaiseAndWaitForCompletion)
 """
 from __future__ import annotations
 
@@ -9,7 +14,7 @@ import asyncio
 import json
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -25,7 +30,7 @@ class RevitClient:
     """Async TCP client that speaks JSON-RPC 2.0 to the Revit plugin."""
 
     def __init__(self, host: str = "localhost", port: int = 8080,
-                 timeout: float = 120.0, connect_timeout: float = 5.0):
+                 timeout: float = 60.0, connect_timeout: float = 5.0):
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -78,12 +83,13 @@ class RevitClient:
         self._writer.write(data)
         await self._writer.drain()
 
-        # read response — accumulate until valid JSON
+        # Read response — accumulate until valid JSON.
+        # Plugin sends raw UTF-8 JSON with no delimiter, reads up to 8192 bytes.
         buf = b""
         try:
             while True:
                 chunk = await asyncio.wait_for(
-                    self._reader.read(65536),
+                    self._reader.read(8192),
                     timeout=self.timeout,
                 )
                 if not chunk:
@@ -97,7 +103,7 @@ class RevitClient:
         except asyncio.TimeoutError:
             return RevitResponse(success=False, error=f"Timeout after {self.timeout}s")
 
-        # parse JSON-RPC response
+        # Parse JSON-RPC response
         if "error" in resp and resp["error"]:
             err = resp["error"]
             msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
@@ -108,15 +114,29 @@ class RevitClient:
     # -- high-level: send code -------------------------------------------------
 
     async def send_code(self, code: str, parameters: list | None = None) -> RevitResponse:
-        """Send C# code to Revit for execution (maps to send_code_to_revit command)."""
+        """Send C# code to Revit for dynamic compilation and execution.
+
+        Maps to the send_code_to_revit command. The plugin wraps user code in:
+            public static object Execute(Document document, object[] parameters)
+        and compiles it with Roslyn. A Transaction is already active — user code
+        must NOT create its own Transaction.
+        """
         return await self.send_command("send_code_to_revit", {
             "code": code,
             "parameters": parameters or [],
         })
 
+    async def ping(self) -> bool:
+        """Quick connectivity check via say_hello command."""
+        try:
+            resp = await self.send_command("say_hello", {"message": "ping"})
+            return resp.success
+        except Exception:
+            return False
+
 
 async def with_revit_connection(operation):
-    """Context-managed Revit connection (mirrors ConnectionManager.ts)."""
+    """Context-managed Revit connection."""
     client = RevitClient()
     try:
         await client.connect()

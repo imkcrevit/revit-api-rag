@@ -52,35 +52,38 @@
 > **依赖：无**
 > **产出：Revit 本地运行 monorepo 插件，Python 可连通，协议和模板已确认**
 
-### Phase 1 实际执行顺序
+### Phase 1 执行顺序与确认结论
 
-**原则：先确认事实，再写代码。不做未经验证的假设。**
+**原则：先确认事实，再写代码。**
 
 ```
-Step 1  拉 monorepo，阅读 plugin/Core/SocketService.cs
-        → 确认通信协议（WebSocket 还是 raw TCP）和端口
-        → 确认消息格式（JSON-RPC 2.0？自定义？）
-        ⚠️ 当前假设是 WebSocket，但未经本地验证
+Step 1  ✅ 已确认 — 通信协议
+        来源：plugin/Core/SocketService.cs
+        结论：raw TCP (TcpListener/TcpClient)，NOT WebSocket
+        端口：8080（硬编码）
+        消息格式：JSON-RPC 2.0，UTF-8，无分隔符（raw bytes read，buffer 8192）
 
-Step 2  确认 send_code_to_revit 命令是否存在
-        → 存在：阅读 ExecuteCodeEventHandler.cs，确认代码模板
-        → 不存在：在 commandset/ 里新增 DynamicExecuteCommand
-        ⚠️ 当前从 GitHub 阅读推断存在（command.json 第 22 条），需本地验证
+Step 2  ✅ 已确认 — send_code_to_revit 存在
+        来源：commandset/Commands/ExecuteDynamicCode/ExecuteCodeEventHandler.cs
+        代码模板：Roslyn 编译，public static object Execute(Document document, object[] parameters)
+        自动 using：System, System.Linq, Autodesk.Revit.DB, Autodesk.Revit.UI, System.Collections.Generic
+        关键发现：EventHandler 已包裹 Transaction，用户代码 **不能** 再创建 Transaction
+        超时：60s（RaiseAndWaitForCompletion(60000)）
 
-Step 3  根据 Step 1 结论修正 revit_client.py
-        → 如果是 WebSocket：重写连接层（见 Module C-0）
-        → 如果是 raw TCP：当前实现可能已兼容，微调即可
+Step 3  ✅ 已完成 — revit_client.py 已适配
+        结论：TCP 协议正确，无需迁移 WebSocket
+        调整：timeout 从 120s 改为 60s（匹配插件端）
+        新增：ping() 方法（say_hello 命令检测连通性）
 
-Step 4  最小化测试：Python 发送 TaskDialog.Show("test", "hello")
-        → Revit 弹窗 = 链路通
-        → 失败 = 排查协议/端口/消息格式
+Step 4  ⬜ 待执行 — 最小化测试
+        前置：需要 Revit 运行 + 插件已部署
+        命令：TaskDialog.Show("Test", "Hello from RAG Bridge!")
 
-Step 5  结构柱创建测试（已有的稳定案例）
-        → 验证 RAG → 代码生成 → Revit 执行 完整链路
+Step 5  ⬜ 待执行 — 结构柱创建完整链路
+        前置：Step 4 通过
 
-Step 6  测量端到端时延
-        → 各阶段计时：RAG 检索、LLM 生成、传输、Revit 编译执行
-        → 记录为 baseline（写入 H-4）
+Step 6  ⬜ 待执行 — 时延测量
+        前置：Step 5 通过
 ```
 
 ### A-1. 获取 Monorepo 插件（部分克隆）
@@ -90,7 +93,7 @@ Step 6  测量端到端时延
 | 来源 | https://github.com/mcp-servers-for-revit/mcp-servers-for-revit（monorepo，活跃维护） |
 | 需要保留的部分 | `plugin/`（Revit add-in 主体）+ `commandset/`（命令实现）+ `command.json`（命令定义） |
 | 删除的部分 | `server/`（Node.js MCP Server，已被我们的 Python MCP Server 替代） |
-| 关键能力 | 通信层（协议待确认）+ 动态编译（Roslyn 待确认）+ 预制命令（含 `send_code_to_revit`） |
+| 关键能力 | TCP (port 8080) + Roslyn 动态编译 + 23 个预制命令（含 `send_code_to_revit`） |
 
 **任务清单：**
 
@@ -99,11 +102,11 @@ A-1-1  Clone monorepo:
        git clone https://github.com/mcp-servers-for-revit/mcp-servers-for-revit.git
        cd mcp-servers-for-revit
 
-A-1-2  阅读关键源码（Step 1 + Step 2 的执行）：
-       - plugin/Core/SocketService.cs → 确认协议和端口
-       - plugin/Core/CommandExecutor.cs → 确认命令路由机制
-       - commandset/Commands/ExecuteDynamicCode/ → 确认 send_code_to_revit 实现
-       - command.json → 核对命令清单
+A-1-2  ✅ 已阅读关键源码（Step 1 + Step 2）：
+       - plugin/Core/SocketService.cs → TCP (TcpListener), port 8080
+       - plugin/Core/CommandExecutor.cs → JSON-RPC 路由，反序列化 JObject params
+       - commandset/Commands/ExecuteDynamicCode/ → Roslyn 编译，Document document 模板
+       - command.json → 23 个命令，全部确认
 
 A-1-3  仅保留插件端：
        - 保留: plugin/          (Revit add-in C# 项目)
@@ -187,14 +190,14 @@ asyncio.run(test_connection())
 | A-2-4 | `get_available_family_types` | 返回族类型列表 JSON |
 | A-2-5 | 超时测试 | 断开 Revit 后 5 秒内返回连接超时错误 |
 
-### A-3. 确认插件端 send_code_to_revit 执行模板（待本地验证）
+### A-3. 插件端 send_code_to_revit 执行模板（已确认）
 
-> **状态**：以下信息来源于 GitHub 远程阅读，**需要 A-1-2 本地验证后确认或修正**。
+> **状态**：✅ 已通过 clone 本地源码确认。
 
-**预期结论**（来源：GitHub 上 `commandset/Commands/ExecuteDynamicCode/ExecuteCodeEventHandler.cs`）：
+**确认结论**（来源：`commandset/Commands/ExecuteDynamicCode/ExecuteCodeEventHandler.cs`）：
 
 ```
-A-3-1  插件端代码模板（预期 Roslyn 编译）：
+A-3-1  插件端代码模板（Roslyn 编译）：
 
        using System;
        using System.Linq;
@@ -215,30 +218,34 @@ A-3-1  插件端代码模板（预期 Roslyn 编译）：
            }
        }
 
-       ⚠️ 待确认：变量名是 `document`（不是 `doc`），参数是 `parameters`（object[]）
-       ⚠️ 待确认：这是静态方法，不是 IExternalCommand.Execute
+       ✅ 确认：变量名是 `document`（不是 `doc`），参数是 `parameters`（object[]）
+       ✅ 确认：这是静态方法，不是 IExternalCommand.Execute
+       ✅ 关键发现：EventHandler.Execute() 已包裹 Transaction
+          → 用户代码 **不能** 再创建 Transaction，否则嵌套事务报错
 
-A-3-2  自动注入的 using 语句（预期 5 个）：
+A-3-2  自动注入的 using 语句（5 个，已确认）：
        - using System;
        - using System.Linq;
        - using Autodesk.Revit.DB;
        - using Autodesk.Revit.UI;
        - using System.Collections.Generic;
 
-A-3-3  编译器：预期 Roslyn (Microsoft.CodeAnalysis.CSharp)
-       待确认：项目是否引用了 Microsoft.CodeAnalysis.CSharp NuGet 包
+A-3-3  编译器：✅ Roslyn (Microsoft.CodeAnalysis.CSharp)
+       引用所有已加载程序集（AppDomain.CurrentDomain.GetAssemblies()）
 
-A-3-4  编译错误回传格式：待确认
+A-3-4  编译错误回传：✅ 带行号的错误列表
+       格式："Line {n}: {error message}"，多个错误换行拼接
 
-A-3-5  运行时异常回传格式：待确认
+A-3-5  运行时异常回传：✅ JSON response
+       { "success": false, "errorMessage": "执行失败: {ex.Message}" }
 ```
 
-**产出**：确认后修正 `mcp_bridge/code_generator.py:SYSTEM_EXECUTE` 中的模板，确保生成的代码与插件端模板匹配。
-**当前 code_generator.py 保持原始 IExternalCommand 模板不动**，等确认后再改。
+**产出**：✅ `mcp_bridge/code_generator.py:SYSTEM_EXECUTE` 已更新为确认后的模板。
+关键变更：`doc` → `document`，删除 Transaction 规则（插件已包裹），新增 return 要求。
 
-### A-4. Monorepo 预期命令清单（待本地验证）
+### A-4. Monorepo 命令清单（已确认）
 
-> 以下来源于 GitHub 上 command.json，需 A-1-2 确认。
+> ✅ 已通过 clone 后 command.json 本地确认，共 23 个命令。
 
 | # | Command | 用途 | Module I 相关 |
 |---|---------|------|---------------|
@@ -289,16 +296,20 @@ A-5-2  记录各段耗时，写入 Module H-4 作为 baseline
 ## Module B: CodeGenerator 增强
 
 > **优先级：P1**
-> **依赖：Module A Step 2 完成（需要确认插件端模板）**
-> **文件：`mcp_bridge/code_generator.py`（已存在，需增强）**
-> **当前状态：code_generator.py 保持原始版本（IExternalCommand 模板），等 A-3 确认后再改**
+> **依赖：Module A Step 2 ✅ 已完成**
+> **文件：`mcp_bridge/code_generator.py`**
+> **当前状态：✅ 已更新为 monorepo 模板（Document document + 无 Transaction）**
 
-### B-1. 修正 SYSTEM_EXECUTE prompt（适配插件端模板）
+### B-1. ✅ 修正 SYSTEM_EXECUTE prompt（已完成）
 
-**当前状态**：`code_generator.py` 使用 IExternalCommand 模板（`doc`, `uidoc`, `uiapp` 变量）。
-**待 A-3 确认后**：如果 monorepo 使用静态方法模板（`Document document`），则需替换。
+**已完成变更**：
+- 模板从 `IExternalCommand` 改为 `static object Execute(Document document, object[] parameters)`
+- 变量名 `doc` → `document`
+- **删除 Transaction 规则**（插件 EventHandler 已包裹，用户代码不能再创建）
+- 新增 return 要求（方法必须返回 object）
+- 新增 selections 上下文注入（交互式选择结果）
 
-**预期修正为（待确认）**：
+**参考（已应用到代码）**：
 
 ```python
 SYSTEM_EXECUTE = """\
@@ -366,15 +377,15 @@ namespace AIGeneratedCode
 """
 ```
 
-**增强任务（A-3 确认后执行）：**
+**已完成任务：**
 
 ```
-B-1-1  根据 A-3 确认结果，替换 SYSTEM_EXECUTE 模板
-       - 如果确认是 Document document 模板 → 替换变量名 doc → document
-       - 如果仍是 IExternalCommand 模板 → 仅补充规则（单位、陷阱提示等）
-B-1-2  添加插件端自动注入的 using 列表（告知 LLM 不要重复）
-B-1-3  添加单位约定、常见陷阱、Step 注释等增强规则
-B-1-4  如果是静态方法模板：添加 "return object" 要求
+B-1-1  ✅ 替换 SYSTEM_EXECUTE 为 Document document 模板
+B-1-2  ✅ 添加 5 个自动注入 using 列表（告知 LLM 不要重复）
+B-1-3  ✅ 添加单位约定（feet/mm/m 换算）、常见陷阱、Step 注释规则
+B-1-4  ✅ 添加 "return object" 要求 + "NO Transaction" 规则
+B-1-5  ✅ 添加 selections_context 参数（交互式选择注入）
+B-1-6  ✅ 新增 extract_parameters() 静态方法
 ```
 
 ### B-2. 添加推理步骤注释强制
@@ -448,65 +459,20 @@ B-4-3  RAG 检索阶段发送 event: rag（让前端显示检索进度）
 ## Module C: RevitClient 增强
 
 > **优先级：P1**
-> **依赖：Module A Step 1（需要确认通信协议）**
-> **文件：`mcp_bridge/revit_client.py`（已存在，可能需要重写通信层）**
-> **当前状态：revit_client.py 保持 TCP socket 版本，等 A-1-2 确认后决定是否迁移**
+> **依赖：Module A Step 1 ✅ 已确认 — TCP 协议**
+> **文件：`mcp_bridge/revit_client.py`**
+> **当前状态：✅ TCP 实现正确，已微调（timeout 60s, buffer 8192, 新增 ping()）**
 
-### C-0. 通信协议适配（A-1-2 确认后执行）
-
-**当前**：`revit_client.py` 使用 plain TCP socket + asyncio.StreamReader/Writer。
-**待确认**：monorepo `plugin/Core/SocketService.cs` 使用什么协议。
-
-**两种可能路径：**
+### C-0. ✅ 通信协议已确认 — 无需迁移
 
 ```
-路径 A（如果是 WebSocket）：
-C-0-1  安装 websockets 库：pip install websockets
-C-0-2  重写 RevitClient 连接层：
-       - asyncio.open_connection → websockets.connect
-C-0-3  重写消息收发：
-       - writer.write + reader.read → ws.send + ws.recv
-C-0-4  保持 JSON-RPC 2.0 消息格式不变（仅传输层变化）
-
-路径 B（如果是 raw TCP）：
-C-0-1  当前实现可能已兼容
-C-0-2  微调消息分隔符（换行符？长度前缀？）
-C-0-3  确认消息编码（UTF-8？）
-```
-
-**WebSocket 路径参考实现（如需迁移）：**
-
-```python
-import websockets
-
-class RevitClient:
-    def __init__(self, host="localhost", port=8080, timeout=120.0):
-        self._host = host
-        self._port = port
-        self._timeout = timeout
-        self._ws = None
-
-    @property
-    def connected(self) -> bool:
-        return self._ws is not None and self._ws.open
-
-    async def connect(self) -> None:
-        uri = f"ws://{self._host}:{self._port}"
-        self._ws = await asyncio.wait_for(
-            websockets.connect(uri),
-            timeout=5.0
-        )
-
-    async def disconnect(self) -> None:
-        if self._ws:
-            await self._ws.close()
-            self._ws = None
-
-    async def send_command(self, method: str, params: dict | None = None) -> RevitResponse:
-        msg = {"jsonrpc": "2.0", "id": self._next_id(), "method": method, "params": params or {}}
-        await self._ws.send(json.dumps(msg))
-        raw = await asyncio.wait_for(self._ws.recv(), timeout=self._timeout)
-        return self._parse_response(json.loads(raw))
+结论：raw TCP (TcpListener/TcpClient)，NOT WebSocket
+       当前 revit_client.py 的 asyncio.open_connection 实现已兼容
+已完成调整：
+  - timeout: 120s → 60s（匹配插件端 RaiseAndWaitForCompletion(60000)）
+  - read buffer: 65536 → 8192（匹配插件端 buffer 大小）
+  - 新增 ping() 方法（通过 say_hello 检测连通性）
+  - 不需要 websockets 库
 ```
 
 ### C-1. 连接池 / 复用
@@ -994,13 +960,13 @@ H-4-1  测量各阶段耗时：
        - ChromaDB 搜索: ~0.5s
        - SQLite 水合: ~0.1s
        - LLM 代码生成: ~3-8s（取决于复杂度）
-       - WebSocket 传输: ~0.05s
+       - TCP 传输: ~0.05s
        - Revit 编译+执行: ~1-3s
        - 总计预期: ~5-13s
 
 H-4-2  固化工具执行耗时：
        - render_code: ~0.001s
-       - WebSocket 传输+执行: ~1-3s
+       - TCP 传输+执行: ~1-3s
        - 总计预期: ~1-3s（跳过 RAG + LLM）
 
 H-4-3  记录到文档作为 baseline
@@ -1358,11 +1324,12 @@ I-5-5  POST /api/v1/bridge/generate-with-selections
 | 文件 | 行数 | 功能 | 状态 |
 |------|------|------|------|
 | `mcp_bridge/__init__.py` | 8 | 模块说明 | ✅ |
-| `mcp_bridge/revit_client.py` | 126 | TCP JSON-RPC 2.0 客户端（协议待确认） | ✅ 基础版 |
-| `mcp_bridge/code_generator.py` | 120 | RAG 驱动 C# 代码生成（模板待确认） | ✅ 基础版 |
+| `mcp_bridge/revit_client.py` | 130 | TCP JSON-RPC 2.0 客户端（协议已确认） | ✅ 已适配 |
+| `mcp_bridge/code_generator.py` | 170 | RAG 驱动 C# 代码生成（模板已确认） | ✅ 已适配 |
 | `mcp_bridge/tool_store.py` | 147 | 固化工具 YAML CRUD | ✅ 基础版 |
 | `mcp_bridge/mcp_server.py` | 217 | MCP Server（7 tools） | ✅ 基础版 |
-| `mcp_bridge/router.py` | 196 | FastAPI REST API | ✅ 基础版 |
+| `mcp_bridge/interactive.py` | 160 | 交互式选择（意图分类+Revit查询） | ✅ |
+| `mcp_bridge/router.py` | 260 | FastAPI REST API（含交互式端点） | ✅ |
 | `mcp_bridge/tools/create_wall.yaml` | 28 | 示例固化工具 | ✅ |
 | `server/main.py` | 70 | 已注册 bridge_router | ✅ |
 
@@ -1382,44 +1349,46 @@ I-5-5  POST /api/v1/bridge/generate-with-selections
 ### 模块依赖图
 
 ```
-A (Monorepo 克隆 + 协议确认 + 模板确认 + 连通验证 + 时延测量)
-├── B (CodeGenerator 增强) ── 依赖 A Step 2（模板确认）
-├── C (RevitClient 适配) ─── 依赖 A Step 1（协议确认）
+A (Monorepo 克隆 + 确认) ── ✅ Step 1-3 已完成，Step 4-6 需 Revit
+├── B (CodeGenerator) ────── ✅ B-1 已完成（模板+selections），B-2~B-4 待做
+├── C (RevitClient) ─────── ✅ C-0 已完成（TCP 确认），C-1~C-3 待做
+├── I (交互式选择) ─────── ✅ 骨架已完成（分类器+查询器+路由），前端待做
 │
-B + C
+待做部分
 ├── D (ToolStore 增强) ──── 无阻塞依赖
-├── E (Gradio Tab D) ────── 依赖 B-4 (SSE) + C-2 (健康检查) + I (交互选择)
+├── E (Gradio Tab D) ────── 依赖 B-4 (SSE) + C-2 (健康检查) + I-3 (选择前端)
 ├── F (安全 + 重试) ────── 依赖 B + C
 ├── G (MCP Server) ─────── 依赖 B + C + D
-├── I (交互式选择) ─────── 依赖 A (命令清单确认) + C (通信层)
 │
-A-I 全部完成
+全部完成
 └── H (集成测试 + Demo)
 ```
 
 ### 建议开发顺序
 
 ```
-Phase 1 — 确认事实（阻塞一切）：
-  A Step 1: Clone monorepo → 读 SocketService.cs → 确认协议
-  A Step 2: 读 ExecuteCodeEventHandler.cs → 确认模板
-  A Step 3: 根据结论修正 revit_client.py（可能是 C-0）
-  A Step 4: 最小化测试（TaskDialog 弹窗）
-  A Step 5: 结构柱创建完整链路
-  A Step 6: 时延测量
+Phase 1 — ✅ 已完成（协议+模板确认+代码适配）：
+  A Step 1: ✅ TCP 确认（TcpListener, port 8080, JSON-RPC 2.0）
+  A Step 2: ✅ 模板确认（Document document, Roslyn, 外层 Transaction）
+  A Step 3: ✅ revit_client.py 已适配, code_generator.py 已更新
+  A Step 4-6: ⬜ 需要 Revit 运行环境
 
-Phase 2 — 核心增强（依赖 Phase 1 结论）：
-  B-1 (修正 SYSTEM_EXECUTE) → B-3 (参数提取)
+Phase 2 — 部署与连通测试（需 Revit）：
+  A-1-3~A-1-8 (插件编译部署)
+  A Step 4 (最小化测试: TaskDialog)
+  A Step 5 (结构柱创建完整链路)
+  A Step 6 (时延测量)
+
+Phase 3 — 功能增强：
   C-1 (连接池) → C-2 (健康检查) → C-3 (配置外置)
-  I-1 (意图分类) → I-2 (Revit 查询) → I-3 (选择前端)
   D-1 (参数校验) → D-4 (智能匹配)
+  B-4 (SSE 流式) → E-2 (Gradio Tab D, 含交互选择面板) → E-3 (集成)
 
-Phase 3 — 前端与安全：
-  E-2 (Gradio Tab D, 含 I-3 选择面板) → E-3 (集成)
+Phase 4 — 安全与 MCP：
   F-1 (安全审查) → F-2 (错误重试)
   G-1 (Claude Desktop) → G-3 (Prompt 注入)
 
-Phase 4 — 集成验收：
+Phase 5 — 集成验收：
   H-1 (E2E 测试) → H-2 (预固化工具) → H-3 (Demo 排练)
 ```
 

@@ -11,15 +11,24 @@ from pydantic import BaseModel
 
 from mcp_bridge.revit_client import RevitClient
 from mcp_bridge.tool_store import ToolStore
+from mcp_bridge.interactive import IntentClassifier, RevitQueryExecutor
 
 bridge_router = APIRouter(prefix="/api/v1/bridge", tags=["mcp-bridge"])
 _tool_store = ToolStore()
+_classifier = IntentClassifier()
 
 
-# ── Request Models ───────────────────────────────────────────────────────────
+# -- Request Models ------------------------------------------------------------
 
 class GenerateRequest(BaseModel):
     query: str
+    api_top_k: int = 15
+    code_top_k: int = 5
+
+
+class GenerateWithSelectionsRequest(BaseModel):
+    query: str
+    selections: dict = {}
     api_top_k: int = 15
     code_top_k: int = 5
 
@@ -43,11 +52,20 @@ class RunToolRequest(BaseModel):
     params: dict = {}
 
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+class ClassifyRequest(BaseModel):
+    query: str
+
+
+class QueryRevitRequest(BaseModel):
+    command: str
+    params: dict = {}
+
+
+# -- Code Generation Routes ---------------------------------------------------
 
 @bridge_router.post("/generate")
 async def generate_code(req: GenerateRequest):
-    """RAG + LLM → generate C# code for Revit execution."""
+    """RAG + LLM -> generate C# code for Revit execution."""
     from server.app.deps import get_retriever, get_config
     from pipeline.llm_client import create_llm_client
     from mcp_bridge.code_generator import CodeGenerator
@@ -60,6 +78,26 @@ async def generate_code(req: GenerateRequest):
     code, meta = gen.generate(req.query, req.api_top_k, req.code_top_k)
     return {"code": code, "rag_context": meta}
 
+
+@bridge_router.post("/generate-with-selections")
+async def generate_with_selections(req: GenerateWithSelectionsRequest):
+    """RAG + LLM -> generate C# code using user selections from interactive workflow."""
+    from server.app.deps import get_retriever, get_config
+    from pipeline.llm_client import create_llm_client
+    from mcp_bridge.code_generator import CodeGenerator
+
+    retriever = get_retriever()
+    config = get_config()
+    llm = create_llm_client(config)
+    gen = CodeGenerator(retriever, llm)
+
+    code, meta = gen.generate(
+        req.query, req.api_top_k, req.code_top_k, selections=req.selections
+    )
+    return {"code": code, "rag_context": meta}
+
+
+# -- Execution Routes ----------------------------------------------------------
 
 @bridge_router.post("/execute")
 async def execute_code(req: ExecuteRequest):
@@ -79,19 +117,17 @@ async def execute_code(req: ExecuteRequest):
 
 @bridge_router.post("/generate-and-execute")
 async def generate_and_execute(req: GenerateRequest):
-    """Full pipeline: RAG generate → send to Revit → return result."""
+    """Full pipeline: RAG generate -> send to Revit -> return result."""
     from server.app.deps import get_retriever, get_config
     from pipeline.llm_client import create_llm_client
     from mcp_bridge.code_generator import CodeGenerator
 
-    # Generate
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
     gen = CodeGenerator(retriever, llm)
     code, meta = gen.generate(req.query, req.api_top_k, req.code_top_k)
 
-    # Execute
     client = RevitClient()
     try:
         await client.connect()
@@ -117,6 +153,8 @@ async def generate_and_execute(req: GenerateRequest):
     finally:
         await client.disconnect()
 
+
+# -- Tool Solidification Routes ------------------------------------------------
 
 @bridge_router.post("/solidify")
 async def solidify_tool(req: SolidifyRequest):
@@ -193,3 +231,71 @@ async def delete_tool(name: str):
     if _tool_store.delete(name):
         return {"status": "deleted", "name": name}
     raise HTTPException(404, f"Tool '{name}' not found")
+
+
+# -- Interactive Selection Routes ----------------------------------------------
+
+@bridge_router.post("/classify-intent")
+async def classify_intent(req: ClassifyRequest):
+    """Classify user query to determine if interactive selection is needed."""
+    result = _classifier.classify(req.query)
+    return result
+
+
+@bridge_router.post("/query-revit")
+async def query_revit(req: QueryRevitRequest):
+    """Execute a monorepo pre-built command to query Revit model data."""
+    client = RevitClient()
+    try:
+        await client.connect()
+        executor = RevitQueryExecutor(client)
+
+        if req.command == "get_available_family_types":
+            categories = req.params.get("categoryList", [])
+            data = await executor.get_family_types(categories)
+            return {"result": data}
+        elif req.command == "get_levels":
+            data = await executor.get_levels()
+            return {"result": data}
+        elif req.command == "get_selected_elements":
+            data = await executor.get_selected_elements()
+            return {"result": data}
+        else:
+            resp = await client.send_command(req.command, req.params)
+            return {"result": resp.result, "error": resp.error}
+    except ConnectionError:
+        raise HTTPException(502, "Cannot connect to Revit plugin (port 8080)")
+    finally:
+        await client.disconnect()
+
+
+@bridge_router.post("/trigger-selection")
+async def trigger_selection():
+    """Trigger Revit selection mode and return selected elements."""
+    client = RevitClient()
+    try:
+        await client.connect()
+        executor = RevitQueryExecutor(client)
+        elements = await executor.trigger_selection()
+        return {"elements": elements}
+    except ConnectionError:
+        raise HTTPException(502, "Cannot connect to Revit plugin (port 8080)")
+    finally:
+        await client.disconnect()
+
+
+@bridge_router.get("/revit-health")
+async def revit_health():
+    """Check if Revit plugin is reachable."""
+    client = RevitClient()
+    try:
+        import time
+        t0 = time.monotonic()
+        await client.connect()
+        ok = await client.ping()
+        latency = round((time.monotonic() - t0) * 1000)
+        return {"revit_connected": ok, "latency_ms": latency}
+    except Exception:
+        return {"revit_connected": False, "latency_ms": None}
+    finally:
+        await client.disconnect()
