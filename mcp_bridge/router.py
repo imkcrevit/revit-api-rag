@@ -292,8 +292,8 @@ async def generate_code(req: GenerateRequest):
 
 
 @bridge_router.post("/generate-stream")
-async def generate_code_stream(req: GenerateRequest):
-    """RAG + LLM -> stream C# code generation via SSE."""
+async def generate_code_stream(req: GenerateWithSelectionsRequest):
+    """RAG + LLM -> stream C# code generation via SSE. Supports optional selections."""
     from server.app.deps import get_retriever, get_config
     from pipeline.llm_client import create_llm_client
     from mcp_bridge.code_generator import CodeGenerator
@@ -302,6 +302,7 @@ async def generate_code_stream(req: GenerateRequest):
     config = get_config()
     llm = create_llm_client(config)
     gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
+    selections = req.selections if req.selections else None
 
     async def event_stream():
         def _p(msg: str):
@@ -346,11 +347,12 @@ async def generate_code_stream(req: GenerateRequest):
 
         yield _p("Assembling system prompt (rules + context + unit config)...")
         from mcp_bridge.code_generator import SYSTEM_EXECUTE, CodeGenerator as CG
+        selections_ctx = CG._build_selections_context(selections) if selections else ""
         system = SYSTEM_EXECUTE.format(
             revit_version=gen.revit_version,
             api_context=ctx.get("api_context", "(none)"),
             code_context=ctx.get("code_context", "(none)"),
-            selections_context="",
+            selections_context=selections_ctx,
             unit_context=CG.UNIT_CONTEXTS.get(gen.user_unit, CG.UNIT_CONTEXTS["mm"]),
         )
         yield _p(f"System prompt assembled — {len(system)} chars total")
@@ -742,9 +744,12 @@ async def trigger_selection():
 
 @bridge_router.get("/revit-health")
 async def revit_health():
-    """Check if Revit plugin is reachable."""
+    """Check if Revit plugin is reachable — returns rich connection info."""
+    from datetime import datetime, timezone, timedelta
     from mcp_bridge.client_pool import RevitClientPool
     cfg = _get_bridge_config()
+    tz_cn = timezone(timedelta(hours=8))
+    now_str = datetime.now(tz_cn).strftime("%Y-%m-%d %H:%M:%S")
     try:
         t0 = time.monotonic()
         client = await RevitClientPool.get_client(
@@ -755,10 +760,22 @@ async def revit_health():
         )
         resp = await client.send_command("say_hello", {"message": "ping"})
         latency = round((time.monotonic() - t0) * 1000)
+        host = cfg.get("revit_host", "localhost")
+        port = cfg.get("revit_port", 18080)
         return {
             "revit_connected": resp.success,
             "latency_ms": latency,
             "detail": resp.result if resp.success else resp.error,
+            "bridge_version": "v0.2",
+            "protocol": "JSON-RPC 2.0 / TCP",
+            "endpoint": f"{host}:{port}",
+            "timestamp": now_str,
         }
     except Exception as e:
-        return {"revit_connected": False, "latency_ms": None, "detail": str(e)}
+        return {
+            "revit_connected": False,
+            "latency_ms": None,
+            "detail": str(e),
+            "bridge_version": "v0.2",
+            "timestamp": now_str,
+        }

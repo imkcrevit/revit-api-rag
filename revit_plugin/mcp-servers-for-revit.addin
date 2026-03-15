@@ -6,6 +6,6 @@
     <FullClassName>revit_mcp_plugin.Core.Application</FullClassName>
     <ClientId>7FE2B868-5423-4D7A-A20D-5A6C9BA53F79</ClientId>
     <VendorId>mcp-servers-for-revit</VendorId>
-    <VendorDescription>https://github.com/mcp-servers-for-revit/mcp-servers-for-revit</VendorDescription>
+    <VendorDescription>https://github.com/imkcrevit/revit-api-rag</VendorDescription>
   </AddIn>
 </RevitAddIns>
