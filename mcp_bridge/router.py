@@ -487,11 +487,18 @@ async def revit_health():
     cfg = _get_bridge_config()
     try:
         t0 = time.monotonic()
-        ok = await RevitClientPool.ping(
+        client = await RevitClientPool.get_client(
             host=cfg.get("revit_host", "localhost"),
             port=cfg.get("revit_port", 18080),
+            timeout=cfg.get("command_timeout", 60),
+            connect_timeout=cfg.get("connect_timeout", 5),
         )
+        resp = await client.send_command("say_hello", {"message": "ping"})
         latency = round((time.monotonic() - t0) * 1000)
-        return {"revit_connected": ok, "latency_ms": latency}
-    except Exception:
-        return {"revit_connected": False, "latency_ms": None}
+        return {
+            "revit_connected": resp.success,
+            "latency_ms": latency,
+            "detail": resp.result if resp.success else resp.error,
+        }
+    except Exception as e:
+        return {"revit_connected": False, "latency_ms": None, "detail": str(e)}

@@ -15,6 +15,7 @@ When a user says "create window on wall", the system:
 """
 from __future__ import annotations
 
+import re
 from enum import Enum
 
 from mcp_bridge.revit_client import RevitClient, RevitResponse
@@ -95,19 +96,34 @@ _INTENT_RULES: list[dict] = [
 class IntentClassifier:
     """Classify user intent to determine interaction type."""
 
+    # Patterns for extracting coordinates from queries like:
+    #   "在100,0,0"  "at 100,200,0"  "坐标100 200 0"  "(100, 200, 3600)"
+    _COORD_PATTERNS = [
+        # x,y,z or x, y, z (with optional parentheses)
+        re.compile(
+            r'[\(（]?\s*(-?\d+(?:\.\d+)?)\s*[,，\s]\s*(-?\d+(?:\.\d+)?)\s*[,，\s]\s*(-?\d+(?:\.\d+)?)\s*[\)）]?'
+        ),
+    ]
+    # Fallback: just x,y (no z)
+    _COORD_2D_PATTERN = re.compile(
+        r'[\(（]?\s*(-?\d+(?:\.\d+)?)\s*[,，\s]\s*(-?\d+(?:\.\d+)?)\s*[\)）]?'
+    )
+
     def classify(self, user_query: str) -> dict:
         """
-        Classify user query by keyword matching.
+        Classify user query by keyword matching + coordinate extraction.
 
         Returns:
             {
                 "interaction_type": InteractionType,
-                "queries": [...],        # Revit queries to execute
-                "need_level": bool,      # whether to also query levels
-                "select_prompt": str|None  # prompt for Revit element selection
+                "queries": [...],
+                "need_level": bool,
+                "select_prompt": str|None,
+                "parsed_coords": {"x": float, "y": float, "z": float|None} | None,
             }
         """
         query_lower = user_query.lower()
+        coords = self._extract_coords(user_query)
 
         for rule in _INTENT_RULES:
             for kw in rule["keywords"]:
@@ -117,6 +133,7 @@ class IntentClassifier:
                         "queries": rule["queries"],
                         "need_level": rule.get("need_level", False),
                         "select_prompt": rule.get("select_prompt"),
+                        "parsed_coords": coords,
                     }
 
         return {
@@ -124,7 +141,51 @@ class IntentClassifier:
             "queries": [],
             "need_level": False,
             "select_prompt": None,
+            "parsed_coords": coords,
         }
+
+    def _extract_coords(self, query: str) -> dict | None:
+        """Extract coordinates from natural language query.
+
+        Returns {"x": float, "y": float, "z": float|None} or None.
+        """
+        for pat in self._COORD_PATTERNS:
+            m = pat.search(query)
+            if m:
+                return {
+                    "x": float(m.group(1)),
+                    "y": float(m.group(2)),
+                    "z": float(m.group(3)),
+                }
+        m = self._COORD_2D_PATTERN.search(query)
+        if m:
+            return {
+                "x": float(m.group(1)),
+                "y": float(m.group(2)),
+                "z": None,
+            }
+        return None
+
+    @staticmethod
+    def match_level_by_elevation(levels: list[dict], elevation_mm: float) -> str | None:
+        """Find the level closest to a given elevation (mm).
+
+        Returns level name or None if no levels available.
+        """
+        if not levels:
+            return None
+        best = None
+        best_dist = float("inf")
+        for lv in levels:
+            elev = lv.get("ElevationMm", lv.get("elevation", 0))
+            try:
+                dist = abs(float(elev) - elevation_mm)
+            except (ValueError, TypeError):
+                continue
+            if dist < best_dist:
+                best_dist = dist
+                best = lv.get("Name", lv.get("name", ""))
+        return best
 
 
 class RevitQueryExecutor:

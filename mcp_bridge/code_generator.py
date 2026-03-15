@@ -69,6 +69,7 @@ System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB, Autodesk.Rev
    - FilteredElementCollector needs OfClass() or OfCategory()
    - Do NOT use `using` statements for Revit objects
    - Revit 2024+: use `ElementId.Value` (long), NOT `ElementId.IntegerValue` (removed)
+   - `new ElementId(12345)` — plain integer, do NOT add `L` suffix (e.g. `12345L` is wrong)
 10. If the code needs user-supplied values, use placeholders: `{{{{param_name}}}}`.
 {selections_context}
 ## Retrieved API Documentation
@@ -148,20 +149,25 @@ class CodeGenerator:
         if not selections:
             return ""
         lines = [
-            "\n## User Selections (use these exact values, do NOT query for them):",
+            "\n## User Selections — MANDATORY: use these exact values",
         ]
         if "family_type" in selections:
-            lines.append(f"- Family Type: {selections['family_type']}")
+            ft = selections["family_type"]
+            lines.append(f"- Family Type Name: \"{ft}\"")
+            lines.append(f"  YOU MUST filter by name: `.FirstOrDefault(s => s.Name == \"{ft}\")`")
+            lines.append(f"  NEVER use `.FirstOrDefault()` without a name filter")
         if "level" in selections:
-            lines.append(f"- Level: {selections['level']}")
+            lv = selections["level"]
+            lines.append(f"- Level Name: \"{lv}\"")
+            lines.append(f"  YOU MUST filter: `.FirstOrDefault(l => l.Name == \"{lv}\")`")
         if "host_element_id" in selections:
             lines.append(f"- Host Element ID: {selections['host_element_id']}")
         if "position" in selections:
             pos = selections["position"]
             lines.append(f"- Position: ({pos.get('x', 0)}mm, {pos.get('y', 0)}mm)")
         lines.append(
-            "\nIMPORTANT: Do not use FilteredElementCollector to find these. "
-            "Use the exact names/IDs above.\n"
+            "\nCRITICAL: Do NOT use `.First()` or `.FirstOrDefault()` without a name filter. "
+            "Always filter by the exact name provided above.\n"
         )
         return "\n".join(lines)
 
@@ -183,8 +189,9 @@ class CodeGenerator:
 
     @staticmethod
     def _extract_code(text: str) -> str:
-        """Strip markdown code fences if present."""
+        """Strip markdown code fences if present and clean up common LLM mistakes."""
         m = re.search(r"```(?:csharp|cs)?\s*\n(.*?)```", text, re.DOTALL)
-        if m:
-            return m.group(1).strip()
-        return text.strip()
+        code = m.group(1).strip() if m else text.strip()
+        # Fix: LLM sometimes adds L suffix to ElementId constructor args
+        code = re.sub(r'new ElementId\((\d+)L\)', r'new ElementId(\1)', code)
+        return code
