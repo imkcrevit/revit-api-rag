@@ -85,7 +85,7 @@ revit-api-rag/
 ```
 Revit 2026 API CHM
     ↓ 7z 解压
-HTML 文件 (~4000+ 页)
+HTML 文件 (~27000+ 页)
     ↓ parse_chm.py 解析
 结构化数据 (name, summary, syntax, parameters, remarks...)
     ↓ quality_agent.py (Gemini Flash 剪枝)
@@ -196,6 +196,17 @@ data/
                 ├── RevitMCPCommandSet.dll
                 └── ...（依赖 DLL）
 ```
+
+## 使用指南
+
+详细的操作步骤和演示请参阅 **[使用指南 — Intent Bridge 交互操作](./docs/usage-guide.md)**，包括：
+
+- **单步命令执行**（Direct）— 查询、修改、删除等直接生成代码并执行
+- **多步交互：族类型选择**（Select Family）— 创建墙/柱/梁/楼板，先从 Revit 查询可用族类型供用户选择
+- **多步交互：宿主选择 + 族类型**（Select Both）— 创建窗户/门，先在 Revit 中选择宿主墙体
+- **Thinking 推理过程** — LLM 推理链实时流式展示
+- **Pipeline 进度日志** — 9 阶段进度实时显示
+- **Solidified Tools** — 工具固化与复用
 
 ## 环境要求
 
