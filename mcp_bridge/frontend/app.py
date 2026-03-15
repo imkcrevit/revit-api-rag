@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import traceback
 import httpx
 import gradio as gr
@@ -96,16 +97,26 @@ def _execute_code(code: str, params: list | None = None) -> dict:
 def _solidify_tool(name: str, code: str, description: str,
                    source_query: str) -> dict:
     try:
-        from mcp_bridge.code_generator import CodeGenerator
-        parameters = CodeGenerator.extract_parameters(code)
+        # Step 1: Use LLM to parameterize hardcoded values into {placeholders}
+        logger.info(f"[_solidify_tool] parameterizing code ({len(code)} chars)")
+        param_resp = httpx.post(_bridge_url("/parameterize"),
+                                json={"code": code, "source_query": source_query},
+                                timeout=60)
+        param_data = param_resp.json()
+        param_code = param_data.get("code", code)
+        parameters = param_data.get("parameters", [])
+        logger.info(f"[_solidify_tool] parameterized: {len(parameters)} params extracted")
+
+        # Step 2: Solidify with the parameterized code
         resp = httpx.post(_bridge_url("/solidify"),
-                          json={"name": name, "code": code,
+                          json={"name": name, "code": param_code,
                                 "description": description,
                                 "parameters": parameters,
                                 "source_query": source_query},
                           timeout=10)
         return resp.json()
     except Exception as e:
+        logger.error(f"[_solidify_tool] error: {e}")
         return {"error": str(e)}
 
 
@@ -178,8 +189,13 @@ def create_bridge_tab():
     with gr.Row():
         revit_status = gr.Textbox(
             value="Revit Disconnected", label="Revit Status",
-            interactive=False, max_lines=1, scale=4,
+            interactive=False, max_lines=1, scale=3,
         )
+        unit_selector = gr.Radio(
+            choices=["mm", "m", "feet"], value="mm",
+            label="User Unit", interactive=True, scale=1,
+        )
+        detect_unit_btn = gr.Button("Detect", size="sm", scale=0)
         refresh_btn = gr.Button("Refresh", size="sm", scale=0)
 
     # === State ===
@@ -202,6 +218,11 @@ def create_bridge_tab():
             show_label=False, scale=5, lines=1, max_lines=2,
         )
         generate_btn = gr.Button("Generate Code", variant="primary", scale=1)
+
+    # Thinking Chain — shows LLM reasoning in real-time
+    thinking_display = gr.Markdown(
+        value="", label="Thinking Process", visible=False,
+    )
 
     # Step 2: Selection — Dropdown for family (many items), Radio for level (few)
     selection_status = gr.Textbox(
@@ -307,41 +328,175 @@ def create_bridge_tab():
     def on_refresh_health():
         return _check_revit_health()
 
+    def on_change_unit(unit):
+        """Update backend unit preference."""
+        try:
+            resp = httpx.post(_bridge_url("/unit"), json={"unit": unit}, timeout=5)
+            data = resp.json()
+            logger.info(f"[on_change_unit] set unit={unit}, response={data}")
+        except Exception as e:
+            logger.error(f"[on_change_unit] error: {e}")
+        return unit
+
+    def on_detect_unit():
+        """Query Revit project units and update selector."""
+        try:
+            resp = httpx.get(_bridge_url("/project-units"), timeout=10)
+            data = resp.json()
+            if "error" in data:
+                return gr.Radio(value=data.get("current_setting", "mm"))
+            detected = data.get("detected", "mm")
+            display = data.get("display_name", "")
+            logger.info(f"[on_detect_unit] detected={detected} display={display}")
+            # Also set the backend unit
+            httpx.post(_bridge_url("/unit"), json={"unit": detected}, timeout=5)
+            return gr.Radio(value=detected)
+        except Exception as e:
+            logger.error(f"[on_detect_unit] error: {e}")
+            return gr.Radio(value="mm")
+
+    def _parse_sse_stream(resp):
+        """Parse SSE stream from /generate-stream, separate thinking from code."""
+        thinking_buf = ""
+        code_buf = ""
+        full_buf = ""
+        rag_info = {}
+        done_data = None
+
+        current_event = None
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            if line.startswith("event: "):
+                current_event = line[7:]
+                continue
+            if not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+
+            if current_event == "rag":
+                try:
+                    rag_info["status"] = json.loads(data_str)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif current_event == "token":
+                try:
+                    token = json.loads(data_str)
+                    full_buf += token
+
+                    # Separate thinking from code
+                    thinking_match = re.search(r'<thinking>(.*?)(?:</thinking>|$)', full_buf, re.DOTALL)
+                    if thinking_match:
+                        thinking_buf = thinking_match.group(1).strip()
+
+                    # Extract code portion (after </thinking>)
+                    after_thinking = re.sub(r'<thinking>.*?</thinking>', '', full_buf, flags=re.DOTALL)
+                    code_match = re.search(r'```(?:csharp|cs)?\s*\n(.*?)(?:```|$)', after_thinking, re.DOTALL)
+                    if code_match:
+                        code_buf = code_match.group(1).strip()
+
+                    yield "token", thinking_buf, code_buf
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif current_event == "done":
+                try:
+                    done_data = json.loads(data_str)
+                    yield "done", done_data, None
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
     def on_generate(query):
-        """Returns 13 values matching outputs list."""
+        """Streaming generator — yields progressive thinking + code updates.
+
+        Yields 14 values: query, selections, code, last_code, thinking,
+                          selection controls (6), security, rag, step.
+        """
         logger.info(f"[on_generate] query={query!r}")
+
+        def _empty(msg=""):
+            return (query, {}, "", "",
+                    gr.Markdown(visible=False, value=""),
+                    gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
+                    gr.Radio(visible=False, choices=[]),
+                    gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
+                    gr.Button(visible=False),
+                    gr.Textbox(visible=bool(msg), value=msg), None,
+                    _step_indicator(1, MAIN_STEPS))
+
         try:
             if not query.strip():
-                return (query, {}, "", "",
-                        # selection: status, family(Dropdown), level(Radio), x, y, confirm_btn
-                        gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
-                        gr.Radio(visible=False, choices=[]),
-                        gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
-                        gr.Button(visible=False),
-                        # security, rag, step
-                        gr.Textbox(visible=False), None,
-                        _step_indicator(1, MAIN_STEPS))
+                yield _empty()
+                return
 
             intent = _classify_intent(query)
             itype = intent.get("interaction_type", "direct")
 
             if itype == "direct":
-                result = _generate_code(query)
-                code = result.get("code", "")
-                safe = result.get("safe", True)
-                warnings = result.get("warnings", [])
-                rag = result.get("rag_context", {})
-                sec_text = "Safe" if safe else "Warning: " + "; ".join(warnings)
+                # Stream code generation with thinking chain
+                yield (query, {}, "", "",
+                       gr.Markdown(visible=True, value="*Thinking...*"),
+                       gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
+                       gr.Radio(visible=False, choices=[]),
+                       gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
+                       gr.Button(visible=False),
+                       gr.Textbox(visible=False), None,
+                       _step_indicator(2, MAIN_STEPS))
 
-                return (query, {}, code, code,
-                        gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
-                        gr.Radio(visible=False, choices=[]),
-                        gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
-                        gr.Button(visible=False),
-                        gr.Textbox(visible=True, value=sec_text), rag,
-                        _step_indicator(3, MAIN_STEPS))
+                try:
+                    with httpx.stream(
+                        "POST", _bridge_url("/generate-stream"),
+                        json={"query": query, "api_top_k": 15, "code_top_k": 5},
+                        timeout=120,
+                    ) as resp:
+                        resp.raise_for_status()
+                        final_code = ""
+                        final_thinking = ""
+                        done_info = None
 
-            # Interactive: query Revit
+                        for event_type, data1, data2 in _parse_sse_stream(resp):
+                            if event_type == "token":
+                                final_thinking = data1
+                                final_code = data2
+                                # Format thinking as markdown
+                                thinking_md = f"**Thinking:**\n\n{final_thinking}" if final_thinking else "*Generating...*"
+                                yield (query, {}, final_code, final_code,
+                                       gr.Markdown(visible=True, value=thinking_md),
+                                       gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
+                                       gr.Radio(visible=False, choices=[]),
+                                       gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
+                                       gr.Button(visible=False),
+                                       gr.Textbox(visible=False), None,
+                                       _step_indicator(2, MAIN_STEPS))
+                            elif event_type == "done":
+                                done_info = data1
+
+                    # Final yield with security info
+                    if done_info:
+                        final_code = done_info.get("code", final_code)
+                        safe = done_info.get("safe", True)
+                        warnings = done_info.get("warnings", [])
+                        rag = done_info.get("rag_context", {})
+                        sec_text = "Safe" if safe else "Warning: " + "; ".join(warnings)
+                    else:
+                        sec_text = "Safe"
+                        rag = {}
+
+                    thinking_md = f"**Thinking:**\n\n{final_thinking}" if final_thinking else ""
+                    yield (query, {}, final_code, final_code,
+                           gr.Markdown(visible=bool(final_thinking), value=thinking_md),
+                           gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
+                           gr.Radio(visible=False, choices=[]),
+                           gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
+                           gr.Button(visible=False),
+                           gr.Textbox(visible=True, value=sec_text), rag,
+                           _step_indicator(3, MAIN_STEPS))
+                except Exception:
+                    err = traceback.format_exc()
+                    logger.error(f"[on_generate] stream error:\n{err}")
+                    yield _empty(f"Error: {err[:300]}")
+                return
+
+            # Interactive: query Revit (non-streaming)
             family_choices = []
             level_choices = []
             levels_raw = []
@@ -375,11 +530,9 @@ def create_bridge_tab():
                             level_choices.append(str(item))
                 status_parts.append(f"Levels: {len(level_choices)}")
 
-            # Auto-fill from parsed coords
             x_val = parsed_coords["x"] if parsed_coords else 0
             y_val = parsed_coords["y"] if parsed_coords else 0
 
-            # Auto-select level by elevation
             level_default = level_choices[0] if level_choices else None
             if parsed_coords and parsed_coords.get("z") is not None and levels_raw:
                 from mcp_bridge.interactive import IntentClassifier
@@ -399,30 +552,23 @@ def create_bridge_tab():
                 if level_default:
                     status_msg += f" -> Level: {level_default}"
 
-            logger.info(f"[on_generate] interactive: {len(family_choices)} families, {len(level_choices)} levels")
-            return (query, {}, "", "",
-                    gr.Textbox(visible=True, value=status_msg),
-                    gr.Dropdown(visible=bool(family_choices), choices=family_choices,
-                                value=family_choices[0] if family_choices else None),
-                    gr.Radio(visible=bool(level_choices), choices=level_choices,
-                                value=level_default),
-                    gr.Number(visible=True, value=x_val),
-                    gr.Number(visible=True, value=y_val),
-                    gr.Button(visible=True),
-                    gr.Textbox(visible=False),
-                    None,
-                    _step_indicator(2, MAIN_STEPS))
+            yield (query, {}, "", "",
+                   gr.Markdown(visible=False, value=""),
+                   gr.Textbox(visible=True, value=status_msg),
+                   gr.Dropdown(visible=bool(family_choices), choices=family_choices,
+                               value=family_choices[0] if family_choices else None),
+                   gr.Radio(visible=bool(level_choices), choices=level_choices,
+                               value=level_default),
+                   gr.Number(visible=True, value=x_val),
+                   gr.Number(visible=True, value=y_val),
+                   gr.Button(visible=True),
+                   gr.Textbox(visible=False),
+                   None,
+                   _step_indicator(2, MAIN_STEPS))
         except Exception:
             err = traceback.format_exc()
             logger.error(f"[on_generate] EXCEPTION:\n{err}")
-            return (query, {}, "", "",
-                    gr.Textbox(visible=True, value=f"Error:\n{err}"),
-                    gr.Dropdown(visible=False, choices=[]),
-                    gr.Radio(visible=False, choices=[]),
-                    gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
-                    gr.Button(visible=False),
-                    gr.Textbox(visible=False), None,
-                    _step_indicator(1, MAIN_STEPS))
+            yield _empty(f"Error:\n{err}")
 
     def on_confirm_selection(query, family, level, x, y):
         logger.info(f"[on_confirm] query={query!r} family={family!r} level={level!r} x={x} y={y}")
@@ -678,10 +824,13 @@ def create_bridge_tab():
 
     # === Wire events ===
     refresh_btn.click(on_refresh_health, outputs=[revit_status])
+    unit_selector.change(on_change_unit, inputs=[unit_selector], outputs=[unit_selector])
+    detect_unit_btn.click(on_detect_unit, outputs=[unit_selector])
 
     generate_btn.click(
         on_generate, inputs=[query_input],
         outputs=[current_query, current_selections, code_display, last_code,
+                 thinking_display,
                  selection_status, family_radio, level_radio,
                  x_input, y_input, confirm_selection_btn,
                  security_status, rag_info, step_display],

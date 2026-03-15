@@ -20,6 +20,9 @@ bridge_router = APIRouter(prefix="/api/v1/bridge", tags=["mcp-bridge"])
 _tool_store = ToolStore()
 _classifier = IntentClassifier()
 
+# Global user unit preference (default: mm)
+_user_unit: str = "mm"
+
 
 def _get_bridge_config() -> dict:
     """Read mcp_bridge config section."""
@@ -88,6 +91,15 @@ class QueryRevitRequest(BaseModel):
 
 # -- API Explorer Routes -------------------------------------------------------
 
+class ParameterizeRequest(BaseModel):
+    code: str
+    source_query: str = ""
+
+
+class UnitSettingRequest(BaseModel):
+    unit: str  # "mm", "m", or "feet"
+
+
 class ApiSearchRequest(BaseModel):
     query: str
     top_k: int = 15
@@ -97,6 +109,80 @@ class ApiCodeGenRequest(BaseModel):
     api_name: str
     api_context: str
     user_hint: str = ""
+
+
+@bridge_router.get("/unit")
+async def get_unit():
+    """Get the current user unit preference."""
+    return {"unit": _user_unit}
+
+
+@bridge_router.post("/unit")
+async def set_unit(req: UnitSettingRequest):
+    """Set the user unit preference (mm, m, or feet)."""
+    global _user_unit
+    if req.unit not in ("mm", "m", "feet"):
+        raise HTTPException(400, f"Invalid unit '{req.unit}'. Must be mm, m, or feet.")
+    _user_unit = req.unit
+    return {"unit": _user_unit, "status": "updated"}
+
+
+@bridge_router.get("/project-units")
+async def get_project_units():
+    """Query Revit for the project's display unit settings."""
+    try:
+        client = await _get_revit_client()
+        code = (
+            'var doc = document;\n'
+            'var units = doc.GetUnits();\n'
+            'var lengthSpec = Autodesk.Revit.DB.SpecTypeId.Length;\n'
+            'var formatOptions = units.GetFormatOptions(lengthSpec);\n'
+            'var unitTypeId = formatOptions.GetUnitTypeId();\n'
+            'return new {\n'
+            '    LengthUnit = unitTypeId.TypeId,\n'
+            '    DisplayName = Autodesk.Revit.DB.LabelUtils.GetLabelForUnit(unitTypeId)\n'
+            '};\n'
+        )
+        resp = await client.send_code(code)
+        if resp.success and resp.result:
+            result = resp.result if isinstance(resp.result, dict) else {}
+            unit_id = result.get("LengthUnit", "")
+            display = result.get("DisplayName", "")
+            # Map Revit unit type to our simplified units
+            detected = "mm"
+            if "millimeters" in unit_id.lower() or "millimeters" in display.lower():
+                detected = "mm"
+            elif "meters" in unit_id.lower() and "milli" not in unit_id.lower():
+                detected = "m"
+            elif "feet" in unit_id.lower() or "foot" in unit_id.lower():
+                detected = "feet"
+            return {
+                "revit_unit": unit_id,
+                "display_name": display,
+                "detected": detected,
+                "current_setting": _user_unit,
+            }
+        return {"error": resp.error or "Failed to query project units",
+                "current_setting": _user_unit}
+    except (ConnectionError, OSError):
+        return {"error": "Cannot connect to Revit", "current_setting": _user_unit}
+    except Exception as e:
+        return {"error": str(e), "current_setting": _user_unit}
+
+
+@bridge_router.post("/parameterize")
+async def parameterize_code(req: ParameterizeRequest):
+    """Use LLM to convert hardcoded values into {placeholder} parameters for solidification."""
+    from server.app.deps import get_config
+    from pipeline.llm_client import create_llm_client
+    from mcp_bridge.code_generator import CodeGenerator
+
+    config = get_config()
+    llm = create_llm_client(config)
+    gen = CodeGenerator(None, llm)  # retriever not needed for parameterization
+
+    param_code, parameters = gen.parameterize(req.code, req.source_query)
+    return {"code": param_code, "parameters": parameters}
 
 
 @bridge_router.post("/api-search")
@@ -195,7 +281,7 @@ async def generate_code(req: GenerateRequest):
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
-    gen = CodeGenerator(retriever, llm)
+    gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
 
     code, meta = gen.generate(req.query, req.api_top_k, req.code_top_k)
 
@@ -215,7 +301,7 @@ async def generate_code_stream(req: GenerateRequest):
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
-    gen = CodeGenerator(retriever, llm)
+    gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
 
     async def event_stream():
         # Phase 1: RAG retrieval
@@ -227,12 +313,13 @@ async def generate_code_stream(req: GenerateRequest):
         yield f"event: rag\ndata: {json.dumps(f'Found {len(results.api_items)} API docs + {len(results.sdk_items)} SDK examples')}\n\n"
 
         # Phase 2: Stream code generation
-        from mcp_bridge.code_generator import SYSTEM_EXECUTE
+        from mcp_bridge.code_generator import SYSTEM_EXECUTE, CodeGenerator as CG
         system = SYSTEM_EXECUTE.format(
             revit_version=gen.revit_version,
             api_context=ctx.get("api_context", "(none)"),
             code_context=ctx.get("code_context", "(none)"),
             selections_context="",
+            unit_context=CG.UNIT_CONTEXTS.get(gen.user_unit, CG.UNIT_CONTEXTS["mm"]),
         )
 
         accumulated = ""
@@ -270,7 +357,7 @@ async def generate_with_selections(req: GenerateWithSelectionsRequest):
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
-    gen = CodeGenerator(retriever, llm)
+    gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
 
     code, meta = gen.generate(
         req.query, req.api_top_k, req.code_top_k, selections=req.selections
@@ -312,7 +399,7 @@ async def generate_and_execute(req: GenerateRequest):
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
-    gen = CodeGenerator(retriever, llm)
+    gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
     code, meta = gen.generate(req.query, req.api_top_k, req.code_top_k)
 
     # Security review

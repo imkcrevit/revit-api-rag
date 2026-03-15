@@ -1,0 +1,55 @@
+name: create_room
+display_name: Create Room
+description: create room by height , width and height
+code_template: "// Step 1: Get the wall type \"Generic - 150mm\" — using FilteredElementCollector\
+  \ with OfClass(WallType)\nWallType wallType = new FilteredElementCollector(document)\n\
+  \    .OfClass(typeof(WallType))\n    .Cast<WallType>()\n    .FirstOrDefault(wt =>\
+  \ wt.Name == \"Generic - 150mm\");\n\nif (wallType == null)\n    return new { Status\
+  \ = \"Error\", Message = \"WallType 'Generic - 150mm' not found.\" };\n\n// Step\
+  \ 2: Get the level \"L1\" — using FilteredElementCollector with OfClass(Level)\n\
+  Level level = new FilteredElementCollector(document)\n    .OfClass(typeof(Level))\n\
+  \    .Cast<Level>()\n    .FirstOrDefault(l => l.Name == \"L1\");\n\nif (level ==\
+  \ null)\n    return new { Status = \"Error\", Message = \"Level 'L1' not found.\"\
+  \ };\n\n// Step 3: Define the room dimensions — 5m x 4m in feet (1m = 1/0.3048 ft)\n\
+  double width  = 5.0 / 0.3048; // 5m in feet\ndouble depth  = 4.0 / 0.3048; // 4m\
+  \ in feet\ndouble height = 3.0 / 0.3048; // 3m wall height in feet\n\n// Step 4:\
+  \ Define the four corner points of the room\nXYZ pt0 = new XYZ(0,     0,     level.Elevation);\n\
+  XYZ pt1 = new XYZ(width, 0,     level.Elevation);\nXYZ pt2 = new XYZ(width, depth,\
+  \ level.Elevation);\nXYZ pt3 = new XYZ(0,     depth, level.Elevation);\n\n// Step\
+  \ 5: Define the four wall curves (closed loop)\nList<Curve> wallCurves = new List<Curve>\n\
+  {\n    Line.CreateBound(pt0, pt1), // South wall\n    Line.CreateBound(pt1, pt2),\
+  \ // East wall\n    Line.CreateBound(pt2, pt3), // North wall\n    Line.CreateBound(pt3,\
+  \ pt0)  // West wall\n};\n\n// Step 6: Create the four walls using Wall.Create —\
+  \ structural = false\nList<Wall> createdWalls = new List<Wall>();\nforeach (Curve\
+  \ curve in wallCurves)\n{\n    Wall wall = Wall.Create(\n        document,\n   \
+  \     curve,\n        wallType.Id,\n        level.Id,\n        height,\n       \
+  \ 0.0,    // offset from level\n        false,  // flip\n        false   // structural\n\
+  \    );\n    createdWalls.Add(wall);\n}\n\n// Step 7: Create a Room at the center\
+  \ of the office — using document.Create.NewRoom\n// Room center point (UV for plan\
+  \ placement)\ndouble centerX = width  / 2.0;\ndouble centerY = depth  / 2.0;\nUV\
+  \ roomCenter = new UV(centerX, centerY);\n\nAutodesk.Revit.DB.Architecture.Room\
+  \ room =\n    document.Create.NewRoom(level, roomCenter);\n\nif (room == null)\n\
+  \    return new { Status = \"Error\", Message = \"Failed to create room.\" };\n\n\
+  // Step 8: Set the room name and number\nroom.Name   = \"办公室\";\nroom.Number = \"\
+  101\";\n\n// Step 9: Get the active view to place the room tag\n// Use the first\
+  \ floor plan view associated with L1\nView tagView = new FilteredElementCollector(document)\n\
+  \    .OfClass(typeof(ViewPlan))\n    .Cast<ViewPlan>()\n    .FirstOrDefault(v =>\
+  \ v.GenLevel != null && v.GenLevel.Id == level.Id && !v.IsTemplate);\n\nif (tagView\
+  \ == null)\n{\n    // Fallback: any floor plan view\n    tagView = new FilteredElementCollector(document)\n\
+  \        .OfClass(typeof(ViewPlan))\n        .Cast<ViewPlan>()\n        .FirstOrDefault(v\
+  \ => !v.IsTemplate);\n}\n\nAutodesk.Revit.DB.Architecture.RoomTag roomTag = null;\n\
+  if (tagView != null)\n{\n    // Step 10: Create a RoomTag at the room center — using\
+  \ document.Create.NewRoomTag\n    roomTag = document.Create.NewRoomTag(\n      \
+  \  new LinkElementId(room.Id),\n        roomCenter,\n        tagView.Id\n    );\n\
+  }\n\n// Step 11: Return summary of created elements\nreturn new\n{\n    Status \
+  \      = \"Success\",\n    Message      = \"办公室创建成功 (5m x 4m)\",\n    WallCount\
+  \    = createdWalls.Count,\n    WallIds      = createdWalls.Select(w => w.Id.Value).ToList(),\n\
+  \    RoomId       = room.Id.Value,\n    RoomName     = room.Name,\n    RoomNumber\
+  \   = room.Number,\n    RoomTagId    = roomTag != null ? roomTag.Id.Value : -1L,\n\
+  \    LevelName    = level.Name,\n    WallTypeName = wallType.Name\n};"
+parameters: []
+tags: []
+created_at: '2026-03-15T14:37:20.232999'
+source_query: 创建一个5m x 4m的办公室，包含4面墙、房间和房间标签
+execution_count: 0
+last_used: ''

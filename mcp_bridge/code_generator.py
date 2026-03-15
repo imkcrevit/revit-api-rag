@@ -10,6 +10,7 @@ Transaction. Generated code must NOT create its own Transaction.
 """
 from __future__ import annotations
 
+import json
 import re
 
 from pipeline.retriever import RAGRetriever
@@ -56,10 +57,13 @@ System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB, Autodesk.Rev
    Writing `new Transaction(...)` will cause a nested transaction error.
 4. Use variable `document` directly. Do NOT declare `doc`, `uidoc`, or `uiapp`.
    If you need UIDocument: `new UIDocument(document)`
-5. For Structure namespace, use fully qualified names:
-   `Autodesk.Revit.DB.Structure.StructuralType.Column`
+5. For sub-namespaces NOT in auto-injected usings, use fully qualified names:
+   - Structure: `Autodesk.Revit.DB.Structure.StructuralType.Column`
+   - Architecture: `Autodesk.Revit.DB.Architecture.Room`, `.RoomTag`, `.TopographySurface`
+   - Mechanical/Electrical/Plumbing: use fully qualified names
+   NEVER write bare `Room` or `RoomTag` — always prefix with `Autodesk.Revit.DB.Architecture.`
 6. All coordinates in Revit internal units (feet).
-   User mm -> divide by 304.8. User m -> divide by 0.3048.
+{unit_context}
 7. Return a meaningful result:
    `return new {{ ElementId = element.Id.Value, Status = "Created" }};`
 8. Structure code with numbered step comments:
@@ -71,6 +75,11 @@ System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB, Autodesk.Rev
    - Revit 2024+: use `ElementId.Value` (long), NOT `ElementId.IntegerValue` (removed)
    - `new ElementId(12345)` — plain integer, do NOT add `L` suffix (e.g. `12345L` is wrong)
 10. If the code needs user-supplied values, use placeholders: `{{{{param_name}}}}`.
+11. ALWAYS start your response with a <thinking> block that explains your plan:
+    - Break down the task into numbered sub-tasks
+    - List which Revit API classes/methods you will use for each step
+    - Note any potential pitfalls or design decisions
+    Then write the code in a ```csharp block.
 {selections_context}
 ## Retrieved API Documentation
 {api_context}
@@ -83,11 +92,19 @@ System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB, Autodesk.Rev
 class CodeGenerator:
     """Generate Revit-executable C# code using RAG context."""
 
+    # Unit conversion context templates
+    UNIT_CONTEXTS = {
+        "mm": "   User input is in millimeters (mm). Convert: `value_mm / 304.8` to get feet.",
+        "m": "   User input is in meters (m). Convert: `value_m / 0.3048` to get feet.",
+        "feet": "   User input is already in feet (Revit internal units). No conversion needed.",
+    }
+
     def __init__(self, retriever: RAGRetriever, llm_client: LLMClient,
-                 revit_version: str = "2026"):
+                 revit_version: str = "2026", user_unit: str = "mm"):
         self.retriever = retriever
         self.llm = llm_client
         self.revit_version = revit_version
+        self.user_unit = user_unit
 
     def generate(self, user_query: str, api_top_k: int = 15,
                  code_top_k: int = 5,
@@ -112,6 +129,7 @@ class CodeGenerator:
             api_context=ctx.get("api_context", "(none)"),
             code_context=ctx.get("code_context", "(none)"),
             selections_context=self._build_selections_context(selections),
+            unit_context=self.UNIT_CONTEXTS.get(self.user_unit, self.UNIT_CONTEXTS["mm"]),
         )
 
         raw = self.llm.generate_text(user_query, system_prompt=system)
@@ -139,6 +157,7 @@ class CodeGenerator:
             api_context=ctx.get("api_context", "(none)"),
             code_context=ctx.get("code_context", "(none)"),
             selections_context=self._build_selections_context(selections),
+            unit_context=self.UNIT_CONTEXTS.get(self.user_unit, self.UNIT_CONTEXTS["mm"]),
         )
 
         yield from self.llm.generate_stream(user_query, system_prompt=system)
@@ -211,8 +230,74 @@ class CodeGenerator:
     @staticmethod
     def _extract_code(text: str) -> str:
         """Strip markdown code fences if present and clean up common LLM mistakes."""
-        m = re.search(r"```(?:csharp|cs)?\s*\n(.*?)```", text, re.DOTALL)
-        code = m.group(1).strip() if m else text.strip()
+        # Remove <thinking> block first
+        cleaned = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL)
+        m = re.search(r"```(?:csharp|cs)?\s*\n(.*?)```", cleaned, re.DOTALL)
+        code = m.group(1).strip() if m else cleaned.strip()
         # Fix: LLM sometimes adds L suffix to ElementId constructor args
         code = re.sub(r'new ElementId\((\d+)L\)', r'new ElementId(\1)', code)
         return code
+
+    @staticmethod
+    def _extract_thinking(text: str) -> str:
+        """Extract <thinking> block from LLM response."""
+        m = re.search(r'<thinking>(.*?)</thinking>', text, re.DOTALL)
+        return m.group(1).strip() if m else ""
+
+    def parameterize(self, code: str, source_query: str) -> tuple[str, list[dict]]:
+        """Use LLM to replace hardcoded values with {placeholders} for tool solidification.
+
+        Returns (parameterized_code, parameters_list).
+        """
+        system = """\
+You are a Revit API code parameterization expert. Given C# code generated for a specific task,
+identify hardcoded values that should become reusable parameters, and replace them with {placeholder} syntax.
+
+## Rules
+1. Replace hardcoded values with {param_name} placeholders (lowercase_snake_case)
+2. Common parameterizable values:
+   - Wall/Floor/Column type names → {type_name} or {wall_type} with choices_from
+   - Level names → {level_name} with choices_from: "levels"
+   - Dimensions (width, depth, height) → {width}, {depth}, {height} (keep units in description)
+   - Coordinates → {x}, {y}
+   - Room/element names/numbers → {room_name}, {room_number}
+3. For type name parameters, add choices_from based on category:
+   - Wall types → "family_types:OST_Walls"
+   - Structural columns → "family_types:OST_StructuralColumns"
+   - Floor types → "floor_types"
+   - Levels → "levels"
+4. Keep structural code unchanged — only replace literal values
+5. For numeric placeholders in expressions like `5.0 / 0.3048`, replace the user-facing value:
+   `{width} / 0.3048` (width in meters) or `{width_mm} / 304.8` (width in mm)
+6. Do NOT parameterize Revit API constants, enum values, or boolean flags
+
+## Output Format
+Return ONLY valid JSON (no markdown fences):
+{
+  "code": "// the parameterized code...",
+  "parameters": [
+    {"name": "param_name", "type": "string|double", "description": "...", "default": "value", "choices_from": "optional"}
+  ]
+}
+"""
+        prompt = f"Source query: {source_query}\n\nCode to parameterize:\n```csharp\n{code}\n```"
+
+        raw = self.llm.generate_text(prompt, system_prompt=system)
+
+        # Extract JSON from response
+        # Strip markdown fences if LLM wraps the JSON
+        cleaned = re.sub(r'^```(?:json)?\s*\n', '', raw.strip())
+        cleaned = re.sub(r'\n```\s*$', '', cleaned)
+
+        try:
+            result = json.loads(cleaned)
+            param_code = result.get("code", code)
+            parameters = result.get("parameters", [])
+            # Ensure all parameters have required fields
+            for p in parameters:
+                p.setdefault("type", "string")
+                p.setdefault("description", f"Parameter: {p.get('name', '?')}")
+            return param_code, parameters
+        except (json.JSONDecodeError, KeyError):
+            # Fallback: return original code with regex-extracted params
+            return code, self.extract_parameters(code)
