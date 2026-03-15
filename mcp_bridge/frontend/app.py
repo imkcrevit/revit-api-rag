@@ -10,6 +10,7 @@ Tool Library workflow:
 from __future__ import annotations
 
 import json
+import traceback
 import httpx
 import gradio as gr
 
@@ -110,7 +111,6 @@ def _list_tools() -> list[dict]:
 
 
 def _get_tool_choices(name: str) -> dict:
-    """Fetch dynamic parameter choices from Revit for a tool."""
     try:
         resp = httpx.get(_bridge_url(f"/tools/{name}/choices"), timeout=30)
         return resp.json()
@@ -119,7 +119,6 @@ def _get_tool_choices(name: str) -> dict:
 
 
 def _get_tool_detail(name: str) -> dict:
-    """Fetch full tool definition including parameters."""
     try:
         resp = httpx.get(_bridge_url(f"/tools/{name}"), timeout=10)
         return resp.json()
@@ -137,7 +136,7 @@ def _run_tool(name: str, params: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Step indicator helper
+# Step indicator
 # ---------------------------------------------------------------------------
 
 def _step_indicator(current: int, labels: list[str]) -> str:
@@ -163,14 +162,11 @@ TOOL_STEPS = ["Select Tool", "Load Choices", "Set Params", "Run"]
 def create_bridge_tab():
     """Create MCP Bridge tab contents (called inside gr.Tab)."""
 
-    # === Header: Revit Status ===
+    # === Header ===
     with gr.Row():
         revit_status = gr.Textbox(
-            value="Revit Disconnected",
-            label="Revit Status",
-            interactive=False,
-            max_lines=1,
-            scale=4,
+            value="Revit Disconnected", label="Revit Status",
+            interactive=False, max_lines=1, scale=4,
         )
         refresh_btn = gr.Button("Refresh", size="sm", scale=0)
 
@@ -179,34 +175,26 @@ def create_bridge_tab():
     current_selections = gr.State({})
     last_code = gr.State("")
 
-    # ─────────────────────────────────────────────────────────────
-    # SECTION A: Code Generation Pipeline
-    # ─────────────────────────────────────────────────────────────
+    # ── SECTION A: Code Generation Pipeline ──
     gr.Markdown("### Code Generation Pipeline")
 
     step_display = gr.Textbox(
         value=_step_indicator(1, MAIN_STEPS),
-        label="Workflow",
-        interactive=False,
-        max_lines=1,
+        label="Workflow", interactive=False, max_lines=1,
     )
 
-    # --- Step 1: Input ---
+    # Step 1: Input
     with gr.Row():
         query_input = gr.Textbox(
-            placeholder="Describe what to do in Revit... (e.g. create structural column at 3000,3000)",
-            show_label=False,
-            scale=5,
-            lines=1,
-            max_lines=2,
+            placeholder="e.g. 创建结构柱在100,0,0",
+            show_label=False, scale=5, lines=1, max_lines=2,
         )
         generate_btn = gr.Button("Generate Code", variant="primary", scale=1)
 
-    # --- Step 2: Interactive Selection (all components individually visible-controlled) ---
+    # Step 2: Selection (individual components, no layout wrappers in outputs)
     selection_status = gr.Textbox(
         label="Step 2: Select Options (from Revit)",
-        interactive=False,
-        visible=False,
+        interactive=False, visible=False,
     )
     family_dropdown = gr.Dropdown(
         label="Family Type", choices=[], interactive=True, visible=False,
@@ -220,227 +208,218 @@ def create_bridge_tab():
         "Confirm & Generate Code", variant="primary", visible=False,
     )
 
-    # --- Step 3: Review Code ---
+    # Step 3: Review Code
     code_display = gr.Code(
-        language="cpp",
-        label="Step 3: Review Generated Code",
-        interactive=True,
-        lines=15,
+        language="cpp", label="Step 3: Review Generated Code",
+        interactive=True, lines=15,
     )
     security_status = gr.Textbox(
         label="Security Review", interactive=False, visible=False,
     )
 
-    # --- Step 4: Execute ---
+    # Step 4: Execute
     execute_btn = gr.Button("Execute in Revit", variant="primary")
     exec_result = gr.Textbox(
         label="Step 4: Execution Result", interactive=False, lines=3,
     )
 
-    # --- Step 5: Solidify ---
-    with gr.Accordion("Step 5: Save as Reusable Tool", open=False):
-        with gr.Row():
-            tool_name = gr.Textbox(label="Tool Name", placeholder="e.g. create_wall")
-            tool_desc = gr.Textbox(label="Description", placeholder="What this tool does")
-        solidify_btn = gr.Button("Solidify", variant="primary")
-        solidify_result = gr.Textbox(label="", interactive=False, visible=False)
+    # Step 5: Solidify
+    gr.Markdown("#### Save as Reusable Tool")
+    with gr.Row():
+        tool_name = gr.Textbox(label="Tool Name", placeholder="e.g. create_wall")
+        tool_desc = gr.Textbox(label="Description", placeholder="What this tool does")
+    solidify_btn = gr.Button("Solidify", variant="primary")
+    solidify_result = gr.Textbox(label="Solidify Result", interactive=False)
 
-    # --- RAG Context ---
+    # RAG Context
     with gr.Accordion("RAG Context", open=False):
         rag_info = gr.JSON(label="Retrieval Details")
 
-    # ─────────────────────────────────────────────────────────────
-    # SECTION B: Tool Library
-    # ─────────────────────────────────────────────────────────────
+    # ── SECTION B: Tool Library ──
     gr.Markdown("### Solidified Tool Library")
 
     tool_step_display = gr.Textbox(
         value=_step_indicator(1, TOOL_STEPS),
-        label="Tool Workflow",
-        interactive=False,
-        max_lines=1,
+        label="Tool Workflow", interactive=False, max_lines=1,
     )
 
-    # Step 1: Select tool
     tools_refresh_btn = gr.Button("Refresh Tools", size="sm")
     tools_table = gr.Dataframe(
         headers=["Name", "Description", "Uses", "Tags"],
-        label="Available Tools (click name to select)",
-        interactive=False,
+        label="Available Tools", interactive=False,
     )
 
-    # Step 2: Load choices
     with gr.Row():
         run_tool_name = gr.Textbox(
-            label="Selected Tool", placeholder="click a tool above or type name",
-            scale=3,
+            label="Selected Tool", placeholder="type tool name", scale=3,
         )
         load_choices_btn = gr.Button("Load Choices from Revit", scale=1)
 
     tool_choices_info = gr.Textbox(
-        label="Step 2: Available Choices (queried from Revit)",
-        interactive=False,
-        visible=False,
-        lines=5,
+        label="Step 2: Available Choices", interactive=False, visible=False, lines=5,
     )
     tool_choices_state = gr.State({})
 
-    # Step 3: Parameters
     run_tool_params = gr.Textbox(
-        label="Step 3: Parameters (auto-filled from choices, edit as needed)",
+        label="Step 3: Parameters",
         placeholder='{"level_name": "L1", "type_name": "...", "x": 0}',
         lines=4,
     )
 
-    # Step 4: Run
     run_tool_btn = gr.Button("Run Tool", variant="primary")
     run_tool_result = gr.Textbox(
         label="Step 4: Tool Result", interactive=False, lines=3,
     )
 
     # =====================================================================
-    # Event handlers
+    # Event handlers — ALL return plain values, NO gr.update()
     # =====================================================================
 
     def on_refresh_health():
         return _check_revit_health()
 
-    # --- Code Generation Pipeline ---
-
     def on_generate(query):
-        """Classify intent → direct generate or show selection dropdowns."""
-        if not query.strip():
+        """Returns 13 values matching outputs list."""
+        try:
+            if not query.strip():
+                return (query, {}, "", "",
+                        # selection: status, family, level, x, y, confirm_btn
+                        gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
+                        gr.Dropdown(visible=False, choices=[]),
+                        gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
+                        gr.Button(visible=False),
+                        # security, rag, step
+                        gr.Textbox(visible=False), None,
+                        _step_indicator(1, MAIN_STEPS))
+
+            intent = _classify_intent(query)
+            itype = intent.get("interaction_type", "direct")
+
+            if itype == "direct":
+                result = _generate_code(query)
+                code = result.get("code", "")
+                safe = result.get("safe", True)
+                warnings = result.get("warnings", [])
+                rag = result.get("rag_context", {})
+                sec_text = "Safe" if safe else "Warning: " + "; ".join(warnings)
+
+                return (query, {}, code, code,
+                        gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
+                        gr.Dropdown(visible=False, choices=[]),
+                        gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
+                        gr.Button(visible=False),
+                        gr.Textbox(visible=True, value=sec_text), rag,
+                        _step_indicator(3, MAIN_STEPS))
+
+            # Interactive: query Revit
+            family_choices = []
+            level_choices = []
+            levels_raw = []
+            status_parts = []
+            parsed_coords = intent.get("parsed_coords")
+
+            for q in intent.get("queries", []):
+                cmd = q.get("command")
+                params = q.get("params", {})
+                label = q.get("label", cmd)
+                data = _query_revit(cmd, params)
+
+                if cmd == "get_available_family_types" and isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict):
+                            name = item.get("name", item.get("Name", str(item)))
+                            family_choices.append(name)
+                        else:
+                            family_choices.append(str(item))
+                    status_parts.append(f"{label}: {len(family_choices)}")
+
+            if intent.get("need_level"):
+                levels_raw = _query_revit("get_levels", {})
+                if isinstance(levels_raw, list):
+                    for item in levels_raw:
+                        if isinstance(item, dict):
+                            name = item.get("Name", item.get("name", str(item)))
+                            elev = item.get("ElevationMm", item.get("elevation", ""))
+                            level_choices.append(f"{name} ({elev}mm)" if elev else name)
+                        else:
+                            level_choices.append(str(item))
+                status_parts.append(f"Levels: {len(level_choices)}")
+
+            # Auto-fill from parsed coords
+            x_val = parsed_coords["x"] if parsed_coords else 0
+            y_val = parsed_coords["y"] if parsed_coords else 0
+
+            # Auto-select level by elevation
+            level_default = level_choices[0] if level_choices else None
+            if parsed_coords and parsed_coords.get("z") is not None and levels_raw:
+                from mcp_bridge.interactive import IntentClassifier
+                matched = IntentClassifier.match_level_by_elevation(
+                    levels_raw, parsed_coords["z"]
+                )
+                if matched:
+                    for lc in level_choices:
+                        if lc.startswith(matched):
+                            level_default = lc
+                            break
+
+            status_msg = "Queried from Revit: " + " | ".join(status_parts)
+            if parsed_coords:
+                z_info = f", Z={parsed_coords['z']}mm" if parsed_coords.get("z") is not None else ""
+                status_msg += f"\nParsed: X={x_val}, Y={y_val}{z_info}"
+                if level_default:
+                    status_msg += f" -> Level: {level_default}"
+
             return (query, {}, "", "",
-                    # selection components (6)
-                    gr.update(visible=False), gr.update(visible=False),
-                    gr.update(visible=False), gr.update(visible=False),
-                    gr.update(visible=False), gr.update(visible=False),
-                    # security + rag + step
-                    gr.update(visible=False), None, _step_indicator(1, MAIN_STEPS))
+                    gr.Textbox(visible=True, value=status_msg),
+                    gr.Dropdown(visible=bool(family_choices), choices=family_choices,
+                                value=family_choices[0] if family_choices else None),
+                    gr.Dropdown(visible=bool(level_choices), choices=level_choices,
+                                value=level_default),
+                    gr.Number(visible=True, value=x_val),
+                    gr.Number(visible=True, value=y_val),
+                    gr.Button(visible=True),
+                    gr.Textbox(visible=False),
+                    None,
+                    _step_indicator(2, MAIN_STEPS))
+        except Exception:
+            err = traceback.format_exc()
+            return (query, {}, "", "",
+                    gr.Textbox(visible=True, value=f"Error:\n{err}"),
+                    gr.Dropdown(visible=False, choices=[]),
+                    gr.Dropdown(visible=False, choices=[]),
+                    gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
+                    gr.Button(visible=False),
+                    gr.Textbox(visible=False), None,
+                    _step_indicator(1, MAIN_STEPS))
 
-        intent = _classify_intent(query)
-        itype = intent.get("interaction_type", "direct")
+    def on_confirm_selection(query, family, level, x, y):
+        try:
+            selections = {}
+            if family:
+                selections["family_type"] = family
+            if level:
+                level_name = level.split(" (")[0] if " (" in level else level
+                selections["level"] = level_name
+            if x or y:
+                selections["position"] = {"x": x, "y": y}
 
-        if itype == "direct":
-            result = _generate_code(query)
+            result = _generate_code(query, selections=selections)
             code = result.get("code", "")
             safe = result.get("safe", True)
             warnings = result.get("warnings", [])
             rag = result.get("rag_context", {})
             sec_text = "Safe" if safe else "Warning: " + "; ".join(warnings)
 
-            return (query, {}, code, code,
-                    # hide all selection components
-                    gr.update(visible=False), gr.update(visible=False),
-                    gr.update(visible=False), gr.update(visible=False),
-                    gr.update(visible=False), gr.update(visible=False),
-                    # show security + rag
-                    gr.update(visible=True, value=sec_text), rag,
+            return (selections, code, code,
+                    gr.Textbox(visible=True, value=sec_text),
+                    rag,
                     _step_indicator(3, MAIN_STEPS))
-
-        # Interactive: query Revit for options
-        family_choices = []
-        level_choices = []
-        levels_raw = []  # keep raw level data for elevation matching
-        status_parts = []
-        parsed_coords = intent.get("parsed_coords")
-
-        for q in intent.get("queries", []):
-            cmd = q.get("command")
-            params = q.get("params", {})
-            label = q.get("label", cmd)
-            data = _query_revit(cmd, params)
-
-            if cmd == "get_available_family_types" and isinstance(data, list):
-                for item in data:
-                    if isinstance(item, dict):
-                        name = item.get("name", item.get("Name", str(item)))
-                        family_choices.append(name)
-                    else:
-                        family_choices.append(str(item))
-                status_parts.append(f"{label}: {len(family_choices)}")
-
-        if intent.get("need_level"):
-            levels_raw = _query_revit("get_levels", {})
-            if isinstance(levels_raw, list):
-                for item in levels_raw:
-                    if isinstance(item, dict):
-                        name = item.get("Name", item.get("name", str(item)))
-                        elev = item.get("ElevationMm", item.get("elevation", ""))
-                        level_choices.append(f"{name} ({elev}mm)" if elev else name)
-                    else:
-                        level_choices.append(str(item))
-            status_parts.append(f"Levels: {len(level_choices)}")
-
-        has_family = len(family_choices) > 0
-        has_level = len(level_choices) > 0
-
-        # Auto-fill coordinates from parsed query
-        x_val = parsed_coords["x"] if parsed_coords else 0
-        y_val = parsed_coords["y"] if parsed_coords else 0
-
-        # Auto-select level by elevation (z coordinate)
-        level_default = level_choices[0] if level_choices else None
-        if parsed_coords and parsed_coords.get("z") is not None and levels_raw:
-            from mcp_bridge.interactive import IntentClassifier
-            matched = IntentClassifier.match_level_by_elevation(
-                levels_raw, parsed_coords["z"]
-            )
-            if matched:
-                # Find the display string that starts with matched name
-                for lc in level_choices:
-                    if lc.startswith(matched):
-                        level_default = lc
-                        break
-
-        status_msg = "Queried from Revit: " + " | ".join(status_parts)
-        if parsed_coords:
-            z_info = f", Z={parsed_coords['z']}mm" if parsed_coords.get("z") is not None else ""
-            status_msg += f"\nParsed from input: X={x_val}mm, Y={y_val}mm{z_info}"
-            if level_default:
-                status_msg += f" → Level: {level_default}"
-
-        return (query, {}, "", "",
-                # selection_status
-                gr.update(visible=True, value=status_msg),
-                # family_dropdown
-                gr.update(visible=has_family, choices=family_choices,
-                          value=family_choices[0] if family_choices else None),
-                # level_dropdown
-                gr.update(visible=has_level, choices=level_choices,
-                          value=level_default),
-                # x_input, y_input — pre-filled from parsed coords
-                gr.update(visible=True, value=x_val),
-                gr.update(visible=True, value=y_val),
-                # confirm_btn
-                gr.update(visible=True),
-                # security (hide)
-                gr.update(visible=False),
-                # rag
-                None,
-                _step_indicator(2, MAIN_STEPS))
-
-    def on_confirm_selection(query, family, level, x, y):
-        selections = {}
-        if family:
-            selections["family_type"] = family
-        if level:
-            level_name = level.split(" (")[0] if " (" in level else level
-            selections["level"] = level_name
-        if x or y:
-            selections["position"] = {"x": x, "y": y}
-
-        result = _generate_code(query, selections=selections)
-        code = result.get("code", "")
-        safe = result.get("safe", True)
-        warnings = result.get("warnings", [])
-        rag = result.get("rag_context", {})
-        sec_text = "Safe" if safe else "Warning: " + "; ".join(warnings)
-
-        return (selections, code, code,
-                gr.update(visible=True, value=sec_text),
-                rag,
-                _step_indicator(3, MAIN_STEPS))
+        except Exception:
+            err = traceback.format_exc()
+            return ({}, "", "",
+                    gr.Textbox(visible=True, value=f"Error:\n{err}"),
+                    None,
+                    _step_indicator(2, MAIN_STEPS))
 
     def on_execute(code):
         if not code.strip():
@@ -454,72 +433,69 @@ def create_bridge_tab():
         return msg, _step_indicator(4, MAIN_STEPS)
 
     def on_solidify(name, description, code, query):
-        if not name.strip():
-            return (gr.update(visible=True, value="Please enter a tool name."),
-                    _step_indicator(4, MAIN_STEPS))
-        result = _solidify_tool(name, code, description, query)
-        if "error" in result:
-            return (gr.update(visible=True, value=f"Error: {result['error']}"),
-                    _step_indicator(4, MAIN_STEPS))
-        return (gr.update(visible=True, value=f"Solidified as '{result.get('name', name)}'"),
-                _step_indicator(5, MAIN_STEPS))
+        try:
+            if not name.strip():
+                return "Please enter a tool name.", _step_indicator(4, MAIN_STEPS)
+            result = _solidify_tool(name, code, description, query)
+            if "error" in result:
+                return f"Error: {result['error']}", _step_indicator(4, MAIN_STEPS)
+            return (f"Solidified as '{result.get('name', name)}'",
+                    _step_indicator(5, MAIN_STEPS))
+        except Exception:
+            return f"Error:\n{traceback.format_exc()}", _step_indicator(4, MAIN_STEPS)
 
     # --- Tool Library ---
 
     def on_refresh_tools():
         tools = _list_tools()
-        rows = []
-        for t in tools:
-            rows.append([
-                t.get("name", ""),
-                t.get("description", ""),
-                t.get("execution_count", 0),
-                ", ".join(t.get("tags", [])),
-            ])
-        return rows
+        return [[t.get("name", ""), t.get("description", ""),
+                 t.get("execution_count", 0), ", ".join(t.get("tags", []))]
+                for t in tools]
 
     def on_select_tool(evt: gr.SelectData):
         if evt.value and evt.index[1] == 0:
             return evt.value
-        return gr.update()
+        return gr.Textbox()
 
     def on_load_choices(name):
-        if not name.strip():
-            return {}, gr.update(visible=False), "", _step_indicator(1, TOOL_STEPS)
+        try:
+            if not name.strip():
+                return {}, gr.Textbox(visible=False), "", _step_indicator(1, TOOL_STEPS)
 
-        tool_detail = _get_tool_detail(name)
-        all_params = tool_detail.get("parameters", [])
-        choices = _get_tool_choices(name)
+            tool_detail = _get_tool_detail(name)
+            all_params = tool_detail.get("parameters", [])
+            choices = _get_tool_choices(name)
 
-        prefill = {}
-        display_lines = []
+            prefill = {}
+            display_lines = []
 
-        for p in all_params:
-            pname = p.get("name", "")
-            if pname in choices and choices[pname]:
-                items = choices[pname]
-                labels = [it["label"] for it in items]
-                display_lines.append(
-                    f"  {pname} ({p.get('description', '')}):\n"
-                    + "\n".join(f"    - {lb}" for lb in labels)
-                )
-                prefill[pname] = items[0]["value"]
-            elif "default" in p:
-                prefill[pname] = p["default"]
+            for p in all_params:
+                pname = p.get("name", "")
+                if pname in choices and choices[pname]:
+                    items = choices[pname]
+                    labels = [it["label"] for it in items]
+                    display_lines.append(
+                        f"  {pname} ({p.get('description', '')}):\n"
+                        + "\n".join(f"    - {lb}" for lb in labels)
+                    )
+                    prefill[pname] = items[0]["value"]
+                elif "default" in p:
+                    prefill[pname] = p["default"]
+                else:
+                    prefill[pname] = ""
+
+            if display_lines:
+                display_text = "Available choices:\n\n" + "\n\n".join(display_lines)
             else:
-                prefill[pname] = ""
+                display_text = "No dynamic parameters."
 
-        if display_lines:
-            display_text = "Available choices:\n\n" + "\n\n".join(display_lines)
-        else:
-            display_text = "No dynamic parameters."
-
-        return (
-            choices,
-            gr.update(visible=True, value=display_text),
-            json.dumps(prefill, indent=2, ensure_ascii=False),
-            _step_indicator(3, TOOL_STEPS),
-        )
+            return (choices,
+                    gr.Textbox(visible=True, value=display_text),
+                    json.dumps(prefill, indent=2, ensure_ascii=False),
+                    _step_indicator(3, TOOL_STEPS))
+        except Exception:
+            return ({}, gr.Textbox(visible=True, value=f"Error:\n{traceback.format_exc()}"),
+                    "", _step_indicator(1, TOOL_STEPS))
 
     def on_run_tool(name, params_json):
         if not name.strip():
@@ -538,21 +514,14 @@ def create_bridge_tab():
         return msg, _step_indicator(4, TOOL_STEPS)
 
     # === Wire events ===
-
     refresh_btn.click(on_refresh_health, outputs=[revit_status])
 
-    # Code Generation — outputs are all individual Components (no layout containers)
     generate_btn.click(
-        on_generate,
-        inputs=[query_input],
-        outputs=[
-            current_query, current_selections, code_display, last_code,
-            # 6 selection components (all gr.Component, not layout)
-            selection_status, family_dropdown, level_dropdown,
-            x_input, y_input, confirm_selection_btn,
-            # rest
-            security_status, rag_info, step_display,
-        ],
+        on_generate, inputs=[query_input],
+        outputs=[current_query, current_selections, code_display, last_code,
+                 selection_status, family_dropdown, level_dropdown,
+                 x_input, y_input, confirm_selection_btn,
+                 security_status, rag_info, step_display],
     )
 
     confirm_selection_btn.click(
@@ -562,31 +531,24 @@ def create_bridge_tab():
                  rag_info, step_display],
     )
 
-    execute_btn.click(
-        on_execute,
-        inputs=[code_display],
-        outputs=[exec_result, step_display],
-    )
+    execute_btn.click(on_execute, inputs=[code_display],
+                      outputs=[exec_result, step_display])
 
     solidify_btn.click(
-        on_solidify,
-        inputs=[tool_name, tool_desc, last_code, current_query],
+        on_solidify, inputs=[tool_name, tool_desc, last_code, current_query],
         outputs=[solidify_result, step_display],
     )
 
-    # Tool Library
     tools_refresh_btn.click(on_refresh_tools, outputs=[tools_table])
     tools_table.select(on_select_tool, outputs=[run_tool_name])
 
     load_choices_btn.click(
-        on_load_choices,
-        inputs=[run_tool_name],
+        on_load_choices, inputs=[run_tool_name],
         outputs=[tool_choices_state, tool_choices_info, run_tool_params,
                  tool_step_display],
     )
 
     run_tool_btn.click(
-        on_run_tool,
-        inputs=[run_tool_name, run_tool_params],
+        on_run_tool, inputs=[run_tool_name, run_tool_params],
         outputs=[run_tool_result, tool_step_display],
     )
