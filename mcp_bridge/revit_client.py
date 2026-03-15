@@ -120,11 +120,43 @@ class RevitClient:
             public static object Execute(Document document, object[] parameters)
         and compiles it with Roslyn. A Transaction is already active — user code
         must NOT create its own Transaction.
+
+        The plugin returns: {"success": bool, "result": "JSON string", "errorMessage": ""}
+        We unwrap this nested structure so callers get parsed data directly.
         """
-        return await self.send_command("send_code_to_revit", {
+        import logging
+        _log = logging.getLogger("mcp_bridge.revit_client")
+
+        resp = await self.send_command("send_code_to_revit", {
             "code": code,
             "parameters": parameters or [],
         })
+
+        # Unwrap the plugin's nested response format
+        _log.info(f"[send_code] resp.success={resp.success} result_type={type(resp.result).__name__}")
+        if resp.success and isinstance(resp.result, dict):
+            inner = resp.result
+            if "success" in inner:
+                inner_result = inner.get("result", "")
+                _log.info(f"[send_code] inner.success={inner.get('success')} inner_result_type={type(inner_result).__name__} len={len(str(inner_result)[:100])}")
+                # The result field is often a JSON string — parse it
+                if isinstance(inner_result, str) and inner_result.strip():
+                    try:
+                        inner_result = json.loads(inner_result)
+                        _log.info(f"[send_code] parsed inner_result: type={type(inner_result).__name__} len={len(inner_result) if isinstance(inner_result, list) else 'N/A'}")
+                    except (json.JSONDecodeError, ValueError) as e:
+                        _log.warning(f"[send_code] JSON parse failed: {e}")
+                error_msg = inner.get("errorMessage") or None
+                return RevitResponse(
+                    success=bool(inner.get("success", False)),
+                    result=inner_result,
+                    error=error_msg if error_msg else resp.error,
+                    raw=resp.raw,
+                )
+        elif resp.success:
+            _log.info(f"[send_code] result is NOT dict: {type(resp.result).__name__}, value={str(resp.result)[:200]}")
+
+        return resp
 
     async def ping(self) -> bool:
         """Quick connectivity check via say_hello command."""

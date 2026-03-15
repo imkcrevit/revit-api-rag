@@ -298,6 +298,19 @@
         "website": "",
         "organization": "mcp-servers-for-revit"
       }
+    },
+    {
+      "commandName": "manage_solidified_tools",
+      "assemblyPath": "RevitMCPCommandSet/2026/RevitMCPCommandSet.dll",
+      "enabled": true,
+      "supportedRevitVersions": [],
+      "description": "Manage solidified tools — list, register, run, delete code templates from web frontend",
+      "developer": {
+        "name": "mcp-servers-for-revit",
+        "email": "",
+        "website": "",
+        "organization": "mcp-servers-for-revit"
+      }
     }
   ]
 }

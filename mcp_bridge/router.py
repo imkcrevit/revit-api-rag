@@ -5,6 +5,7 @@ Prefix: /api/v1/bridge
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from fastapi import APIRouter, HTTPException
@@ -83,6 +84,103 @@ class ClassifyRequest(BaseModel):
 class QueryRevitRequest(BaseModel):
     command: str
     params: dict = {}
+
+
+# -- API Explorer Routes -------------------------------------------------------
+
+class ApiSearchRequest(BaseModel):
+    query: str
+    top_k: int = 15
+
+
+class ApiCodeGenRequest(BaseModel):
+    api_name: str
+    api_context: str
+    user_hint: str = ""
+
+
+@bridge_router.post("/api-search")
+async def api_search(req: ApiSearchRequest):
+    """Search Revit API docs via RAG — returns reranked results."""
+    from server.app.deps import get_retriever
+    retriever = get_retriever()
+    results = retriever.search(req.query, api_top_k=req.top_k, code_top_k=3)
+
+    api_items = []
+    for item in results.api_items:
+        api_items.append({
+            "name": item.name,
+            "full_id": item.full_id,
+            "summary": item.summary,
+            "syntax": item.syntax,
+            "parameters": item.parameters,
+            "remark": item.remark,
+            "distance": round(item.distance, 4),
+        })
+
+    sdk_items = []
+    for item in results.sdk_items:
+        sdk_items.append({
+            "project": item.project,
+            "content": item.content[:500],
+            "mentioned_apis": item.mentioned_apis,
+            "distance": round(item.distance, 4),
+        })
+
+    return {
+        "rewritten_query": results.rewritten_query,
+        "api_items": api_items,
+        "sdk_items": sdk_items,
+    }
+
+
+@bridge_router.post("/api-codegen")
+async def api_codegen(req: ApiCodeGenRequest):
+    """Generate a code example for a specific API member."""
+    from server.app.deps import get_config
+    from pipeline.llm_client import create_llm_client
+
+    config = get_config()
+    llm = create_llm_client(config)
+
+    system = f"""\
+You are a Revit 2026 API expert. Generate a short, runnable C# code example
+demonstrating the API member below.
+
+## Execution Context
+The code runs inside:
+```csharp
+public static object Execute(Document document, object[] parameters)
+{{
+    // YOUR CODE HERE
+}}
+```
+Auto-injected usings: System, System.Linq, System.Collections.Generic,
+Autodesk.Revit.DB, Autodesk.Revit.UI.
+
+## Rules
+- Output ONLY the method body (no class/namespace/using)
+- DO NOT create a Transaction (already wrapped)
+- Use `document` (not `doc` or `uidoc`)
+- Return a meaningful result object
+- Add step comments: `// Step 1: ...`
+- Use Revit internal units (feet)
+
+## API Reference
+{req.api_context}
+"""
+    prompt = f"Generate a code example for: {req.api_name}"
+    if req.user_hint:
+        prompt += f"\nUser hint: {req.user_hint}"
+
+    raw = llm.generate_text(prompt, system_prompt=system)
+
+    # Extract code
+    import re
+    m = re.search(r"```(?:csharp|cs)?\s*\n(.*?)```", raw, re.DOTALL)
+    code = m.group(1).strip() if m else raw.strip()
+
+    return {"code": code, "api_name": req.api_name}
 
 
 # -- Code Generation Routes ---------------------------------------------------
@@ -286,7 +384,7 @@ async def generate_and_execute(req: GenerateRequest):
 
 @bridge_router.post("/solidify")
 async def solidify_tool(req: SolidifyRequest):
-    """Save successful code as a reusable named tool."""
+    """Save successful code as a reusable named tool, then sync to Revit plugin."""
     tool = _tool_store.solidify(
         name=req.name,
         code=req.code,
@@ -295,7 +393,29 @@ async def solidify_tool(req: SolidifyRequest):
         tags=req.tags,
         source_query=req.source_query,
     )
-    return {"status": "solidified", "name": tool.name, "display_name": tool.display_name}
+
+    # Sync to Revit plugin via TCP (best-effort, don't block on failure)
+    revit_synced = False
+    try:
+        client = await _get_revit_client()
+        resp = await client.send_command("manage_solidified_tools", {
+            "action": "register",
+            "name": tool.name,
+            "code_template": tool.code_template,
+            "description": tool.description,
+            "parameters": req.parameters,
+            "source_query": req.source_query,
+        })
+        revit_synced = resp.success
+    except Exception:
+        pass  # Revit may not be connected or command not yet available
+
+    return {
+        "status": "solidified",
+        "name": tool.name,
+        "display_name": tool.display_name,
+        "revit_synced": revit_synced,
+    }
 
 
 @bridge_router.get("/tools")
@@ -356,11 +476,14 @@ async def get_tool_choices(name: str):
 
     Returns {param_name: [{label, value}, ...]} for each dynamic parameter.
     """
+    import logging
+    _logger = logging.getLogger("mcp_bridge.router")
+
     dynamic_params = _tool_store.get_dynamic_params(name)
     if not dynamic_params:
         return {}
 
-    try:
+    async def _fetch_choices():
         client = await _get_revit_client()
         executor = RevitQueryExecutor(client)
         choices: dict[str, list[dict]] = {}
@@ -368,9 +491,11 @@ async def get_tool_choices(name: str):
         for p in dynamic_params:
             source = p["choices_from"]
             items: list[dict] = []
+            _logger.info(f"[choices] fetching {p['name']!r} from source={source!r}")
 
             if source == "levels":
                 levels = await executor.get_levels()
+                _logger.info(f"[choices] levels returned: {len(levels)} items, raw={levels[:2] if levels else 'EMPTY'}")
                 items = [
                     {"label": f"{lv.get('Name', '?')} ({lv.get('ElevationMm', 0)}mm)",
                      "value": lv.get("Name", "")}
@@ -378,7 +503,9 @@ async def get_tool_choices(name: str):
                 ]
             elif source.startswith("family_types:"):
                 category = source.split(":", 1)[1]
+                _logger.info(f"[choices] fetching family_types for category={category!r}")
                 types = await executor.get_family_types([category])
+                _logger.info(f"[choices] family_types returned: {len(types)} items")
                 items = [
                     {"label": t.get("name", t.get("Name", str(t))),
                      "value": t.get("name", t.get("Name", str(t)))}
@@ -420,9 +547,15 @@ async def get_tool_choices(name: str):
                         for el in data
                     ]
 
+            _logger.info(f"[choices] {p['name']!r}: {len(items)} final items")
             choices[p["name"]] = items
 
         return choices
+
+    try:
+        return await asyncio.wait_for(_fetch_choices(), timeout=15.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Revit query timed out (15s)")
     except (ConnectionError, OSError):
         raise HTTPException(502, "Cannot connect to Revit plugin (port 18080)")
 

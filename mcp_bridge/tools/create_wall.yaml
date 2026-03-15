@@ -2,56 +2,47 @@ name: create_wall
 display_name: Create Wall
 description: Create a wall between two points with specified height. Uses first available
   wall type and first level.
-code_template: |
-  // Step 1: Get level by name
-  var level = new FilteredElementCollector(document)
-      .OfClass(typeof(Level))
-      .Cast<Level>()
-      .FirstOrDefault(l => l.Name == "{level_name}");
-  if (level == null)
-      return new { Status = "Error", Message = "Level '{level_name}' not found" };
-
-  // Step 2: Create wall line from mm coordinates
-  XYZ start = new XYZ({start_x} / 304.8, {start_y} / 304.8, 0);
-  XYZ end = new XYZ({end_x} / 304.8, {end_y} / 304.8, 0);
-  Line wallLine = Line.CreateBound(start, end);
-
-  // Step 3: Create wall (Transaction already active — do NOT create one)
-  Wall wall = Wall.Create(document, wallLine, level.Id, false);
-  wall.get_Parameter(BuiltInParameter.WALL_USER_HEIGHT_PARAM)
-      .Set({height} / 304.8);
-
-  return new { ElementId = wall.Id.Value, Status = "Created", Level = level.Name };
+code_template: "// Step 1: Get level by name\nvar level = new FilteredElementCollector(document)\n\
+  \    .OfClass(typeof(Level))\n    .Cast<Level>()\n    .FirstOrDefault(l => l.Name\
+  \ == \"{level_name}\");\nif (level == null)\n    return new { Status = \"Error\"\
+  , Message = \"Level '{level_name}' not found\" };\n\n// Step 2: Create wall line\
+  \ from mm coordinates\nXYZ start = new XYZ({start_x} / 304.8, {start_y} / 304.8,\
+  \ 0);\nXYZ end = new XYZ({end_x} / 304.8, {end_y} / 304.8, 0);\nLine wallLine =\
+  \ Line.CreateBound(start, end);\n\n// Step 3: Create wall (Transaction already active\
+  \ — do NOT create one)\nWall wall = Wall.Create(document, wallLine, level.Id, false);\n\
+  wall.get_Parameter(BuiltInParameter.WALL_USER_HEIGHT_PARAM)\n    .Set({height} /\
+  \ 304.8);\n\nreturn new { ElementId = wall.Id.Value, Status = \"Created\", Level\
+  \ = level.Name };\n"
 parameters:
-  - name: level_name
-    type: string
-    description: Target level name
-    choices_from: levels
-  - name: start_x
-    type: double
-    description: Wall start X (mm)
-    default: '0'
-  - name: start_y
-    type: double
-    description: Wall start Y (mm)
-    default: '0'
-  - name: end_x
-    type: double
-    description: Wall end X (mm)
-    default: '5000'
-  - name: end_y
-    type: double
-    description: Wall end Y (mm)
-    default: '0'
-  - name: height
-    type: double
-    description: Wall height (mm)
-    default: '3000'
+- name: level_name
+  type: string
+  description: Target level name
+  choices_from: levels
+- name: start_x
+  type: double
+  description: Wall start X (mm)
+  default: '0'
+- name: start_y
+  type: double
+  description: Wall start Y (mm)
+  default: '0'
+- name: end_x
+  type: double
+  description: Wall end X (mm)
+  default: '5000'
+- name: end_y
+  type: double
+  description: Wall end Y (mm)
+  default: '0'
+- name: height
+  type: double
+  description: Wall height (mm)
+  default: '3000'
 tags:
-  - wall
-  - create
-  - basic
+- wall
+- create
+- basic
 created_at: '2026-03-13T00:00:00'
 source_query: create a wall
-execution_count: 0
-last_used: ''
+execution_count: 1
+last_used: '2026-03-15T14:12:46.748985'

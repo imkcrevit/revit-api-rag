@@ -1,0 +1,33 @@
+name: create_column
+display_name: Create Column
+description: create column
+code_template: "// Step 1: Parse the position — convert mm to feet (Revit internal\
+  \ units)\ndouble xFeet = 100.0 / 304.8;  // 100mm -> feet\ndouble yFeet = 0.0 /\
+  \ 304.8;    // 0mm -> feet\ndouble zFeet = 0.0;\n\n// Step 2: Find the Level \"\
+  L1\" — filter by exact name from user selection\nLevel level = new FilteredElementCollector(document)\n\
+  \    .OfClass(typeof(Level))\n    .Cast<Level>()\n    .FirstOrDefault(l => l.Name\
+  \ == \"L1\");\n\nif (level == null)\n    return new { Status = \"Error\", Message\
+  \ = \"Level 'L1' not found.\" };\n\n// Step 3: Find the FamilySymbol \"600 x 750mm\"\
+  \ in family \"M_Concrete-Rectangular-Column\"\nFamilySymbol columnSymbol = new FilteredElementCollector(document)\n\
+  \    .OfClass(typeof(FamilySymbol))\n    .Cast<FamilySymbol>()\n    .FirstOrDefault(s\
+  \ => s.Family.Name == \"M_Concrete-Rectangular-Column\" && s.Name == \"600 x 750mm\"\
+  );\n\nif (columnSymbol == null)\n    return new { Status = \"Error\", Message =\
+  \ \"FamilySymbol '600 x 750mm' not found in family 'M_Concrete-Rectangular-Column'.\"\
+  \ };\n\n// Step 4: Activate the FamilySymbol if not already active — required before\
+  \ placing instances\nif (!columnSymbol.IsActive)\n{\n    columnSymbol.Activate();\n\
+  \    document.Regenerate();\n}\n\n// Step 5: Define the insertion point in Revit\
+  \ internal units (feet)\nXYZ insertionPoint = new XYZ(xFeet, yFeet, zFeet);\n\n\
+  // Step 6: Place the structural column using NewFamilyInstance with StructuralType.Column\n\
+  FamilyInstance columnInstance = document.Create.NewFamilyInstance(\n    insertionPoint,\n\
+  \    columnSymbol,\n    level,\n    Autodesk.Revit.DB.Structure.StructuralType.Column);\n\
+  \nif (columnInstance == null)\n    return new { Status = \"Error\", Message = \"\
+  Failed to create structural column instance.\" };\n\n// Step 7: Return result with\
+  \ element info\nreturn new\n{\n    Status = \"Success\",\n    ElementId = columnInstance.Id.Value,\n\
+  \    FamilyName = columnSymbol.Family.Name,\n    TypeName = columnSymbol.Name,\n\
+  \    Level = level.Name,\n    PositionX_mm = 100.0,\n    PositionY_mm = 0.0\n};"
+parameters: []
+tags: []
+created_at: '2026-03-15T10:44:05.472069'
+source_query: 创建结构柱100,0,0
+execution_count: 0
+last_used: ''

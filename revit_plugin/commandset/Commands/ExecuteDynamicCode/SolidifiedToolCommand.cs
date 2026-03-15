@@ -1,0 +1,252 @@
+using Autodesk.Revit.UI;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using RevitMCPSDK.API.Base;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+
+namespace RevitMCPCommandSet.Commands.ExecuteDynamicCode
+{
+    /// <summary>
+    /// Manages solidified tools — code templates created from the web frontend.
+    ///
+    /// TCP command: "manage_solidified_tools"
+    /// Actions:
+    ///   - list: returns all registered solidified tools
+    ///   - register: adds/updates a tool definition
+    ///   - run: renders a tool's code template with params and executes via Roslyn
+    ///   - delete: removes a tool
+    /// </summary>
+    public class SolidifiedToolCommand : ExternalEventCommandBase
+    {
+        private ExecuteCodeEventHandler _handler => (ExecuteCodeEventHandler)Handler;
+        private static readonly string ToolsFileName = "solidified_tools.json";
+
+        public override string CommandName => "manage_solidified_tools";
+
+        public SolidifiedToolCommand(UIApplication uiApp)
+            : base(new ExecuteCodeEventHandler(), uiApp)
+        {
+        }
+
+        public override object Execute(JObject parameters, string requestId)
+        {
+            string action = parameters.Value<string>("action") ?? "list";
+
+            switch (action.ToLower())
+            {
+                case "list":
+                    return ListTools();
+                case "register":
+                    return RegisterTool(parameters);
+                case "run":
+                    return RunTool(parameters, requestId);
+                case "delete":
+                    return DeleteTool(parameters);
+                default:
+                    throw new ArgumentException($"Unknown action: {action}. Use: list, register, run, delete");
+            }
+        }
+
+        #region Actions
+
+        private object ListTools()
+        {
+            var tools = LoadToolsFile();
+            return new { tools = tools, count = tools.Count };
+        }
+
+        private object RegisterTool(JObject parameters)
+        {
+            string name = parameters.Value<string>("name")
+                ?? throw new ArgumentException("Missing 'name'");
+            string codeTemplate = parameters.Value<string>("code_template")
+                ?? throw new ArgumentException("Missing 'code_template'");
+            string description = parameters.Value<string>("description") ?? "";
+            string sourceQuery = parameters.Value<string>("source_query") ?? "";
+
+            var toolParams = parameters["parameters"]?.ToObject<List<ToolParameter>>()
+                ?? new List<ToolParameter>();
+
+            var tools = LoadToolsFile();
+
+            // Update or add
+            var existing = tools.FirstOrDefault(t => t.Name == name);
+            if (existing != null)
+            {
+                existing.CodeTemplate = codeTemplate;
+                existing.Description = description;
+                existing.Parameters = toolParams;
+                existing.SourceQuery = sourceQuery;
+                existing.UpdatedAt = DateTime.Now.ToString("o");
+            }
+            else
+            {
+                tools.Add(new SolidifiedToolDef
+                {
+                    Name = name,
+                    DisplayName = name.Replace("_", " "),
+                    Description = description,
+                    CodeTemplate = codeTemplate,
+                    Parameters = toolParams,
+                    SourceQuery = sourceQuery,
+                    CreatedAt = DateTime.Now.ToString("o"),
+                    UpdatedAt = DateTime.Now.ToString("o"),
+                });
+            }
+
+            SaveToolsFile(tools);
+            return new { status = "registered", name = name, total = tools.Count };
+        }
+
+        private object RunTool(JObject parameters, string requestId)
+        {
+            string name = parameters.Value<string>("name")
+                ?? throw new ArgumentException("Missing 'name'");
+            var toolParams = parameters["params"]?.ToObject<Dictionary<string, string>>()
+                ?? new Dictionary<string, string>();
+
+            var tools = LoadToolsFile();
+            var tool = tools.FirstOrDefault(t => t.Name == name)
+                ?? throw new ArgumentException($"Tool '{name}' not found");
+
+            // Render code template
+            string code = tool.CodeTemplate;
+            foreach (var kvp in toolParams)
+            {
+                code = code.Replace($"{{{kvp.Key}}}", kvp.Value);
+            }
+
+            // Execute via Roslyn (same as send_code_to_revit)
+            _handler.SetExecutionParameters(code, Array.Empty<object>());
+            if (RaiseAndWaitForCompletion(60000))
+            {
+                // Update usage count
+                tool.ExecutionCount++;
+                tool.LastUsed = DateTime.Now.ToString("o");
+                SaveToolsFile(tools);
+
+                return _handler.ResultInfo;
+            }
+            else
+            {
+                throw new TimeoutException("Tool execution timed out");
+            }
+        }
+
+        private object DeleteTool(JObject parameters)
+        {
+            string name = parameters.Value<string>("name")
+                ?? throw new ArgumentException("Missing 'name'");
+
+            var tools = LoadToolsFile();
+            int removed = tools.RemoveAll(t => t.Name == name);
+            SaveToolsFile(tools);
+
+            return new { status = removed > 0 ? "deleted" : "not_found", name = name };
+        }
+
+        #endregion
+
+        #region File IO
+
+        private string GetToolsFilePath()
+        {
+            string dir = Path.GetDirectoryName(
+                System.Reflection.Assembly.GetExecutingAssembly().Location);
+            // Go up to the plugin root, then into a shared data directory
+            string dataDir = Path.Combine(dir, "..", "Data");
+            if (!Directory.Exists(dataDir))
+                Directory.CreateDirectory(dataDir);
+            return Path.Combine(dataDir, ToolsFileName);
+        }
+
+        private List<SolidifiedToolDef> LoadToolsFile()
+        {
+            string path = GetToolsFilePath();
+            if (!File.Exists(path))
+                return new List<SolidifiedToolDef>();
+
+            try
+            {
+                string json = File.ReadAllText(path);
+                var container = JsonConvert.DeserializeObject<ToolsContainer>(json);
+                return container?.Tools ?? new List<SolidifiedToolDef>();
+            }
+            catch
+            {
+                return new List<SolidifiedToolDef>();
+            }
+        }
+
+        private void SaveToolsFile(List<SolidifiedToolDef> tools)
+        {
+            string path = GetToolsFilePath();
+            var container = new ToolsContainer { Tools = tools };
+            string json = JsonConvert.SerializeObject(container, Formatting.Indented);
+            File.WriteAllText(path, json);
+        }
+
+        #endregion
+
+        #region Models
+
+        private class ToolsContainer
+        {
+            [JsonProperty("tools")]
+            public List<SolidifiedToolDef> Tools { get; set; } = new List<SolidifiedToolDef>();
+        }
+
+        private class SolidifiedToolDef
+        {
+            [JsonProperty("name")]
+            public string Name { get; set; }
+
+            [JsonProperty("display_name")]
+            public string DisplayName { get; set; }
+
+            [JsonProperty("description")]
+            public string Description { get; set; }
+
+            [JsonProperty("code_template")]
+            public string CodeTemplate { get; set; }
+
+            [JsonProperty("parameters")]
+            public List<ToolParameter> Parameters { get; set; } = new List<ToolParameter>();
+
+            [JsonProperty("source_query")]
+            public string SourceQuery { get; set; }
+
+            [JsonProperty("execution_count")]
+            public int ExecutionCount { get; set; }
+
+            [JsonProperty("created_at")]
+            public string CreatedAt { get; set; }
+
+            [JsonProperty("updated_at")]
+            public string UpdatedAt { get; set; }
+
+            [JsonProperty("last_used")]
+            public string LastUsed { get; set; }
+        }
+
+        private class ToolParameter
+        {
+            [JsonProperty("name")]
+            public string Name { get; set; }
+
+            [JsonProperty("type")]
+            public string Type { get; set; } = "string";
+
+            [JsonProperty("description")]
+            public string Description { get; set; }
+
+            [JsonProperty("choices_from")]
+            public string ChoicesFrom { get; set; }
+        }
+
+        #endregion
+    }
+}

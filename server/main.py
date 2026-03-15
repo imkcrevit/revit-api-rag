@@ -6,8 +6,17 @@ Usage:
 """
 from __future__ import annotations
 
+import logging
 import uvicorn
 from fastapi import FastAPI
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
+# Suppress noisy httpx request logging (frontend calls itself via httpx)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.app.api.routes import router

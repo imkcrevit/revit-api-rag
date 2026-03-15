@@ -187,14 +187,14 @@ def create_gradio_app() -> gr.Blocks:
                     clear_t2r = gr.Button("清除 Clear", scale=1, min_width=80, elem_classes=["input-btn"])
 
             # ==========================================================
-            # Tab C: Intent Bridge
+            # Tab C: API Explorer (Q&A — search → rerank → generate)
             # ==========================================================
-            with gr.Tab("Intent Bridge"):
+            with gr.Tab("API Explorer"):
                 try:
-                    from intent_bridge.frontend.app import create_intent_bridge_tab
-                    create_intent_bridge_tab()
+                    from mcp_bridge.frontend.api_explorer import create_api_explorer_tab
+                    create_api_explorer_tab()
                 except ImportError:
-                    gr.Markdown("Intent Bridge module not available.")
+                    gr.Markdown("API Explorer module not available.")
 
             # ==========================================================
             # Tab D: MCP Bridge (Code Execution)

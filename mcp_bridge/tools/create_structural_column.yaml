@@ -2,55 +2,42 @@ name: create_structural_column
 display_name: Create Structural Column
 description: Create a structural column at specified coordinates using first available
   structural column family type.
-code_template: |
-  // Step 1: Get structural column family symbol by name
-  var symbol = new FilteredElementCollector(document)
-      .OfClass(typeof(FamilySymbol))
-      .OfCategory(BuiltInCategory.OST_StructuralColumns)
-      .Cast<FamilySymbol>()
-      .FirstOrDefault(s => s.Name == "{type_name}");
-  if (symbol == null)
-      return new { Status = "Error", Message = "Column type '{type_name}' not found" };
-  if (!symbol.IsActive) symbol.Activate();
-
-  // Step 2: Get level by name
-  var level = new FilteredElementCollector(document)
-      .OfClass(typeof(Level))
-      .Cast<Level>()
-      .FirstOrDefault(l => l.Name == "{level_name}");
-  if (level == null)
-      return new { Status = "Error", Message = "Level '{level_name}' not found" };
-
-  // Step 3: Create column at position (mm -> feet)
-  XYZ location = new XYZ({x} / 304.8, {y} / 304.8, 0);
-  var column = document.Create.NewFamilyInstance(
-      location, symbol, level,
-      Autodesk.Revit.DB.Structure.StructuralType.Column);
-
-  return new { ElementId = column.Id.Value, Status = "Created",
-               FamilyType = symbol.Name, Level = level.Name };
+code_template: "// Step 1: Get structural column family symbol by name\nvar symbol\
+  \ = new FilteredElementCollector(document)\n    .OfClass(typeof(FamilySymbol))\n\
+  \    .OfCategory(BuiltInCategory.OST_StructuralColumns)\n    .Cast<FamilySymbol>()\n\
+  \    .FirstOrDefault(s => s.Name == \"{type_name}\");\nif (symbol == null)\n   \
+  \ return new { Status = \"Error\", Message = \"Column type '{type_name}' not found\"\
+  \ };\nif (!symbol.IsActive) symbol.Activate();\n\n// Step 2: Get level by name\n\
+  var level = new FilteredElementCollector(document)\n    .OfClass(typeof(Level))\n\
+  \    .Cast<Level>()\n    .FirstOrDefault(l => l.Name == \"{level_name}\");\nif (level\
+  \ == null)\n    return new { Status = \"Error\", Message = \"Level '{level_name}'\
+  \ not found\" };\n\n// Step 3: Create column at position (mm -> feet)\nXYZ location\
+  \ = new XYZ({x} / 304.8, {y} / 304.8, 0);\nvar column = document.Create.NewFamilyInstance(\n\
+  \    location, symbol, level,\n    Autodesk.Revit.DB.Structure.StructuralType.Column);\n\
+  \nreturn new { ElementId = column.Id.Value, Status = \"Created\",\n            \
+  \ FamilyType = symbol.Name, Level = level.Name };\n"
 parameters:
-  - name: type_name
-    type: string
-    description: Structural column family type name
-    choices_from: family_types:OST_StructuralColumns
-  - name: level_name
-    type: string
-    description: Target level name
-    choices_from: levels
-  - name: x
-    type: double
-    description: Column X position (mm)
-    default: '0'
-  - name: y
-    type: double
-    description: Column Y position (mm)
-    default: '0'
+- name: type_name
+  type: string
+  description: Structural column family type name
+  choices_from: family_types:OST_StructuralColumns
+- name: level_name
+  type: string
+  description: Target level name
+  choices_from: levels
+- name: x
+  type: double
+  description: Column X position (mm)
+  default: '0'
+- name: y
+  type: double
+  description: Column Y position (mm)
+  default: '0'
 tags:
-  - column
-  - structural
-  - create
+- column
+- structural
+- create
 created_at: '2026-03-13T00:00:00'
 source_query: create a structural column
-execution_count: 0
-last_used: ''
+execution_count: 1
+last_used: '2026-03-15T13:51:40.434751'

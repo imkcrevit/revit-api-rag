@@ -1,69 +1,54 @@
 name: create_floor
 display_name: Create Floor
 description: Create a rectangular floor slab at specified coordinates and dimensions.
-code_template: |
-  // Step 1: Get floor type by name
-  var floorType = new FilteredElementCollector(document)
-      .OfClass(typeof(FloorType))
-      .Cast<FloorType>()
-      .FirstOrDefault(ft => ft.Name == "{type_name}");
-  if (floorType == null)
-      return new { Status = "Error", Message = "Floor type '{type_name}' not found" };
-
-  // Step 2: Get level by name
-  var level = new FilteredElementCollector(document)
-      .OfClass(typeof(Level))
-      .Cast<Level>()
-      .FirstOrDefault(l => l.Name == "{level_name}");
-  if (level == null)
-      return new { Status = "Error", Message = "Level '{level_name}' not found" };
-
-  // Step 3: Create rectangular profile (mm -> feet)
-  double x0 = {x} / 304.8, y0 = {y} / 304.8;
-  double w = {width} / 304.8, h = {length} / 304.8;
-  var profile = new List<Curve>();
-  profile.Add(Line.CreateBound(new XYZ(x0, y0, 0), new XYZ(x0 + w, y0, 0)));
-  profile.Add(Line.CreateBound(new XYZ(x0 + w, y0, 0), new XYZ(x0 + w, y0 + h, 0)));
-  profile.Add(Line.CreateBound(new XYZ(x0 + w, y0 + h, 0), new XYZ(x0, y0 + h, 0)));
-  profile.Add(Line.CreateBound(new XYZ(x0, y0 + h, 0), new XYZ(x0, y0, 0)));
-  var curveLoop = CurveLoop.Create(profile);
-
-  // Step 4: Create floor
-  var floor = Floor.Create(document, new List<CurveLoop> { curveLoop },
-                           floorType.Id, level.Id);
-
-  return new { ElementId = floor.Id.Value, Status = "Created",
-               FloorType = floorType.Name, Level = level.Name };
+code_template: "// Step 1: Get floor type by name\nvar floorType = new FilteredElementCollector(document)\n\
+  \    .OfClass(typeof(FloorType))\n    .Cast<FloorType>()\n    .FirstOrDefault(ft\
+  \ => ft.Name == \"{type_name}\");\nif (floorType == null)\n    return new { Status\
+  \ = \"Error\", Message = \"Floor type '{type_name}' not found\" };\n\n// Step 2:\
+  \ Get level by name\nvar level = new FilteredElementCollector(document)\n    .OfClass(typeof(Level))\n\
+  \    .Cast<Level>()\n    .FirstOrDefault(l => l.Name == \"{level_name}\");\nif (level\
+  \ == null)\n    return new { Status = \"Error\", Message = \"Level '{level_name}'\
+  \ not found\" };\n\n// Step 3: Create rectangular profile (mm -> feet)\ndouble x0\
+  \ = {x} / 304.8, y0 = {y} / 304.8;\ndouble w = {width} / 304.8, h = {length} / 304.8;\n\
+  var profile = new List<Curve>();\nprofile.Add(Line.CreateBound(new XYZ(x0, y0, 0),\
+  \ new XYZ(x0 + w, y0, 0)));\nprofile.Add(Line.CreateBound(new XYZ(x0 + w, y0, 0),\
+  \ new XYZ(x0 + w, y0 + h, 0)));\nprofile.Add(Line.CreateBound(new XYZ(x0 + w, y0\
+  \ + h, 0), new XYZ(x0, y0 + h, 0)));\nprofile.Add(Line.CreateBound(new XYZ(x0, y0\
+  \ + h, 0), new XYZ(x0, y0, 0)));\nvar curveLoop = CurveLoop.Create(profile);\n\n\
+  // Step 4: Create floor\nvar floor = Floor.Create(document, new List<CurveLoop>\
+  \ { curveLoop },\n                         floorType.Id, level.Id);\n\nreturn new\
+  \ { ElementId = floor.Id.Value, Status = \"Created\",\n             FloorType =\
+  \ floorType.Name, Level = level.Name };\n"
 parameters:
-  - name: type_name
-    type: string
-    description: Floor type name
-    choices_from: floor_types
-  - name: level_name
-    type: string
-    description: Target level name
-    choices_from: levels
-  - name: x
-    type: double
-    description: Floor origin X (mm)
-    default: '0'
-  - name: y
-    type: double
-    description: Floor origin Y (mm)
-    default: '0'
-  - name: width
-    type: double
-    description: Floor width (mm)
-    default: '6000'
-  - name: length
-    type: double
-    description: Floor length (mm)
-    default: '8000'
+- name: type_name
+  type: string
+  description: Floor type name
+  choices_from: floor_types
+- name: level_name
+  type: string
+  description: Target level name
+  choices_from: levels
+- name: x
+  type: double
+  description: Floor origin X (mm)
+  default: '0'
+- name: y
+  type: double
+  description: Floor origin Y (mm)
+  default: '0'
+- name: width
+  type: double
+  description: Floor width (mm)
+  default: '6000'
+- name: length
+  type: double
+  description: Floor length (mm)
+  default: '8000'
 tags:
-  - floor
-  - create
-  - basic
+- floor
+- create
+- basic
 created_at: '2026-03-13T00:00:00'
 source_query: create a floor slab
-execution_count: 0
-last_used: ''
+execution_count: 1
+last_used: '2026-03-15T14:31:09.972751'
