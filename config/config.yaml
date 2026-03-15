@@ -40,7 +40,7 @@ llm:
       api_key_env: "OPENROUTER_API_KEY"
       base_url: "https://openrouter.ai/api/v1"
   temperature: 0.3
-  max_tokens: 4096
+  max_tokens: 16384
 
 # --- Embedding 配置 ---
 embedding:

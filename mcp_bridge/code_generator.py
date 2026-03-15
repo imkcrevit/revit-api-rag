@@ -11,10 +11,13 @@ Transaction. Generated code must NOT create its own Transaction.
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from pipeline.retriever import RAGRetriever
 from pipeline.llm_client import LLMClient
+
+_log = logging.getLogger("mcp_bridge.code_generator")
 
 
 SYSTEM_EXECUTE = """\
@@ -133,6 +136,8 @@ class CodeGenerator:
         )
 
         raw = self.llm.generate_text(user_query, system_prompt=system)
+        _log.info(f"[generate] raw LLM response length={len(raw)}, first 200 chars: {raw[:200]!r}")
+        _log.info(f"[generate] raw LLM response last 200 chars: {raw[-200:]!r}")
         code = self._extract_code(raw)
 
         return code, {
@@ -232,10 +237,27 @@ class CodeGenerator:
         """Strip markdown code fences if present and clean up common LLM mistakes."""
         # Remove <thinking> block first
         cleaned = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL)
+        _log.info(f"[_extract_code] after thinking removal: len={len(cleaned)}")
+
+        # Try to match complete code fences
         m = re.search(r"```(?:csharp|cs)?\s*\n(.*?)```", cleaned, re.DOTALL)
+        if m:
+            _log.info(f"[_extract_code] matched complete fence: code len={len(m.group(1))}")
+        else:
+            # Fallback: opening fence without closing (truncated LLM response)
+            m = re.search(r"```(?:csharp|cs)?\s*\n(.*)", cleaned, re.DOTALL)
+            if m:
+                _log.warning(f"[_extract_code] matched OPEN fence only (truncated): code len={len(m.group(1))}")
+            else:
+                _log.warning(f"[_extract_code] NO fence match — using raw cleaned text")
+
         code = m.group(1).strip() if m else cleaned.strip()
+        # Remove any stray leftover code fences
+        code = re.sub(r'^```(?:csharp|cs)?\s*\n?', '', code)
+        code = re.sub(r'\n?```\s*$', '', code)
         # Fix: LLM sometimes adds L suffix to ElementId constructor args
         code = re.sub(r'new ElementId\((\d+)L\)', r'new ElementId(\1)', code)
+        _log.info(f"[_extract_code] final code len={len(code)}, first 100: {code[:100]!r}")
         return code
 
     @staticmethod

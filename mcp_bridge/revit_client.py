@@ -139,6 +139,8 @@ class RevitClient:
             if "success" in inner:
                 inner_result = inner.get("result", "")
                 _log.info(f"[send_code] inner.success={inner.get('success')} inner_result_type={type(inner_result).__name__} len={len(str(inner_result)[:100])}")
+                if not inner.get("success"):
+                    _log.error(f"[send_code] EXECUTION FAILED — errorMessage: {inner.get('errorMessage', '(none)')}")
                 # The result field is often a JSON string — parse it
                 if isinstance(inner_result, str) and inner_result.strip():
                     try:

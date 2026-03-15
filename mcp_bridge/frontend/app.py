@@ -120,6 +120,17 @@ def _solidify_tool(name: str, code: str, description: str,
         return {"error": str(e)}
 
 
+def _trigger_host_selection() -> list[dict]:
+    """Trigger Revit selection mode and return selected elements."""
+    try:
+        resp = httpx.post(_bridge_url("/trigger-selection"), timeout=60)
+        data = resp.json()
+        return data.get("elements", [])
+    except Exception as e:
+        logger.error(f"[_trigger_host_selection] error: {e}")
+        return []
+
+
 def _list_tools() -> list[dict]:
     try:
         resp = httpx.get(_bridge_url("/tools"), timeout=10)
@@ -162,16 +173,55 @@ def _run_tool(name: str, params: dict) -> dict:
 # Step indicator
 # ---------------------------------------------------------------------------
 
-def _step_indicator(current: int, labels: list[str]) -> str:
+def _step_md(current: int, labels: list[str], status: str = "",
+             pipeline_log: list[str] | None = None) -> str:
+    """Build an HTML progress bar with colored step indicators and pipeline log.
+
+    Args:
+        current: 1-based index of current step
+        labels: step labels
+        status: short status text for the active step
+        pipeline_log: accumulated list of pipeline stage messages (shown as scrollable log)
+    """
     parts = []
     for i, label in enumerate(labels, 1):
-        if i == current:
-            parts.append(f">> [{i}. {label}] <<")
-        elif i < current:
-            parts.append(f"[{i}. {label}]")
+        if i < current:
+            parts.append(
+                f'<span style="color:#22c55e;font-weight:600">'
+                f'&#10003; {i}.{label}</span>'
+            )
+        elif i == current:
+            parts.append(
+                f'<span style="color:#2563eb;font-weight:700;font-size:1.15em;'
+                f'text-decoration:underline;text-underline-offset:4px">'
+                f'&#9654; {i}.{label}</span>'
+            )
         else:
-            parts.append(f"  {i}. {label}  ")
-    return "  >  ".join(parts)
+            parts.append(
+                f'<span style="color:#9ca3af">'
+                f'{i}.{label}</span>'
+            )
+    bar = ' <span style="color:#d1d5db;font-size:1.1em"> &rarr; </span> '.join(parts)
+    html = f'<div style="font-size:15px;line-height:1.8;padding:4px 0">{bar}</div>'
+
+    # Pipeline log — accumulated stages with scroll
+    if pipeline_log:
+        log_lines = []
+        for idx, msg in enumerate(pipeline_log):
+            is_last = (idx == len(pipeline_log) - 1)
+            if is_last:
+                log_lines.append(f'<div class="active">&#9654; {msg}</div>')
+            else:
+                log_lines.append(f'<div class="done">&#10003; {msg}</div>')
+        html += f'<div class="pipeline-log">{"".join(log_lines)}</div>'
+    elif status:
+        html += (
+            f'<div style="margin-top:6px;padding:8px 12px;'
+            f'background:#eff6ff;border-left:3px solid #2563eb;'
+            f'border-radius:4px;color:#1e40af;font-size:14px">'
+            f'{status}</div>'
+        )
+    return html
 
 
 MAIN_STEPS = ["Input", "Select", "Review Code", "Execute", "Solidify"]
@@ -185,18 +235,104 @@ TOOL_STEPS = ["Select Tool", "Load Choices", "Set Params", "Run"]
 def create_bridge_tab():
     """Create MCP Bridge tab contents (called inside gr.Tab)."""
 
+    # --- Injected CSS ---
+    gr.HTML("""<style>
+/* Dark-bordered collapsible sections */
+.bridge-section {
+    border: 2px solid #1f2937 !important;
+    border-radius: 6px !important;
+    margin-bottom: 8px !important;
+    overflow: hidden;
+}
+.bridge-section > .label-wrap {
+    background: #f9fafb !important;
+    border-bottom: 1px solid #d1d5db !important;
+    padding: 0 !important;
+    font-weight: 600 !important;
+    font-size: 14px !important;
+    color: #1f2937 !important;
+    cursor: pointer;
+    display: flex !important;
+    flex-direction: row-reverse !important;
+    align-items: stretch !important;
+}
+/* Red toggle indicator on the right side */
+.bridge-section > .label-wrap::before {
+    content: "▼";
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #dc2626;
+    color: white;
+    min-width: 36px;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.bridge-section:not(.open) > .label-wrap::before {
+    content: "▶";
+}
+.bridge-section > .label-wrap > span {
+    padding: 8px 14px;
+    flex: 1;
+}
+/* Hide Gradio's default icon since we have our own */
+.bridge-section > .label-wrap span.icon {
+    display: none !important;
+}
+
+/* Thinking panel — fixed height, scrollable */
+.thinking-scroll {
+    max-height: 200px;
+    overflow-y: auto !important;
+    padding: 10px 14px;
+    background: #f8fafc;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+/* Pipeline log — fixed height, scrollable, monospace */
+.pipeline-log {
+    max-height: 140px;
+    overflow-y: auto !important;
+    font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    padding: 8px 12px;
+    background: #f0f4f8;
+    border-radius: 4px;
+    margin-top: 6px;
+}
+.pipeline-log .done { color: #16a34a; }
+.pipeline-log .active { color: #2563eb; font-weight: 600; }
+
+/* Step bar — always sticky at top */
+.step-bar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: white;
+    padding: 6px 0;
+    border-bottom: 1px solid #e5e7eb;
+}
+</style>""")
+
     # === Header ===
     with gr.Row():
         revit_status = gr.Textbox(
             value="Revit Disconnected", label="Revit Status",
-            interactive=False, max_lines=1, scale=3,
+            interactive=False, max_lines=1, scale=4,
         )
-        unit_selector = gr.Radio(
-            choices=["mm", "m", "feet"], value="mm",
-            label="User Unit", interactive=True, scale=1,
-        )
-        detect_unit_btn = gr.Button("Detect", size="sm", scale=0)
         refresh_btn = gr.Button("Refresh", size="sm", scale=0)
+
+    # === Settings ===
+    with gr.Accordion("Settings", open=False):
+        with gr.Row():
+            unit_selector = gr.Radio(
+                choices=["mm", "m", "feet"], value="mm",
+                label="User Unit (auto-detected from project, can override)",
+                interactive=True, scale=3,
+            )
+            detect_unit_btn = gr.Button("Re-detect from Revit", size="sm", scale=1)
 
     # === State ===
     current_query = gr.State("")
@@ -206,9 +342,9 @@ def create_bridge_tab():
     # ── SECTION A: Code Generation Pipeline ──
     gr.Markdown("### Code Generation Pipeline")
 
-    step_display = gr.Textbox(
-        value=_step_indicator(1, MAIN_STEPS),
-        label="Workflow", interactive=False, max_lines=1,
+    step_display = gr.Markdown(
+        value=_step_md(1, MAIN_STEPS),
+        elem_classes=["step-bar"],
     )
 
     # Step 1: Input
@@ -219,62 +355,81 @@ def create_bridge_tab():
         )
         generate_btn = gr.Button("Generate Code", variant="primary", scale=1)
 
-    # Thinking Chain — shows LLM reasoning in real-time
-    thinking_display = gr.Markdown(
-        value="", label="Thinking Process", visible=False,
-    )
+    # Thinking Chain — collapsible, fixed height, scrollable
+    with gr.Accordion("Thinking Process", open=True,
+                       elem_classes=["bridge-section"]) as thinking_accordion:
+        thinking_display = gr.Markdown(
+            value="", visible=False,
+            elem_classes=["thinking-scroll"],
+        )
 
-    # Step 2: Selection — Dropdown for family (many items), Radio for level (few)
-    selection_status = gr.Textbox(
-        label="Step 2: Select Options (from Revit)",
-        interactive=False, visible=False,
-    )
-    family_radio = gr.Dropdown(
-        label="Family Type — select one (type to filter)",
-        choices=[], interactive=True, visible=False, filterable=True,
-    )
-    level_radio = gr.Radio(
-        label="Level — select one", choices=[], interactive=True, visible=False,
-    )
-    x_input = gr.Number(label="X (mm)", value=0, visible=False)
-    y_input = gr.Number(label="Y (mm)", value=0, visible=False)
-    confirm_selection_btn = gr.Button(
-        "Confirm & Generate Code", variant="primary", visible=False,
-    )
+    # Step 2: Selection — collapsible
+    with gr.Accordion("Step 2: Select Options", open=True,
+                       elem_classes=["bridge-section"]) as select_accordion:
+        selection_status = gr.Textbox(
+            label="Selection Status (from Revit)",
+            interactive=False, visible=False,
+        )
+        family_radio = gr.Dropdown(
+            label="Family Type — select one (type to filter)",
+            choices=[], interactive=True, visible=False, filterable=True,
+        )
+        level_radio = gr.Radio(
+            label="Level — select one", choices=[], interactive=True, visible=False,
+        )
+        # Host element selection (for windows/doors on walls)
+        with gr.Row(visible=False) as host_row:
+            host_display = gr.Textbox(
+                label="Host Element", interactive=False, scale=3,
+                placeholder="Click 'Select Host' to pick a wall/floor in Revit",
+            )
+            select_host_btn = gr.Button("Select Host in Revit", variant="secondary", scale=1)
+        host_element_id = gr.State(None)
 
-    # Step 3: Review Code
-    code_display = gr.Code(
-        language="cpp", label="Step 3: Review Generated Code",
-        interactive=True, lines=15,
-    )
-    security_status = gr.Textbox(
-        label="Security Review", interactive=False, visible=False,
-    )
+        x_input = gr.Number(label="X (mm)", value=0, visible=False)
+        y_input = gr.Number(label="Y (mm)", value=0, visible=False)
+        confirm_selection_btn = gr.Button(
+            "Confirm & Generate Code", variant="primary", visible=False,
+        )
 
-    # Step 4: Execute
-    execute_btn = gr.Button("Execute in Revit", variant="primary")
-    exec_result = gr.Textbox(
-        label="Step 4: Execution Result", interactive=False, lines=3,
-    )
+    # Step 3: Review Code — collapsible
+    with gr.Accordion("Step 3: Review Generated Code", open=True,
+                       elem_classes=["bridge-section"]) as code_accordion:
+        code_display = gr.Code(
+            language="cpp", label="Generated Code",
+            interactive=True, lines=15,
+        )
+        security_status = gr.Textbox(
+            label="Security Review", interactive=False, visible=False,
+        )
 
-    # Step 5: Solidify
-    gr.Markdown("#### Save as Reusable Tool")
-    with gr.Row():
-        tool_name = gr.Textbox(label="Tool Name", placeholder="e.g. create_wall")
-        tool_desc = gr.Textbox(label="Description", placeholder="What this tool does")
-    solidify_btn = gr.Button("Solidify", variant="primary")
-    solidify_result = gr.Textbox(label="Solidify Result", interactive=False)
+    # Step 4: Execute — collapsible
+    with gr.Accordion("Step 4: Execute", open=True,
+                       elem_classes=["bridge-section"]) as exec_accordion:
+        execute_btn = gr.Button("Execute in Revit", variant="primary")
+        exec_result = gr.Textbox(
+            label="Execution Result", interactive=False, lines=6,
+        )
 
-    # RAG Context
-    with gr.Accordion("RAG Context", open=False):
+    # Step 5: Solidify — collapsible, default closed
+    with gr.Accordion("Step 5: Save as Reusable Tool", open=False,
+                       elem_classes=["bridge-section"]):
+        with gr.Row():
+            tool_name = gr.Textbox(label="Tool Name", placeholder="e.g. create_wall")
+            tool_desc = gr.Textbox(label="Description", placeholder="What this tool does")
+        solidify_btn = gr.Button("Solidify", variant="primary")
+        solidify_result = gr.Textbox(label="Solidify Result", interactive=False)
+
+    # RAG Context — collapsible, default closed
+    with gr.Accordion("RAG Context", open=False,
+                       elem_classes=["bridge-section"]):
         rag_info = gr.JSON(label="Retrieval Details")
 
     # ── SECTION B: Tool Library ──
     gr.Markdown("### Solidified Tool Library")
 
-    tool_step_display = gr.Textbox(
-        value=_step_indicator(1, TOOL_STEPS),
-        label="Tool Workflow", interactive=False, max_lines=1,
+    tool_step_display = gr.Markdown(
+        value=_step_md(1, TOOL_STEPS),
     )
 
     tools_refresh_btn = gr.Button("Refresh Tools", size="sm")
@@ -328,6 +483,21 @@ def create_bridge_tab():
     def on_refresh_health():
         return _check_revit_health()
 
+    def on_page_load():
+        """Auto-detect Revit connection and project units on page load."""
+        health = _check_revit_health()
+        unit = "mm"  # default
+        try:
+            resp = httpx.get(_bridge_url("/project-units"), timeout=10)
+            data = resp.json()
+            if "detected" in data and "error" not in data:
+                unit = data["detected"]
+                httpx.post(_bridge_url("/unit"), json={"unit": unit}, timeout=5)
+                logger.info(f"[on_page_load] auto-detected unit={unit}")
+        except Exception as e:
+            logger.warning(f"[on_page_load] unit detection failed: {e}")
+        return health, gr.Radio(value=unit)
+
     def on_change_unit(unit):
         """Update backend unit preference."""
         try:
@@ -374,7 +544,12 @@ def create_bridge_tab():
                 continue
             data_str = line[6:]
 
-            if current_event == "rag":
+            if current_event == "progress":
+                try:
+                    yield "progress", json.loads(data_str), None
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif current_event == "rag":
                 try:
                     rag_info["status"] = json.loads(data_str)
                 except (json.JSONDecodeError, TypeError):
@@ -408,41 +583,59 @@ def create_bridge_tab():
     def on_generate(query):
         """Streaming generator — yields progressive thinking + code updates.
 
-        Yields 14 values: query, selections, code, last_code, thinking,
-                          selection controls (6), security, rag, step.
+        Yields 16 values: query, selections, code, last_code, thinking,
+                          selection controls (6), host_row, host_element_id,
+                          security, rag, step_md.
         """
         logger.info(f"[on_generate] query={query!r}")
 
-        def _empty(msg=""):
+        # 16-value tuple helper — all controls hidden, only step_md updates
+        def _reset(step=1, status=""):
             return (query, {}, "", "",
                     gr.Markdown(visible=False, value=""),
                     gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
                     gr.Radio(visible=False, choices=[]),
                     gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
                     gr.Button(visible=False),
-                    gr.Textbox(visible=bool(msg), value=msg), None,
-                    _step_indicator(1, MAIN_STEPS))
+                    gr.Row(visible=False), None,
+                    gr.Textbox(visible=False), None,
+                    _step_md(step, MAIN_STEPS, status))
 
         try:
             if not query.strip():
-                yield _empty()
+                yield _reset()
                 return
+
+            # --- Step 1: Intent Classification ---
+            yield _reset(1, "Classifying intent...")
 
             intent = _classify_intent(query)
             itype = intent.get("interaction_type", "direct")
+            logger.info(f"[on_generate] intent type={itype}")
 
             if itype == "direct":
-                # Stream code generation with thinking chain
-                yield (query, {}, "", "",
-                       gr.Markdown(visible=True, value="*Thinking...*"),
-                       gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
-                       gr.Radio(visible=False, choices=[]),
-                       gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
-                       gr.Button(visible=False),
-                       gr.Textbox(visible=False), None,
-                       _step_indicator(2, MAIN_STEPS))
+                # --- Step 2: RAG + Streaming generation ---
+                yield _reset(2, "Initializing pipeline...")
 
                 try:
+                    import time as _time
+                    t_start = _time.monotonic()
+
+                    # Helper to build the 16-value tuple for streaming yields
+                    def _stream_yield(code, thinking_md, show_thinking,
+                                      sec_text=None, rag=None, step=2,
+                                      plog=None, status=""):
+                        return (query, {}, code, code,
+                                gr.Markdown(visible=show_thinking, value=thinking_md),
+                                gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
+                                gr.Radio(visible=False, choices=[]),
+                                gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
+                                gr.Button(visible=False),
+                                gr.Row(visible=False), None,
+                                gr.Textbox(visible=bool(sec_text), value=sec_text or ""),
+                                rag,
+                                _step_md(step, MAIN_STEPS, status=status, pipeline_log=plog))
+
                     with httpx.stream(
                         "POST", _bridge_url("/generate-stream"),
                         json={"query": query, "api_top_k": 15, "code_top_k": 5},
@@ -452,25 +645,56 @@ def create_bridge_tab():
                         final_code = ""
                         final_thinking = ""
                         done_info = None
+                        last_yield = 0.0
+                        token_count = 0
+                        pipeline_log: list[str] = []  # accumulated stages
 
                         for event_type, data1, data2 in _parse_sse_stream(resp):
+                            elapsed = _time.monotonic() - t_start
+                            elapsed_str = f"{elapsed:.0f}s"
+
+                            if event_type == "progress":
+                                # Append to log (replace last if it was active)
+                                msg = f"{data1} ({elapsed_str})"
+                                pipeline_log.append(msg)
+                                thinking_md = (f"**Thinking:**\n\n{final_thinking}"
+                                               if final_thinking else "")
+                                yield _stream_yield(
+                                    final_code, thinking_md, bool(final_thinking),
+                                    plog=pipeline_log)
+                                continue
+
                             if event_type == "token":
                                 final_thinking = data1
                                 final_code = data2
-                                # Format thinking as markdown
-                                thinking_md = f"**Thinking:**\n\n{final_thinking}" if final_thinking else "*Generating...*"
-                                yield (query, {}, final_code, final_code,
-                                       gr.Markdown(visible=True, value=thinking_md),
-                                       gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
-                                       gr.Radio(visible=False, choices=[]),
-                                       gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
-                                       gr.Button(visible=False),
-                                       gr.Textbox(visible=False), None,
-                                       _step_indicator(2, MAIN_STEPS))
+                                token_count += 1
+                                now = _time.monotonic()
+                                # First token yields immediately, then throttle 0.25s
+                                if token_count > 1 and now - last_yield < 0.25:
+                                    continue
+                                last_yield = now
+
+                                thinking_md = (f"**Thinking:**\n\n{final_thinking}"
+                                               if final_thinking
+                                               else "*Waiting for LLM response...*")
+                                code_lines = final_code.count('\n') + 1 if final_code else 0
+                                # Update the last log entry with generation stats
+                                gen_msg = (f"LLM generating... "
+                                           f"{code_lines} lines, {token_count} tokens ({elapsed_str})")
+                                # Replace ongoing generation entry
+                                gen_log = [l for l in pipeline_log
+                                           if not l.startswith("LLM generating")]
+                                gen_log.append(gen_msg)
+                                yield _stream_yield(
+                                    final_code, thinking_md, True,
+                                    plog=gen_log)
+
                             elif event_type == "done":
                                 done_info = data1
 
-                    # Final yield with security info
+                    # Final yield — Step 3
+                    elapsed = _time.monotonic() - t_start
+                    elapsed_str = f"{elapsed:.0f}s"
                     if done_info:
                         final_code = done_info.get("code", final_code)
                         safe = done_info.get("safe", True)
@@ -481,22 +705,31 @@ def create_bridge_tab():
                         sec_text = "Safe"
                         rag = {}
 
+                    # Build final log
+                    final_log = [l for l in pipeline_log
+                                 if not l.startswith("LLM generating")]
+                    code_lines = final_code.count('\n') + 1 if final_code else 0
+                    final_log.append(f"LLM generation complete — {code_lines} lines ({elapsed_str})")
+                    final_log.append(f"Code extracted & security reviewed — {sec_text}")
+
                     thinking_md = f"**Thinking:**\n\n{final_thinking}" if final_thinking else ""
-                    yield (query, {}, final_code, final_code,
-                           gr.Markdown(visible=bool(final_thinking), value=thinking_md),
-                           gr.Textbox(visible=False), gr.Dropdown(visible=False, choices=[]),
-                           gr.Radio(visible=False, choices=[]),
-                           gr.Number(visible=False, value=0), gr.Number(visible=False, value=0),
-                           gr.Button(visible=False),
-                           gr.Textbox(visible=True, value=sec_text), rag,
-                           _step_indicator(3, MAIN_STEPS))
+                    yield _stream_yield(
+                        final_code, thinking_md, bool(final_thinking),
+                        sec_text=sec_text, rag=rag, step=3,
+                        plog=final_log)
                 except Exception:
                     err = traceback.format_exc()
                     logger.error(f"[on_generate] stream error:\n{err}")
-                    yield _empty(f"Error: {err[:300]}")
+                    yield _reset(2, f"Error: {err[:200]}")
                 return
 
-            # Interactive: query Revit (non-streaming)
+            # === Interactive: query Revit ===
+            need_host = (itype == "select_both")
+            select_prompt = intent.get("select_prompt", "")
+
+            # --- Progress: Querying Revit ---
+            yield _reset(2, "Querying Revit for family types...")
+
             family_choices = []
             level_choices = []
             levels_raw = []
@@ -512,13 +745,18 @@ def create_bridge_tab():
                 if cmd == "get_available_family_types" and isinstance(data, list):
                     for item in data:
                         if isinstance(item, dict):
-                            name = item.get("name", item.get("Name", str(item)))
-                            family_choices.append(name)
+                            type_name = (item.get("TypeName")
+                                         or item.get("typeName")
+                                         or item.get("name")
+                                         or item.get("Name")
+                                         or str(item))
+                            family_choices.append(type_name)
                         else:
                             family_choices.append(str(item))
                     status_parts.append(f"{label}: {len(family_choices)}")
 
             if intent.get("need_level"):
+                yield _reset(2, "Querying levels...")
                 levels_raw = _query_revit("get_levels", {})
                 if isinstance(levels_raw, list):
                     for item in levels_raw:
@@ -546,6 +784,8 @@ def create_bridge_tab():
                             break
 
             status_msg = "Queried from Revit: " + " | ".join(status_parts)
+            if need_host and select_prompt:
+                status_msg += f"\n{select_prompt}"
             if parsed_coords:
                 z_info = f", Z={parsed_coords['z']}mm" if parsed_coords.get("z") is not None else ""
                 status_msg += f"\nParsed: X={x_val}, Y={y_val}{z_info}"
@@ -562,16 +802,41 @@ def create_bridge_tab():
                    gr.Number(visible=True, value=x_val),
                    gr.Number(visible=True, value=y_val),
                    gr.Button(visible=True),
+                   gr.Row(visible=need_host), None,
                    gr.Textbox(visible=False),
                    None,
-                   _step_indicator(2, MAIN_STEPS))
+                   _step_md(2, MAIN_STEPS))
         except Exception:
             err = traceback.format_exc()
             logger.error(f"[on_generate] EXCEPTION:\n{err}")
-            yield _empty(f"Error:\n{err}")
+            yield _reset(1, f"Error: {err[:200]}")
 
-    def on_confirm_selection(query, family, level, x, y):
-        logger.info(f"[on_confirm] query={query!r} family={family!r} level={level!r} x={x} y={y}")
+    def on_select_host():
+        """Trigger Revit selection mode — user clicks a wall/floor in Revit."""
+        logger.info("[on_select_host] triggering Revit selection")
+        elements = _trigger_host_selection()
+        if elements and len(elements) > 0:
+            el = elements[0]  # take first selected element
+            el_id = el.get("Id", el.get("id", ""))
+            el_name = el.get("Name", el.get("name", "?"))
+            el_cat = el.get("Category", el.get("category", ""))
+            display = f"{el_name} (ID: {el_id}, {el_cat})" if el_cat else f"{el_name} (ID: {el_id})"
+            logger.info(f"[on_select_host] selected: {display}")
+            return display, el_id
+        logger.warning("[on_select_host] no element selected")
+        return "No element selected — try again", None
+
+    def on_confirm_selection(query, family, level, x, y, host_id):
+        """Generator — yields progress updates to avoid Gradio 'processing' overlay."""
+        logger.info(f"[on_confirm] query={query!r} family={family!r} level={level!r} x={x} y={y} host_id={host_id}")
+
+        def _confirm_out(sels, code, sec_text="", rag=None, step=2,
+                         plog=None, status=""):
+            return (sels, code, code,
+                    gr.Textbox(visible=bool(sec_text), value=sec_text),
+                    rag,
+                    _step_md(step, MAIN_STEPS, status=status, pipeline_log=plog))
+
         try:
             selections = {}
             if family:
@@ -581,8 +846,17 @@ def create_bridge_tab():
                 selections["level"] = level_name
             if x or y:
                 selections["position"] = {"x": x, "y": y}
+            if host_id:
+                selections["host_element_id"] = host_id
+
+            # Yield 1: show generating status immediately
+            plog = ["Building selections..."]
+            yield _confirm_out(selections, "", step=2, plog=plog)
 
             logger.info(f"[on_confirm] selections={selections}")
+            plog.append("Calling RAG + LLM code generation...")
+            yield _confirm_out(selections, "", step=2, plog=plog)
+
             result = _generate_code(query, selections=selections)
             logger.info(f"[on_confirm] generate result keys={list(result.keys())}, code_len={len(result.get('code', ''))}")
 
@@ -592,46 +866,49 @@ def create_bridge_tab():
             rag = result.get("rag_context", {})
             sec_text = "Safe" if safe else "Warning: " + "; ".join(warnings)
 
-            return (selections, code, code,
-                    gr.Textbox(visible=True, value=sec_text),
-                    rag,
-                    _step_indicator(3, MAIN_STEPS))
+            plog.append(f"Code generated — {code.count(chr(10)) + 1} lines")
+            plog.append(f"Security review — {sec_text}")
+            yield _confirm_out(selections, code, sec_text=sec_text, rag=rag,
+                               step=3, plog=plog)
         except Exception:
             err = traceback.format_exc()
             logger.error(f"[on_confirm] EXCEPTION:\n{err}")
-            return ({}, "", "",
-                    gr.Textbox(visible=True, value=f"Error:\n{err}"),
-                    None,
-                    _step_indicator(2, MAIN_STEPS))
+            yield _confirm_out({}, "", sec_text=f"Error:\n{err[:200]}",
+                               step=2, status=f"Error: {err[:100]}")
 
     def on_execute(code):
+        """Generator — yields progress to avoid 'processing' overlay."""
         logger.info(f"[on_execute] code_len={len(code) if code else 0}")
         if not code.strip():
-            return "No code to execute.", _step_indicator(3, MAIN_STEPS)
+            yield "No code to execute.", _step_md(3, MAIN_STEPS)
+            return
+        yield "Sending code to Revit...", _step_md(4, MAIN_STEPS, status="Executing in Revit...")
         result = _execute_code(code)
         if result.get("success"):
             res = result.get("result", "")
-            msg = f"Success\n{json.dumps(res, indent=2, ensure_ascii=False) if res else '(no result)'}"
+            msg = f"✓ 执行成功\n{json.dumps(res, indent=2, ensure_ascii=False) if res else '(no result)'}"
         else:
-            msg = f"Failed\n{result.get('error', 'Unknown error')}"
-        return msg, _step_indicator(4, MAIN_STEPS)
+            error = result.get("error", "Unknown error")
+            logger.error(f"[on_execute] FAILED: {error}")
+            msg = f"✗ 执行失败: {error}"
+        yield msg, _step_md(4, MAIN_STEPS)
 
     def on_solidify(name, description, code, query):
         """Solidify tool and auto-refresh tool list."""
         logger.info(f"[on_solidify] name={name!r} code_len={len(code) if code else 0}")
         try:
             if not name.strip():
-                return ("Please enter a tool name.", _step_indicator(4, MAIN_STEPS),
+                return ("Please enter a tool name.", _step_md(4, MAIN_STEPS),
                         on_refresh_tools())
             result = _solidify_tool(name, code, description, query)
             if "error" in result:
-                return (f"Error: {result['error']}", _step_indicator(4, MAIN_STEPS),
+                return (f"Error: {result['error']}", _step_md(4, MAIN_STEPS),
                         on_refresh_tools())
             return (f"Solidified as '{result.get('name', name)}'",
-                    _step_indicator(5, MAIN_STEPS),
+                    _step_md(5, MAIN_STEPS),
                     on_refresh_tools())
         except Exception:
-            return (f"Error:\n{traceback.format_exc()}", _step_indicator(4, MAIN_STEPS),
+            return (f"Error:\n{traceback.format_exc()}", _step_md(4, MAIN_STEPS),
                     on_refresh_tools())
 
     # --- Tool Library ---
@@ -755,7 +1032,7 @@ def create_bridge_tab():
                 ))
 
         logger.info(f"[on_load_choices_render] RETURNING {len(radios)} radios + {len(inputs)} inputs")
-        return (*radios, *inputs, _step_indicator(3, TOOL_STEPS))
+        return (*radios, *inputs, _step_md(3, TOOL_STEPS))
 
     def on_run_tool(name, choices_data, radio_names, input_names,
                     radio1, radio2,
@@ -767,7 +1044,7 @@ def create_bridge_tab():
         logger.info(f"[on_run_tool] choices_data keys={list((choices_data or {}).keys())}")
 
         if not name or not name.strip():
-            return "Please select a tool.", _step_indicator(1, TOOL_STEPS)
+            return "Please select a tool.", _step_md(1, TOOL_STEPS)
 
         params = {}
 
@@ -806,7 +1083,7 @@ def create_bridge_tab():
         logger.info(f"[on_run_tool] final params={params}")
 
         if not params:
-            return "No parameters provided. Please fill in the fields above.", _step_indicator(3, TOOL_STEPS)
+            return "No parameters provided. Please fill in the fields above.", _step_md(3, TOOL_STEPS)
 
         result = _run_tool(name, params)
         logger.info(f"[on_run_tool] result={result}")
@@ -820,10 +1097,10 @@ def create_bridge_tab():
                 msg = f"Success\n{res_json}"
         else:
             msg = f"Failed: {result.get('error', 'Unknown')}"
-        return msg, _step_indicator(4, TOOL_STEPS)
+        return msg, _step_md(4, TOOL_STEPS)
 
     # === Wire events ===
-    refresh_btn.click(on_refresh_health, outputs=[revit_status])
+    refresh_btn.click(on_page_load, outputs=[revit_status, unit_selector])
     unit_selector.change(on_change_unit, inputs=[unit_selector], outputs=[unit_selector])
     detect_unit_btn.click(on_detect_unit, outputs=[unit_selector])
 
@@ -833,12 +1110,19 @@ def create_bridge_tab():
                  thinking_display,
                  selection_status, family_radio, level_radio,
                  x_input, y_input, confirm_selection_btn,
+                 host_row, host_element_id,
                  security_status, rag_info, step_display],
+    )
+
+    select_host_btn.click(
+        on_select_host,
+        outputs=[host_display, host_element_id],
     )
 
     confirm_selection_btn.click(
         on_confirm_selection,
-        inputs=[current_query, family_radio, level_radio, x_input, y_input],
+        inputs=[current_query, family_radio, level_radio, x_input, y_input,
+                host_element_id],
         outputs=[current_selections, code_display, last_code, security_status,
                  rag_info, step_display],
     )

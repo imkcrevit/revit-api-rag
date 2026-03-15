@@ -96,8 +96,23 @@ class LLMClient:
         if not choices:
             return ""
 
-        message = choices[0].get("message") or {}
+        choice = choices[0]
+        finish_reason = choice.get("finish_reason", "unknown")
+        message = choice.get("message") or {}
         content = message.get("content") or ""
+
+        import logging
+        _llm_log = logging.getLogger("pipeline.llm_client")
+        _llm_log.info(
+            f"[generate_text] finish_reason={finish_reason} "
+            f"content_len={len(content)} max_tokens={self.max_tokens}"
+        )
+        if finish_reason == "length":
+            _llm_log.warning(
+                f"[generate_text] RESPONSE TRUNCATED — hit max_tokens={self.max_tokens}. "
+                f"Increase max_tokens in config."
+            )
+
         return str(content)
 
     def generate_stream(

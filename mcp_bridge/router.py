@@ -304,15 +304,47 @@ async def generate_code_stream(req: GenerateRequest):
     gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
 
     async def event_stream():
-        # Phase 1: RAG retrieval
-        yield f"event: rag\ndata: {json.dumps('Searching API docs and SDK examples...')}\n\n"
+        def _p(msg: str):
+            return f"event: progress\ndata: {json.dumps(msg)}\n\n"
 
-        results = retriever.search(req.query, api_top_k=req.api_top_k, code_top_k=req.code_top_k)
+        # ── Phase 1: RAG Retrieval ──
+        yield _p("Query Rewrite — optimizing search keywords...")
+
+        search_query = retriever.rewrite_query(req.query)
+        yield _p(f"Query Rewrite done → \"{search_query[:60]}\"")
+
+        yield _p("Embedding — vectorizing query...")
+        query_embedding = retriever._embedder.embed_query(search_query)
+
+        yield _p("Vector Search — querying API docs & SDK examples...")
+        api_raw = retriever._api_collection.query(
+            query_embeddings=[query_embedding], n_results=req.api_top_k,
+        )
+        code_raw = retriever._code_collection.query(
+            query_embeddings=[query_embedding], n_results=req.code_top_k,
+        )
+
+        yield _p("Hydrating — fetching full records from database...")
+        api_items = retriever._hydrate_api(api_raw)
+        sdk_items = retriever._hydrate_sdk(code_raw)
+
+        from pipeline.retriever import SearchResults
+        results = SearchResults(
+            query=req.query, rewritten_query=search_query,
+            api_items=api_items, sdk_items=sdk_items,
+        )
+
+        yield _p(f"Retrieved {len(api_items)} API docs + {len(sdk_items)} SDK examples")
+        yield f"event: rag\ndata: {json.dumps(f'Found {len(api_items)} API + {len(sdk_items)} SDK')}\n\n"
+
+        # ── Phase 2: Context Assembly ──
+        yield _p("Combining API docs + SDK code into RAG context...")
         ctx = retriever.build_context(results)
+        api_ctx_len = len(ctx.get("api_context", ""))
+        code_ctx_len = len(ctx.get("code_context", ""))
+        yield _p(f"RAG context ready — API: {api_ctx_len} chars, SDK: {code_ctx_len} chars")
 
-        yield f"event: rag\ndata: {json.dumps(f'Found {len(results.api_items)} API docs + {len(results.sdk_items)} SDK examples')}\n\n"
-
-        # Phase 2: Stream code generation
+        yield _p("Assembling system prompt (rules + context + unit config)...")
         from mcp_bridge.code_generator import SYSTEM_EXECUTE, CodeGenerator as CG
         system = SYSTEM_EXECUTE.format(
             revit_version=gen.revit_version,
@@ -321,16 +353,24 @@ async def generate_code_stream(req: GenerateRequest):
             selections_context="",
             unit_context=CG.UNIT_CONTEXTS.get(gen.user_unit, CG.UNIT_CONTEXTS["mm"]),
         )
+        yield _p(f"System prompt assembled — {len(system)} chars total")
 
+        # ── Phase 3: LLM Generation (streaming) ──
+        yield _p("LLM generating C# code (streaming)...")
         accumulated = ""
         for token in llm.generate_stream(req.query, system_prompt=system):
             accumulated += token
             yield f"event: token\ndata: {json.dumps(token)}\n\n"
 
-        # Phase 3: Extract code and review
+        # ── Phase 4: Post-processing ──
+        yield _p("Extracting code from LLM response...")
         code = gen._extract_code(accumulated)
-        safe, warnings = sandbox.review(code)
 
+        yield _p("Security review — scanning for unsafe patterns...")
+        safe, warnings = sandbox.review(code)
+        yield _p(f"Security review done — {'Safe' if safe else 'WARNING: ' + '; '.join(warnings)}")
+
+        yield _p("Done — code ready for review")
         done_data = {
             "code": code,
             "rag_context": {
