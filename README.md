@@ -1,3 +1,5 @@
+[English](./README.en.md) | **中文**
+
 # 致谢与源代码归属 (Acknowledgements and Source Attribution)
 
 本项目参考或直接使用了以下开源项目的代码和设计，在此致谢：

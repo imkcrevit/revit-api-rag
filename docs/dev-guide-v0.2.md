@@ -1,3 +1,5 @@
+[English](./dev-guide-v0.2.en.md) | **中文**
+
 # Revit AI Reasoning Stack — 开发指南 v0.2
 
 > 基于 `revit-ai-reasoning-stack-v0.2.md` 拆分的详细开发任务书

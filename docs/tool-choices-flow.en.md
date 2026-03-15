@@ -1,21 +1,21 @@
-[English](./tool-choices-flow.en.md) | **中文**
+**English** | [中文](./tool-choices-flow.md)
 
-# Tool Dynamic Choices — 操作逻辑与步骤图
+# Tool Dynamic Choices — Logic and Flow Diagrams
 
-## 设计原则
+## Design Principle
 
-> 只要是 multi 结果就需要 list 而非自定义的选择
+> Any multi-result parameter must use a list selection, never a hardcoded or manual choice.
 
-凡是参数值来自 Revit 模型中多个可选项（Level、FamilyType、FloorType、Element 列表等），
-系统必须运行时查询 Revit 获取选项列表，由用户选择，而非 `.First()` 硬编码或手动输入。
+Whenever a parameter value comes from multiple options in the Revit model (Level, FamilyType, FloorType, Element lists, etc.),
+the system must query Revit at runtime to obtain the option list and let the user choose, rather than hardcoding with `.First()` or requiring manual input.
 
 ---
 
-## 架构总览
+## Architecture Overview
 
 ```
 ┌──────────────┐     ┌─────────────────┐     ┌──────────────┐
-│  Gradio UI   │     │  Claude Desktop  │     │   其他客户端   │
+│  Gradio UI   │     │  Claude Desktop  │     │ Other Clients │
 │  (Tab D)     │     │  (MCP Client)    │     │  (REST API)  │
 └──────┬───────┘     └────────┬─────────┘     └──────┬───────┘
        │                      │                       │
@@ -23,25 +23,25 @@
        ▼                      ▼                       ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                    FastAPI Router                             │
-│  GET  /tools/{name}/choices  ← 查询动态参数选项               │
-│  POST /tools/{name}/run     ← 用选择的值执行工具              │
+│  GET  /tools/{name}/choices  ← Query dynamic param options   │
+│  POST /tools/{name}/run     ← Execute tool with selections  │
 ├──────────────────────────────────────────────────────────────┤
 │                    MCP Server (FastMCP)                       │
-│  get_tool_choices(name)     ← 同功能 MCP 工具                 │
-│  run_tool(name, params)     ← 同功能 MCP 工具                 │
+│  get_tool_choices(name)     ← Same functionality (MCP tool)  │
+│  run_tool(name, params)     ← Same functionality (MCP tool)  │
 └──────────────────┬───────────────────────────────────────────┘
                    │
                    ▼
 ┌──────────────────────────────┐
 │        ToolStore             │
-│  get_dynamic_params(name)    │  ← 读 YAML 提取 choices_from
-│  render_code(name, params)   │  ← 填充模板参数
-│  validate_params(name, p)    │  ← 校验 + 默认值
+│  get_dynamic_params(name)    │  ← Read YAML, extract choices_from
+│  render_code(name, params)   │  ← Fill in template parameters
+│  validate_params(name, p)    │  ← Validate + apply defaults
 └──────────────────┬───────────┘
                    │
                    ▼
 ┌──────────────────────────────┐
-│  RevitQueryExecutor / TCP    │  ← 实时查询 Revit 模型
+│  RevitQueryExecutor / TCP    │  ← Query Revit model at runtime
 │  get_levels()                │
 │  get_family_types([cat])     │
 │  send_code(dynamic query)    │
@@ -56,23 +56,23 @@
 
 ---
 
-## YAML 参数 `choices_from` 规范
+## YAML Parameter `choices_from` Specification
 
-| `choices_from` 值 | 含义 | 查询方式 | 返回值字段 |
+| `choices_from` Value | Meaning | Query Method | Return Field |
 |---|---|---|---|
-| `levels` | 模型中所有 Level | `FilteredElementCollector.OfClass(Level)` | `Name` |
-| `family_types:OST_XXX` | 指定类别的族类型 | `get_available_family_types` command | `Name` |
-| `floor_types` | 所有楼板类型 | `FilteredElementCollector.OfClass(FloorType)` | `Name` |
-| `elements:OST_XXX` | 指定类别的模型实例 | `FilteredElementCollector.OfCategory(cat)` | `Id` |
+| `levels` | All Levels in the model | `FilteredElementCollector.OfClass(Level)` | `Name` |
+| `family_types:OST_XXX` | Family types of a given category | `get_available_family_types` command | `Name` |
+| `floor_types` | All floor types | `FilteredElementCollector.OfClass(FloorType)` | `Name` |
+| `elements:OST_XXX` | Model instances of a given category | `FilteredElementCollector.OfCategory(cat)` | `Id` |
 
-### YAML 示例
+### YAML Example
 
 ```yaml
 parameters:
   - name: level_name
     type: string
     description: Target level name
-    choices_from: levels          # ← 声明动态选项来源
+    choices_from: levels          # ← Declare dynamic option source
 
   - name: type_name
     type: string
@@ -82,10 +82,10 @@ parameters:
   - name: x
     type: double
     description: X position (mm)
-    default: '0'                  # ← 静态默认值，无需查询
+    default: '0'                  # ← Static default, no query needed
 ```
 
-### Code Template 对应变化
+### Corresponding Code Template Changes
 
 ```diff
 - var level = new FilteredElementCollector(document)
@@ -101,18 +101,18 @@ parameters:
 
 ---
 
-## 完整流程（步骤图）
+## Complete Flow (Step-by-Step Diagrams)
 
-### 流程 A: Gradio UI 工具执行
+### Flow A: Gradio UI Tool Execution
 
 ```
-用户                     Gradio Tab D                  Router                    Revit
+User                     Gradio Tab D                  Router                    Revit
   │                          │                           │                         │
-  │  1. 输入工具名            │                           │                         │
+  │  1. Enter tool name      │                           │                         │
   │  (e.g. create_wall)      │                           │                         │
   │─────────────────────────>│                           │                         │
   │                          │                           │                         │
-  │  2. 点击 [Load Choices]  │                           │                         │
+  │  2. Click [Load Choices] │                           │                         │
   │─────────────────────────>│                           │                         │
   │                          │  GET /tools/create_wall/  │                         │
   │                          │       choices             │                         │
@@ -132,25 +132,26 @@ parameters:
   │                          │     value:"L1"}, ...]}    │                         │
   │                          │<─────────────────────────│                         │
   │                          │                           │                         │
-  │  3. 显示选项列表          │                           │                         │
-  │  + 预填 JSON:            │                           │                         │
+  │  3. Display option list  │                           │                         │
+  │  + pre-fill JSON:        │                           │                         │
   │  {"level_name":"L1"}     │                           │                         │
   │<─────────────────────────│                           │                         │
   │                          │                           │                         │
-  │  4. 用户选择/修改参数     │                           │                         │
+  │  4. User selects/edits   │                           │                         │
+  │     parameters           │                           │                         │
   │  {"level_name":"L2",     │                           │                         │
   │   "start_x":0, ...}     │                           │                         │
   │─────────────────────────>│                           │                         │
   │                          │                           │                         │
-  │  5. 点击 [Run Tool]      │                           │                         │
+  │  5. Click [Run Tool]     │                           │                         │
   │─────────────────────────>│                           │                         │
   │                          │  POST /tools/create_wall/ │                         │
   │                          │        run                │                         │
   │                          │─────────────────────────>│                         │
   │                          │                           │                         │
   │                          │                           │  render_code()          │
-  │                          │                           │  → 替换 {level_name}   │
-  │                          │                           │    为 "L2"             │
+  │                          │                           │  → Replace {level_name} │
+  │                          │                           │    with "L2"            │
   │                          │                           │                         │
   │                          │                           │  TCP: send_code(C#)    │
   │                          │                           │────────────────────────>│
@@ -158,17 +159,18 @@ parameters:
   │                          │                           │  {ElementId, Status}   │
   │                          │                           │<────────────────────────│
   │                          │                           │                         │
-  │  6. 显示执行结果          │                           │                         │
+  │  6. Display result       │                           │                         │
   │  ✅ Created on L2        │                           │                         │
   │<─────────────────────────│                           │                         │
 ```
 
-### 流程 B: Claude Desktop (MCP) 工具执行
+### Flow B: Claude Desktop (MCP) Tool Execution
 
 ```
-用户                     Claude Desktop              MCP Server                 Revit
+User                     Claude Desktop              MCP Server                 Revit
   │                          │                           │                         │
-  │  "在L2上创建结构柱"       │                           │                         │
+  │  "Create a structural    │                           │                         │
+  │   column on L2"          │                           │                         │
   │─────────────────────────>│                           │                         │
   │                          │                           │                         │
   │                          │  list_tools()             │                         │
@@ -190,8 +192,9 @@ parameters:
   │                          │   level_name: [...]}      │                         │
   │                          │<─────────────────────────│                         │
   │                          │                           │                         │
-  │                          │  (LLM 根据用户意图         │                         │
-  │                          │   + choices 选择参数)      │                         │
+  │                          │  (LLM selects params      │                         │
+  │                          │   based on user intent    │                         │
+  │                          │   + available choices)    │                         │
   │                          │                           │                         │
   │                          │  run_tool(                │                         │
   │                          │    "create_structural_    │                         │
@@ -208,17 +211,19 @@ parameters:
   │                          │  ✅ Created               │                         │
   │                          │<─────────────────────────│                         │
   │                          │                           │                         │
-  │  "已在L2创建结构柱,        │                           │                         │
-  │   类型 M_SC_Reference"    │                           │                         │
+  │  "Structural column      │                           │                         │
+  │   created on L2,          │                           │                         │
+  │   type M_SC_Reference"    │                           │                         │
   │<─────────────────────────│                           │                         │
 ```
 
-### 流程 C: 交互式代码生成（非固化工具）
+### Flow C: Interactive Code Generation (Non-predefined Tools)
 
 ```
-用户                     Gradio Tab D                  Router                    Revit
+User                     Gradio Tab D                  Router                    Revit
   │                          │                           │                         │
-  │  "创建结构柱"             │                           │                         │
+  │  "Create structural      │                           │                         │
+  │   column"                │                           │                         │
   │─────────────────────────>│                           │                         │
   │                          │  POST /classify-intent    │                         │
   │                          │─────────────────────────>│                         │
@@ -232,40 +237,40 @@ parameters:
   │                          │─────────────────────────>│────────────────────────>│
   │                          │<─────────────────────────│<────────────────────────│
   │                          │                           │                         │
-  │  展示下拉框:              │                           │                         │
+  │  Display dropdowns:      │                           │                         │
   │  [Family Type ▾]         │                           │                         │
   │  [Level ▾]               │                           │                         │
   │  [X] [Y]                 │                           │                         │
   │<─────────────────────────│                           │                         │
   │                          │                           │                         │
-  │  选择 + 确认              │                           │                         │
+  │  Select + confirm        │                           │                         │
   │─────────────────────────>│                           │                         │
   │                          │  POST /generate-with-     │                         │
   │                          │    selections             │                         │
   │                          │─────────────────────────>│                         │
-  │                          │  → RAG + LLM 生成 C#      │                         │
+  │                          │  → RAG + LLM generate C#  │                         │
   │                          │<─────────────────────────│                         │
   │                          │                           │                         │
-  │  代码预览 + [Execute]     │                           │                         │
+  │  Code preview + [Execute]│                           │                         │
   │<─────────────────────────│                           │                         │
 ```
 
 ---
 
-## 涉及的文件
+## Related Files
 
-| 文件 | 职责 |
+| File | Responsibility |
 |---|---|
-| `mcp_bridge/tools/*.yaml` | 工具定义，`choices_from` 声明动态参数 |
-| `mcp_bridge/tool_store.py` | `get_dynamic_params()` 提取需查询的参数 |
-| `mcp_bridge/router.py` | `GET /tools/{name}/choices` REST 端点 |
-| `mcp_bridge/mcp_server.py` | `get_tool_choices()` MCP 工具 |
-| `mcp_bridge/interactive.py` | `RevitQueryExecutor` 执行 Revit 查询 |
-| `mcp_bridge/frontend/app.py` | Gradio UI: Load Choices 按钮 + 预填 |
+| `mcp_bridge/tools/*.yaml` | Tool definitions; `choices_from` declares dynamic parameters |
+| `mcp_bridge/tool_store.py` | `get_dynamic_params()` extracts parameters that require querying |
+| `mcp_bridge/router.py` | `GET /tools/{name}/choices` REST endpoint |
+| `mcp_bridge/mcp_server.py` | `get_tool_choices()` MCP tool |
+| `mcp_bridge/interactive.py` | `RevitQueryExecutor` executes Revit queries |
+| `mcp_bridge/frontend/app.py` | Gradio UI: Load Choices button + pre-fill |
 
-## 当前已支持的 choices_from 类型
+## Currently Supported choices_from Types
 
-| 类型 | 工具 |
+| Type | Tools |
 |---|---|
 | `levels` | create_wall, create_beam, create_floor, create_structural_column |
 | `family_types:OST_StructuralColumns` | create_structural_column |

@@ -1,3 +1,5 @@
+[English](./usage-guide.en.md) | **中文**
+
 # 使用指南 — Intent Bridge 交互操作
 
 本文档演示如何通过 Gradio Web UI 与 Revit 进行 AI 辅助交互，涵盖单步命令执行和多步交互选择两种模式。
