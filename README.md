@@ -51,6 +51,19 @@ revit-api-rag/
 │   │   └── embed.py       # SQLite → ChromaDB
 │   ├── retriever.py       # 两层检索器
 │   └── llm_client.py      # LLM 客户端（OpenRouter）
+├── mcp_bridge/            # Intent Bridge — Revit 交互桥接层
+│   ├── router.py          # FastAPI 路由（SSE 流式生成、健康检查等）
+│   ├── code_generator.py  # RAG 上下文组装 + LLM 代码生成
+│   ├── interactive.py     # LLM 意图分类 + Revit 数据查询
+│   ├── revit_client.py    # TCP JSON-RPC 2.0 客户端
+│   ├── client_pool.py     # 连接池（单例 + 自动重连）
+│   ├── sandbox.py         # C# 代码安全审查
+│   ├── tool_store.py      # Solidified Tool 持久化
+│   └── frontend/          # Gradio Web UI
+│       └── app.py         # 多步交互界面（Thinking + Pipeline + 代码执行）
+├── revit_plugin/          # Revit 2026 插件（C# / .NET 8）
+│   ├── plugin/            # RevitMCPPlugin — TCP Socket 服务
+│   └── commandset/        # RevitMCPCommandSet — 23 个预置命令
 ├── config/                # 配置
 │   └── config.yaml
 ├── data/                  # 生成的数据库文件
@@ -131,9 +144,11 @@ Prompt = API Reference + SDK Code + User Query
 
 ![V2 完整工作流](./docs/images/RAG-Workflow-Update.jpg)
 
-## 训练产出文件
+## Release 文件
 
-训练完成后产出 4 个数据库文件，已上传至 [GitHub Release (v2.0-data)](https://github.com/imkcrevit/revit-api-rag/releases/tag/v2.0-data)：
+### RAG 数据库 — [v2.0-data](https://github.com/imkcrevit/revit-api-rag/releases/tag/v2.0-data)
+
+训练完成后产出 4 个数据库文件：
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
@@ -150,6 +165,36 @@ data/
 │   └── revit_sdk.db          # SDK golden code
 ├── chromadb_api/              # 解压 chromadb_api.tar.gz
 └── chromadb_code/             # 解压 chromadb_code.tar.gz
+```
+
+### Revit 插件 — [v0.2](https://github.com/imkcrevit/revit-api-rag/releases/tag/v0.2)
+
+| 文件 | 大小 | 说明 |
+|------|------|------|
+| `revit-mcp-plugin-v0.2-R2026.zip` | 20 MB | Revit 2026 插件（DLL + .addin + CommandSet） |
+
+安装方法：
+```
+1. 下载 revit-mcp-plugin-v0.2-R2026.zip
+2. 解压到 %APPDATA%\Autodesk\Revit\Addins\2026\
+3. 重启 Revit 2026
+```
+
+解压后目录结构：
+```
+%APPDATA%\Autodesk\Revit\Addins\2026\
+├── mcp-servers-for-revit.addin          # 插件注册清单
+└── revit_mcp_plugin/                    # 插件主目录
+    ├── RevitMCPPlugin.dll               # 主插件（TCP Socket 服务）
+    ├── RevitMCPSDK.dll                  # MCP SDK
+    ├── Newtonsoft.Json.dll              # JSON 序列化
+    └── Commands/
+        ├── commandRegistry.json         # 命令注册表
+        └── RevitMCPCommandSet/          # 命令集
+            ├── command.json             # 23 个预置命令定义
+            └── 2026/                    # Revit 2026 编译产物
+                ├── RevitMCPCommandSet.dll
+                └── ...（依赖 DLL）
 ```
 
 ## 环境要求
@@ -179,6 +224,45 @@ python -m server.main
 ---
 
 ## 更新日志
+
+### 2026.03 — V0.2 Intent Bridge + Revit 交互
+
+**Gradio 多步交互 UI**
+- 全新 4 步工作流界面：Input → Select Options → Review Code → Execute
+- Thinking 模式：LLM 推理过程 `<thinking>` 实时流式显示，可折叠查看
+- Pipeline 进度日志：Query Rewrite → Embedding → Vector Search → Hydrating → Combining → Assembling → LLM Generating → Extracting → Security Review，逐步显示带颜色标记
+- 实时 JS 计时器，流式生成期间持续递增显示耗时
+- 固定高度可滚动面板，避免页面跳动
+
+**Intent Bridge — 多步 / 单步解析**
+- LLM 意图分类器（`interactive.py`）：自动识别用户指令类型
+  - **单步（Direct）**: 查询、修改、删除等操作直接生成代码
+  - **多步（Select Family）**: 创建墙/柱/梁/楼板等需要族类型选择，先查询 Revit 可用族类型供用户选择，再生成代码
+  - **多步（Select Both）**: 创建窗户/门等需要宿主选择 + 族类型选择，先触发 Revit 选择模式让用户点选宿主元素
+- 支持从用户指令中提取坐标参数（2D/3D）
+- 关键词回退机制：LLM 不可用时自动切换规则匹配
+
+**Revit 实时交互**
+- TCP JSON-RPC 2.0 协议连接 Revit 2026 插件（端口 18080）
+- 丰富的连接状态显示：版本号、协议、端点、延迟、时间戳
+- 查询族类型、标高、已选元素
+- 触发 Revit PickObject 交互选择模式
+- 动态代码执行 + 结果回显
+
+**SSE 流式代码生成**
+- `/generate-stream` 端点：SSE 协议逐 token 流式输出
+- 9 阶段 Pipeline 进度事件 + token 事件 + 完成事件
+- Thinking / Code 分离正则提取
+- 安全审查：代码执行前自动扫描危险 API 调用
+
+**Solidified Tools**
+- 成功执行的代码可一键固化为可复用工具
+- 工具参数通过 Revit 动态查询（族类型列表、标高列表等）
+- API Explorer 面板查看和管理已固化工具
+
+**Revit 插件 Release**
+- 编译 Revit 2026 Release 版 DLL，打包上传至 [GitHub Release v0.2](https://github.com/imkcrevit/revit-api-rag/releases/tag/v0.2)
+- 包含 RevitMCPPlugin + RevitMCPCommandSet（23 个预置命令）+ .addin 注册文件
 
 ### 2025.03 — V2 重大重构
 - 旧版代码迁移至 [`legacy/`](./legacy/) — [查看旧版文档](./legacy/README.md)
