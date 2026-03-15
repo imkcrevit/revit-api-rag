@@ -433,16 +433,21 @@ def create_bridge_tab():
         return msg, _step_indicator(4, MAIN_STEPS)
 
     def on_solidify(name, description, code, query):
+        """Solidify tool and auto-refresh tool list."""
         try:
             if not name.strip():
-                return "Please enter a tool name.", _step_indicator(4, MAIN_STEPS)
+                return ("Please enter a tool name.", _step_indicator(4, MAIN_STEPS),
+                        on_refresh_tools())
             result = _solidify_tool(name, code, description, query)
             if "error" in result:
-                return f"Error: {result['error']}", _step_indicator(4, MAIN_STEPS)
+                return (f"Error: {result['error']}", _step_indicator(4, MAIN_STEPS),
+                        on_refresh_tools())
             return (f"Solidified as '{result.get('name', name)}'",
-                    _step_indicator(5, MAIN_STEPS))
+                    _step_indicator(5, MAIN_STEPS),
+                    on_refresh_tools())
         except Exception:
-            return f"Error:\n{traceback.format_exc()}", _step_indicator(4, MAIN_STEPS)
+            return (f"Error:\n{traceback.format_exc()}", _step_indicator(4, MAIN_STEPS),
+                    on_refresh_tools())
 
     # --- Tool Library ---
 
@@ -536,7 +541,7 @@ def create_bridge_tab():
 
     solidify_btn.click(
         on_solidify, inputs=[tool_name, tool_desc, last_code, current_query],
-        outputs=[solidify_result, step_display],
+        outputs=[solidify_result, step_display, tools_table],
     )
 
     tools_refresh_btn.click(on_refresh_tools, outputs=[tools_table])

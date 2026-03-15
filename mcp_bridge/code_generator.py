@@ -171,14 +171,35 @@ class CodeGenerator:
         )
         return "\n".join(lines)
 
+    # C# keywords and common code identifiers that are NOT user parameters
+    _CS_NON_PARAMS = {
+        # Anonymous object fields (return new { ... })
+        "ElementId", "Status", "Created", "Error", "Message", "Count",
+        "Category", "Name", "FamilyType", "Level", "FamilyName", "TypeName",
+        "BaseLevel", "TopLevel", "InsertionPoint", "OldHeightMm", "NewHeightMm",
+        "ElevationMm", "Id", "FloorType", "Result",
+        # String interpolation fragments
+        "F3", "F1", "F2", "0",
+    }
+
     @staticmethod
     def extract_parameters(code: str) -> list[dict]:
-        """Extract {param_name} placeholders from code template."""
-        params = re.findall(r'\{(\w+)\}', code)
+        """Extract {param_name} placeholders from code template.
+
+        Filters out C# anonymous object fields (new { Status = ... })
+        and string interpolation ({value:F3}).
+        """
+        # First strip C# anonymous objects: new { Key = value, ... }
+        # and string interpolation: $"...{expr}..." or $"...{expr:format}..."
+        cleaned = re.sub(r'new\s*\{[^}]*\}', '', code)       # remove anonymous objects
+        cleaned = re.sub(r'\$"[^"]*"', '', cleaned)           # remove interpolated strings
+        cleaned = re.sub(r'\$@"[^"]*"', '', cleaned)          # remove verbatim interpolated
+
+        params = re.findall(r'\{(\w+)\}', cleaned)
         seen: set[str] = set()
         result = []
         for p in params:
-            if p not in seen:
+            if p not in seen and p not in CodeGenerator._CS_NON_PARAMS:
                 seen.add(p)
                 result.append({
                     "name": p,
