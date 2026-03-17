@@ -16,7 +16,8 @@ COPY config/ config/
 COPY pipeline/ pipeline/
 COPY server/ server/
 
-# Copy data (ChromaDB + SQLite — baked into image for Cloud Run)
+# Copy data (ChromaDB + SQLite)
+# For VM deployment: prefer volume mount (-v ./data:/app/data) instead
 COPY data/sqlite/ data/sqlite/
 COPY data/chromadb/ data/chromadb/
 

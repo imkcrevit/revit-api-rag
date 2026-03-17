@@ -1,37 +1,39 @@
-# Revit API RAG — GCP Cloud Deployment Guide
+# Revit API RAG — GCP VM Deployment Guide
 
-> **Target**: Deploy the full Revit API RAG system (FastAPI + Gradio UI) to GCP Cloud Run,
-> accessible via public URL. No Revit connection needed — cloud mode provides
-> Code Generation + API Explorer + Intent Bridge (MCP Bridge tab is local-only).
+> **Target**: Deploy the full Revit API RAG system (FastAPI + Gradio UI) to a GCP
+> Compute Engine **e2-medium** VM, accessible via public URL.
+> Cloud mode provides Code Generation + API Explorer + Intent Bridge.
+> MCP Bridge tab is local-only (future: point to remote Revit host).
 
 ---
 
 ## 1. Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      GCP Cloud Run                      │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │              Container (port 7860)                 │  │
-│  │                                                   │  │
-│  │  Gradio UI ─── FastAPI ─── RAGRetriever           │  │
-│  │    Tab A: Code Generation (Chat)                  │  │
-│  │    Tab B: Text2Revit (Legacy)                     │  │
-│  │    Tab C: API Explorer (Search → Rerank → Gen)    │  │
-│  │    Tab D: MCP Bridge (disabled — no Revit TCP)    │  │
-│  │                                                   │  │
-│  │  Data (baked into image):                         │  │
-│  │    SQLite: revit_api.db (33MB) + revit_sdk.db     │  │
-│  │    ChromaDB: chromadb_api + chromadb_code (372MB) │  │
-│  └───────────────────────────────────────────────────┘  │
-│                                                         │
-│  Secrets: OPENROUTER_API_KEY, COHERE_API_KEY            │
-│  Memory:  1 GiB+    CPU: 2+    Concurrency: 80         │
-└─────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│              GCP Compute Engine (e2-medium)                │
+│              2 vCPU / 4 GB RAM / Debian 12                │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │             Docker Compose (port 7860)               │  │
+│  │                                                     │  │
+│  │  Gradio UI ─── FastAPI ─── RAGRetriever             │  │
+│  │    Tab A: Code Generation (Chat)                    │  │
+│  │    Tab B: Text2Revit (Legacy)                       │  │
+│  │    Tab C: API Explorer (Search → Rerank → Gen)      │  │
+│  │    Tab D: MCP Bridge (disabled — no Revit TCP)      │  │
+│  │                                                     │  │
+│  │  Data (persistent disk mount):                      │  │
+│  │    SQLite: revit_api.db (33MB) + revit_sdk.db       │  │
+│  │    ChromaDB: chromadb_api + chromadb_code (372MB)   │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                           │
+│  Env: OPENROUTER_API_KEY, COHERE_API_KEY (via .env file)  │
+│  Firewall: tcp:7860 (allow ingress)                       │
+└───────────────────────────────────────────────────────────┘
          │
-         │ HTTPS (public)
+         │ HTTP (public IP:7860)
          ▼
-    https://revit-api-rag-xxxxx.run.app
+    http://<EXTERNAL_IP>:7860
          │
          │ API calls (outbound)
          ├──► OpenRouter (LLM / Embedding)
@@ -40,29 +42,29 @@
 
 ### Cloud vs Local Differences
 
-| Feature | Local (Windows) | Cloud (GCP) |
+| Feature | Local (Windows) | Cloud (GCP VM) |
 |---|---|---|
 | Tab A: Code Generation | via RAG + LLM | same |
 | Tab B: Text2Revit | via RAG + LLM | same |
 | Tab C: API Explorer | via RAG + Rerank | same |
 | Tab D: MCP Bridge | connects Revit TCP :18080 | **disabled** (no Revit) |
-| Data | local `data/` directory | baked into Docker image |
-| API Keys | `.env` file | GCP Secret Manager |
-| Port | 7860 | 7860 (Cloud Run maps to 443) |
+| Data | local `data/` directory | persistent disk mount |
+| API Keys | `.env` file | `.env` file on VM |
+| Port | 7860 | 7860 (firewall opened) |
 
 ---
 
 ## 2. Prerequisites
 
 ```bash
-# GCP CLI
+# GCP CLI (local machine)
 gcloud --version        # >= 450.0
 docker --version        # >= 24.0
 
 # Login & set project
 gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
-gcloud config set run/region asia-east1    # or us-central1
+gcloud config set compute/zone asia-east1-b    # or us-central1-a
 ```
 
 ### Required API Keys
@@ -150,159 +152,222 @@ curl -X POST http://localhost:7860/api/chat \
 
 ---
 
-## 5. Deploy to GCP Cloud Run
+## 5. Create GCP VM
 
-### 5.1 Store Secrets
+### 5.1 Create e2-medium Instance
 
 ```bash
-# Create secrets in Secret Manager
-echo -n "sk-or-v1-xxx" | gcloud secrets create OPENROUTER_API_KEY --data-file=-
-echo -n "xxx"           | gcloud secrets create COHERE_API_KEY --data-file=-
+ZONE=asia-east1-b
+VM_NAME=revit-api-rag
 
-# Grant Cloud Run access
-PROJECT_NUM=$(gcloud projects describe $(gcloud config get-value project) --format='value(projectNumber)')
-gcloud secrets add-iam-policy-binding OPENROUTER_API_KEY \
-  --member="serviceAccount:${PROJECT_NUM}-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-gcloud secrets add-iam-policy-binding COHERE_API_KEY \
-  --member="serviceAccount:${PROJECT_NUM}-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
+gcloud compute instances create ${VM_NAME} \
+  --zone=${ZONE} \
+  --machine-type=e2-medium \
+  --image-family=debian-12 \
+  --image-project=debian-cloud \
+  --boot-disk-size=30GB \
+  --boot-disk-type=pd-standard \
+  --tags=revit-rag-server
+
+# Get external IP
+gcloud compute instances describe ${VM_NAME} \
+  --zone=${ZONE} \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
 ```
 
-### 5.2 Push Image to Artifact Registry
+> **e2-medium**: 2 vCPU (shared) / 4 GB RAM. Sufficient for the RAG server
+> with moderate concurrent users. Upgrade to e2-standard-2 (dedicated CPU)
+> if you see performance issues.
+
+### 5.2 Open Firewall
 
 ```bash
-# Enable APIs (first time only)
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
-
-# Create repo (first time only)
-gcloud artifacts repositories create revit-api-rag \
-  --repository-format=docker \
-  --location=asia-east1 \
-  --description="Revit API RAG images"
-
-# Configure Docker auth
-gcloud auth configure-docker asia-east1-docker.pkg.dev
-
-# Tag & push
-REGION=asia-east1
-PROJECT=$(gcloud config get-value project)
-IMAGE=${REGION}-docker.pkg.dev/${PROJECT}/revit-api-rag/server:latest
-
-docker tag revit-api-rag:latest ${IMAGE}
-docker push ${IMAGE}
+gcloud compute firewall-rules create allow-revit-rag \
+  --direction=INGRESS \
+  --priority=1000 \
+  --network=default \
+  --action=ALLOW \
+  --rules=tcp:7860 \
+  --source-ranges=0.0.0.0/0 \
+  --target-tags=revit-rag-server
 ```
 
-### 5.3 Deploy Service
+> **Security note**: `0.0.0.0/0` allows access from anywhere.
+> Restrict `--source-ranges` to your IP range in production.
+
+### 5.3 (Optional) Reserve Static IP
 
 ```bash
-gcloud run deploy revit-api-rag \
-  --image=${IMAGE} \
-  --region=${REGION} \
-  --port=7860 \
-  --memory=2Gi \
-  --cpu=2 \
-  --min-instances=0 \
-  --max-instances=3 \
-  --concurrency=80 \
-  --timeout=300 \
-  --set-secrets="OPENROUTER_API_KEY=OPENROUTER_API_KEY:latest,COHERE_API_KEY=COHERE_API_KEY:latest" \
-  --allow-unauthenticated
-```
+# Prevent IP change on VM restart
+gcloud compute addresses create revit-rag-ip \
+  --region=asia-east1
 
-> **`--allow-unauthenticated`**: Makes the service publicly accessible.
-> Remove this flag if you want to require IAM authentication.
+gcloud compute instances delete-access-config ${VM_NAME} \
+  --zone=${ZONE} --access-config-name="External NAT"
 
-### 5.4 Verify Deployment
-
-```bash
-# Get service URL
-URL=$(gcloud run services describe revit-api-rag --region=${REGION} --format='value(status.url)')
-echo "Service URL: ${URL}"
-
-# Health check
-curl ${URL}/health
-
-# Open in browser
-echo "Open: ${URL}"
+gcloud compute instances add-access-config ${VM_NAME} \
+  --zone=${ZONE} \
+  --address=$(gcloud compute addresses describe revit-rag-ip --region=asia-east1 --format='get(address)')
 ```
 
 ---
 
-## 6. Configuration Tuning
+## 6. Deploy to VM
 
-### 6.1 Cloud Run Resources
+### 6.1 SSH into VM
 
-| Setting | Recommended | Notes |
+```bash
+gcloud compute ssh ${VM_NAME} --zone=${ZONE}
+```
+
+### 6.2 Install Docker on VM
+
+```bash
+# Install Docker
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Add current user to docker group (re-login required)
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+### 6.3 Clone Repo & Setup
+
+```bash
+# Clone project
+git clone https://github.com/YOUR_ORG/revit-api-rag.git
+cd revit-api-rag
+
+# Download data files
+gh release download v2.0-data -D data/ || true
+cd data/chromadb && tar xzf chromadb_api.tar.gz 2>/dev/null; cd ../..
+cd data/chromadb && tar xzf chromadb_code.tar.gz 2>/dev/null; cd ../..
+
+# Create .env file
+cat > .env << 'EOF'
+OPENROUTER_API_KEY=sk-or-v1-xxx
+COHERE_API_KEY=xxx
+EOF
+chmod 600 .env
+```
+
+### 6.4 Docker Compose
+
+Create `docker-compose.yml` (if not already present):
+
+```yaml
+services:
+  revit-rag:
+    build: .
+    image: revit-api-rag:latest
+    container_name: revit-rag
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+```
+
+### 6.5 Start Service
+
+```bash
+# Build and start
+docker compose up -d --build
+
+# Check logs
+docker compose logs -f
+
+# Verify
+curl http://localhost:7860/health
+```
+
+### 6.6 Verify from External
+
+```bash
+# From local machine (replace with your VM's external IP)
+EXTERNAL_IP=$(gcloud compute instances describe ${VM_NAME} \
+  --zone=${ZONE} \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+
+curl http://${EXTERNAL_IP}:7860/health
+echo "Open: http://${EXTERNAL_IP}:7860"
+```
+
+---
+
+## 7. Configuration
+
+### 7.1 VM Resources
+
+| Setting | e2-medium | Notes |
 |---|---|---|
-| Memory | 2 GiB | ChromaDB + SQLite loaded in memory |
-| CPU | 2 | Embedding + rerank are CPU-bound |
-| Min instances | 0 | Scale to zero when idle (saves cost) |
-| Max instances | 3 | Prevent runaway costs |
-| Concurrency | 80 | Single Gradio app handles many users |
-| Timeout | 300s | LLM streaming can take 30-60s |
-| Startup CPU boost | enabled | Faster cold starts |
+| vCPU | 2 (shared) | Embedding + rerank are CPU-bound |
+| RAM | 4 GB | ChromaDB + SQLite loaded in memory |
+| Disk | 30 GB (pd-standard) | ~600MB image + data + OS |
+| Network | Up to 2 Gbps | Sufficient for API calls |
 
-```bash
-# Enable startup CPU boost for faster cold starts
-gcloud run services update revit-api-rag \
-  --region=${REGION} \
-  --cpu-boost
-```
+> **Upgrade path**: If CPU becomes bottleneck →
+> `gcloud compute instances set-machine-type ${VM_NAME} --zone=${ZONE} --machine-type=e2-standard-2`
+> (requires VM stop/start)
 
-### 6.2 config.yaml Overrides
+### 7.2 config.yaml Overrides
 
-The container uses the baked-in `config/config.yaml`. To override at runtime:
-
-```bash
-# Override via environment variables (add to deploy command)
---set-env-vars="DATA_DIR=/app/data"
-```
-
-For config changes, rebuild the image. Key settings for cloud:
+The container uses the baked-in `config/config.yaml`. Key settings for cloud:
 
 ```yaml
 # config/config.yaml — cloud-optimized values
 server:
   host: "0.0.0.0"
-  port: 7860                    # Cloud Run listens here
+  port: 7860                    # Docker exposes this port
   gradio_port: 7860
   cors_origins: ["*"]           # Restrict in production
 
 mcp_bridge:
   revit_host: "localhost"       # N/A in cloud — MCP Bridge tab won't work
-  revit_port: 18080
+  revit_port: 18080             # Future: change to remote Revit host
 
 proxy:
   enabled: false                # No proxy needed on GCP
 ```
 
-### 6.3 Cold Start Optimization
+### 7.3 Auto-Restart on VM Boot
 
-Cloud Run cold starts load ~400MB of data. Typical cold start: **15-25s**.
-
-Mitigation strategies:
-1. **Min instances = 1**: Keep one instance warm ($0.00002/s idle)
-2. **CPU boost**: Faster startup CPU allocation
-3. **Lazy loading**: ChromaDB collections load on first query, not startup
+The `restart: unless-stopped` policy in docker-compose handles container restarts.
+To ensure Docker itself starts on boot:
 
 ```bash
-# Keep 1 warm instance (≈$50/month if always on)
-gcloud run services update revit-api-rag \
-  --region=${REGION} \
-  --min-instances=1
+sudo systemctl enable docker
 ```
 
 ---
 
-## 7. CI/CD (Optional)
+## 8. CI/CD (Optional)
 
-### GitHub Actions Auto-Deploy
+### GitHub Actions: Build → Push → Deploy via SSH
 
 Create `.github/workflows/deploy.yml`:
 
 ```yaml
-name: Deploy to Cloud Run
+name: Deploy to GCP VM
 
 on:
   push:
@@ -317,10 +382,8 @@ on:
       - 'requirements-server.txt'
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  REGION: asia-east1
-  SERVICE: revit-api-rag
-  IMAGE: asia-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/revit-api-rag/server
+  VM_NAME: revit-api-rag
+  ZONE: asia-east1-b
 
 jobs:
   deploy:
@@ -340,109 +403,143 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker
-        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev
-
-      - name: Download data from release
+      - name: Deploy to VM via SSH
         run: |
-          gh release download v2.0-data -D data/ || true
-          # Extract if compressed
-          cd data/chromadb && tar xzf chromadb_api.tar.gz 2>/dev/null || true
-          cd data/chromadb && tar xzf chromadb_code.tar.gz 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build & Push
-        run: |
-          docker build -t ${IMAGE}:${{ github.sha }} -t ${IMAGE}:latest .
-          docker push ${IMAGE}:${{ github.sha }}
-          docker push ${IMAGE}:latest
-
-      - name: Deploy
-        run: |
-          gcloud run deploy ${SERVICE} \
-            --image=${IMAGE}:${{ github.sha }} \
-            --region=${REGION} \
-            --port=7860 \
-            --memory=2Gi --cpu=2 \
-            --min-instances=0 --max-instances=3 \
-            --concurrency=80 --timeout=300 \
-            --set-secrets="OPENROUTER_API_KEY=OPENROUTER_API_KEY:latest,COHERE_API_KEY=COHERE_API_KEY:latest" \
-            --allow-unauthenticated
+          gcloud compute ssh ${VM_NAME} --zone=${ZONE} --command="
+            cd ~/revit-api-rag &&
+            git pull origin main &&
+            docker compose up -d --build
+          "
 ```
 
 ---
 
-## 8. Monitoring & Troubleshooting
+## 9. Monitoring & Troubleshooting
 
 ### Logs
 
 ```bash
-# Stream logs
-gcloud run services logs read revit-api-rag --region=${REGION} --tail=50
+# SSH into VM
+gcloud compute ssh ${VM_NAME} --zone=${ZONE}
 
-# Filter errors
-gcloud run services logs read revit-api-rag --region=${REGION} \
-  --filter="severity>=ERROR" --limit=20
+# View container logs
+docker compose logs -f
+docker compose logs --tail=50
+
+# System resources
+htop
+df -h
 ```
 
 ### Common Issues
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| 502 on startup | OOM — ChromaDB too large | Increase `--memory=4Gi` |
-| Timeout on first request | Cold start + data loading | Enable `--cpu-boost`, set `--min-instances=1` |
-| "No API key configured" | Secret not mounted | Check `gcloud secrets versions access latest --secret=OPENROUTER_API_KEY` |
+| OOM kill | 4GB RAM not enough for ChromaDB | Upgrade to e2-standard-2 (8GB) |
+| Slow responses | Shared CPU throttled | Upgrade to e2-standard-2 (dedicated CPU) |
+| "No API key configured" | .env missing or wrong | Check `.env` file, `docker compose restart` |
 | MCP Bridge tab errors | Expected — no Revit in cloud | Ignore; Tab D is local-only |
-| Slow embedding search | CPU throttled on low concurrency | Increase `--cpu=4` |
-| CORS errors from custom frontend | Origins restricted | Set `cors_origins: ["https://your-domain.com"]` |
+| Cannot connect | Firewall rule missing | Check `gcloud compute firewall-rules list` |
+| CORS errors | Origins restricted | Set `cors_origins` in config.yaml |
+| Container won't start | Disk full | `docker system prune -a`, check `df -h` |
 
-### Cost Estimate
+### Service Management
 
-| Resource | Spec | Idle Cost | Active Cost |
-|---|---|---|---|
-| Cloud Run | 2 CPU / 2 GiB, min=0 | $0/mo | ~$0.05/hr active |
-| Cloud Run | 2 CPU / 2 GiB, min=1 | ~$50/mo | ~$0.05/hr active |
-| Artifact Registry | ~600MB image | ~$0.03/mo | — |
-| Secret Manager | 2 secrets | free tier | — |
-| Egress | API responses | ~$0.12/GB | — |
+```bash
+# Stop
+docker compose down
+
+# Restart
+docker compose restart
+
+# Rebuild after code change
+docker compose up -d --build
+
+# View resource usage
+docker stats
+```
+
+---
+
+## 10. Cost Estimate
+
+| Resource | Spec | Monthly Cost |
+|---|---|---|
+| e2-medium VM | 2 vCPU / 4 GB, always on | ~$25/mo |
+| Boot disk | 30 GB pd-standard | ~$1.2/mo |
+| Static IP (if reserved) | 1 address | ~$3/mo (free when attached to running VM) |
+| Egress | API responses | ~$0.12/GB |
+| **Total (estimated)** | | **~$26-29/mo** |
 
 > **External API costs** (not GCP):
 > - OpenRouter: varies by model ($0.003-$0.06 per 1K tokens)
 > - Cohere Rerank: free tier 1000 calls/month
 
+> **Cost saving**: Stop VM when not in use:
+> `gcloud compute instances stop ${VM_NAME} --zone=${ZONE}`
+> (stopped VM: only disk cost ~$3/mo)
+
 ---
 
-## 9. Security Checklist
+## 11. Security Checklist
 
-- [ ] Remove `--allow-unauthenticated` if not for public demo
+- [ ] Restrict firewall `--source-ranges` to known IPs (not 0.0.0.0/0)
 - [ ] Set `cors_origins` to specific domains in production
-- [ ] Rotate API keys periodically via Secret Manager versions
-- [ ] Enable Cloud Run VPC connector if accessing private resources
+- [ ] Ensure `.env` file has `chmod 600` permissions
+- [ ] Rotate API keys periodically
+- [ ] Enable OS Login for SSH access control
 - [ ] Set up budget alerts for the GCP project
-- [ ] Consider adding rate limiting (e.g., via Cloud Armor or API Gateway)
+- [ ] Consider adding nginx reverse proxy with HTTPS (Let's Encrypt)
+- [ ] Consider fail2ban for SSH brute-force protection
 
 ---
 
-## 10. Quick Reference Commands
+## 12. Quick Reference Commands
 
 ```bash
-# ── Build & Deploy ──
-docker build -t revit-api-rag .
-docker tag revit-api-rag ${IMAGE}
-docker push ${IMAGE}
-gcloud run deploy revit-api-rag --image=${IMAGE} --region=${REGION}
+# ── VM Management ──
+gcloud compute ssh ${VM_NAME} --zone=${ZONE}
+gcloud compute instances start ${VM_NAME} --zone=${ZONE}
+gcloud compute instances stop ${VM_NAME} --zone=${ZONE}
 
-# ── Update secrets ──
-echo -n "new-key" | gcloud secrets versions add OPENROUTER_API_KEY --data-file=-
+# ── Service Management (on VM) ──
+docker compose up -d --build      # Build & start
+docker compose down               # Stop
+docker compose restart             # Restart
+docker compose logs -f             # Stream logs
 
-# ── Scale ──
-gcloud run services update revit-api-rag --region=${REGION} --min-instances=1
-gcloud run services update revit-api-rag --region=${REGION} --min-instances=0
+# ── Update Code (on VM) ──
+cd ~/revit-api-rag
+git pull origin main
+docker compose up -d --build
 
-# ── Rollback ──
-gcloud run services update-traffic revit-api-rag --region=${REGION} --to-revisions=REVISION_NAME=100
+# ── Update API Keys (on VM) ──
+nano .env                          # Edit keys
+docker compose restart             # Apply
 
-# ── Delete (cleanup) ──
-gcloud run services delete revit-api-rag --region=${REGION}
+# ── Disk Cleanup (on VM) ──
+docker system prune -a             # Remove unused images/containers
+
+# ── Delete VM (cleanup) ──
+gcloud compute instances delete ${VM_NAME} --zone=${ZONE}
+gcloud compute firewall-rules delete allow-revit-rag
+gcloud compute addresses delete revit-rag-ip --region=asia-east1
+```
+
+---
+
+## 13. Future: MCP Bridge Remote Access
+
+When the remote Revit host is ready, update `config/config.yaml`:
+
+```yaml
+mcp_bridge:
+  revit_host: "<REMOTE_REVIT_IP_OR_DOMAIN>"   # Change from localhost
+  revit_port: 18080
+```
+
+Then rebuild and restart:
+
+```bash
+docker compose up -d --build
 ```
