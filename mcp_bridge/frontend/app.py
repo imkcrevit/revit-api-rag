@@ -177,13 +177,25 @@ def _run_tool(name: str, params: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def _match_tool(query: str) -> dict | None:
+    """Check if a solidified tool matches the user query."""
+    try:
+        resp = httpx.post(_bridge_url("/match-tool"),
+                          json={"query": query}, timeout=10)
+        data = resp.json()
+        if data.get("matched"):
+            return data
+        return None
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Step indicator
 # ---------------------------------------------------------------------------
 
 def _step_md(current: int, labels: list[str], status: str = "",
-             pipeline_log: list[str] | None = None,
-             elapsed: str = "") -> str:
+             pipeline_log: list[str] | None = None) -> str:
     """Build an HTML progress bar with colored step indicators and pipeline log.
 
     Args:
@@ -191,7 +203,6 @@ def _step_md(current: int, labels: list[str], status: str = "",
         labels: step labels
         status: short status text for the active step
         pipeline_log: accumulated list of pipeline stage messages (shown as scrollable log)
-        elapsed: elapsed time string (e.g. "12s")
     """
     parts = []
     for i, label in enumerate(labels, 1):
@@ -212,33 +223,7 @@ def _step_md(current: int, labels: list[str], status: str = "",
                 f'{i}.{label}</span>'
             )
     bar = ' <span style="color:#d1d5db;font-size:1.1em"> &rarr; </span> '.join(parts)
-    # Timer badge — JS auto-incrementing when running, static when done
-    timer_html = ""
-    if elapsed:
-        try:
-            elapsed_sec = float(elapsed.rstrip("s"))
-        except (ValueError, AttributeError):
-            elapsed_sec = 0.0
-        # Unique ID per render to avoid conflicts
-        tid = f"timer_{id(elapsed) % 100000}"
-        timer_html = (
-            f'<span id="{tid}" style="float:right;background:#2563eb;color:white;'
-            f'padding:2px 10px;border-radius:12px;font-size:13px;'
-            f'font-weight:600;letter-spacing:0.5px">'
-            f'&#9201; {elapsed}</span>'
-            f'<script>'
-            f'(function(){{'
-            f'var el=document.getElementById("{tid}");'
-            f'if(!el)return;'
-            f'var t={elapsed_sec:.1f};'
-            f'if(el._iv)clearInterval(el._iv);'
-            f'el._iv=setInterval(function(){{'
-            f't+=0.1;el.textContent="⏱ "+t.toFixed(1)+"s";'
-            f'}},100);'
-            f'}})()'
-            f'</script>'
-        )
-    html = f'<div style="font-size:15px;line-height:1.8;padding:4px 0">{timer_html}{bar}</div>'
+    html = f'<div style="font-size:15px;line-height:1.8;padding:4px 0">{bar}</div>'
 
     # Pipeline log — accumulated stages with scroll
     if pipeline_log:
@@ -316,6 +301,35 @@ def create_bridge_tab():
     padding: 6px 0;
     border-bottom: 1px solid #e5e7eb;
 }
+
+/* Elapsed timer — plain text like Gradio native "processing | 3.9s" */
+.elapsed-timer {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+.elapsed-timer textarea, .elapsed-timer input {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: #6b7280 !important;
+    font-size: 12px !important;
+    font-style: italic !important;
+    text-align: right !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+}
+.elapsed-timer .wrap, .elapsed-timer .container {
+    padding: 0 !important;
+    min-height: 0 !important;
+    gap: 0 !important;
+}
 </style>""")
 
     # === Header ===
@@ -340,14 +354,26 @@ def create_bridge_tab():
     current_query = gr.State("")
     current_selections = gr.State({})
     last_code = gr.State("")
+    timer_start = gr.State(0.0)    # monotonic timestamp when pipeline started
+    timer_active = gr.State(False) # whether timer is running
 
     # ── SECTION A: Code Generation Pipeline ──
     gr.Markdown("### Code Generation Pipeline")
 
-    step_display = gr.HTML(
-        value=_step_md(1, MAIN_STEPS),
-        elem_classes=["step-bar"],
-    )
+    with gr.Row():
+        step_display = gr.HTML(
+            value=_step_md(1, MAIN_STEPS),
+            elem_classes=["step-bar"],
+            scale=5,
+        )
+        elapsed_display = gr.Textbox(
+            value="", label="", show_label=False,
+            interactive=False, max_lines=1, scale=0,
+            elem_classes=["elapsed-timer"],
+        )
+
+    # Real-time timer driven by gr.Timer
+    pipeline_timer = gr.Timer(value=0.5, active=False)
 
     # Step 1: Input
     with gr.Row():
@@ -367,7 +393,7 @@ def create_bridge_tab():
     # Step 2: Selection controls — in Accordion for collapse/expand
     # Children stay visible=True; Accordion handles collapse.
     with gr.Accordion("Step 2: Select Options", open=False,
-                       elem_classes=["bridge-section"]):
+                       elem_classes=["bridge-section"]) as step2_accordion:
         selection_status = gr.Textbox(
             label="Query Result (from Revit)",
             interactive=False, value="(waiting for intent classification)",
@@ -594,9 +620,11 @@ def create_bridge_tab():
     def on_generate(query):
         """Streaming generator — yields progressive thinking + code updates.
 
-        Yields 16 values: query, selections, code, last_code, thinking,
-                          selection controls (6), host_row, host_element_id,
-                          security, rag, step_md.
+        Yields 20 values: query, selections, code, last_code, thinking,
+                          step2_accordion, selection controls (6),
+                          host_row, host_element_id,
+                          security, rag, exec_result, step_md,
+                          run_tool_name, tool_choices_info.
         """
         import time as _time
         logger.info(f"[on_generate] query={query!r}")
@@ -605,12 +633,15 @@ def create_bridge_tab():
         def _elapsed():
             return f"{_time.monotonic() - t_start:.1f}s"
 
-        # 16-value tuple helper — resets all controls
+        # 20-value tuple helper — resets all controls including exec_result + tool library
         # Selection controls are inside Accordion (always visible),
         # so we just clear their values instead of toggling visible.
-        def _reset(step=1, status="", plog=None):
+        def _reset(step=1, status="", plog=None,
+                   tool_name_val="", tool_info_val="",
+                   open_select=False):
             return (query, {}, "", "",
                     "",  # thinking — clear
+                    gr.Accordion(open=open_select),    # step2_accordion
                     gr.Textbox(value=""),             # selection_status
                     gr.Dropdown(choices=[]),           # family_radio
                     gr.Radio(choices=[]),              # level_radio
@@ -619,12 +650,57 @@ def create_bridge_tab():
                     gr.Button(interactive=True),       # confirm_btn
                     gr.Row(visible=False), None,       # host_row, host_id
                     gr.Textbox(visible=False), None,   # security, rag
+                    "",                                # exec_result — clear
                     _step_md(step, MAIN_STEPS, status,
-                             pipeline_log=plog, elapsed=_elapsed()))
+                             pipeline_log=plog),
+                    tool_name_val,                     # run_tool_name
+                    tool_info_val)                     # tool_choices_info
 
         try:
             if not query.strip():
                 yield _reset()
+                return
+
+            # --- Step 0: Check for matching solidified tool ---
+            yield _reset(1, "Checking tool library...")
+
+            matched = _match_tool(query)
+            if matched and matched.get("has_params"):
+                tool_name = matched["name"]
+                display = matched.get("display_name", tool_name)
+                params = matched.get("parameters", [])
+                param_names = [p.get("name", "") for p in params]
+                logger.info(f"[on_generate] TOOL MATCHED: {tool_name} "
+                            f"params={param_names}")
+
+                thinking_md = (
+                    f"**Found existing tool: `{display}`**\n\n"
+                    f"Description: {matched.get('description', '')}\n\n"
+                    f"Parameters: {', '.join(param_names)}\n\n"
+                    f"This tool has been used {matched.get('execution_count', 0)} "
+                    f"time(s) before. Please review/modify the parameters below "
+                    f"in the **Tool Library** section, then click **Run Tool**."
+                )
+                tool_info = (
+                    f"Matched from query: '{query}' — "
+                    f"click 'Load Parameters' to configure"
+                )
+                yield (query, {}, "", "",
+                       thinking_md,
+                       gr.Accordion(open=False),       # step2 — not needed
+                       gr.Textbox(value=f"Existing tool found: {display}"),
+                       gr.Dropdown(choices=[]),
+                       gr.Radio(choices=[]),
+                       gr.Number(value=0),
+                       gr.Number(value=0),
+                       gr.Button(interactive=True),
+                       gr.Row(visible=False), None,
+                       gr.Textbox(visible=False), None,
+                       "",
+                       _step_md(1, MAIN_STEPS,
+                                status=f"Matched tool: {display}"),
+                       tool_name,
+                       tool_info)
                 return
 
             # --- Step 1: Intent Classification ---
@@ -639,12 +715,13 @@ def create_bridge_tab():
                 yield _reset(2, "Initializing pipeline...")
 
                 try:
-                    # Helper to build the 16-value tuple for streaming yields
+                    # Helper to build the 20-value tuple for streaming yields
                     def _stream_yield(code, thinking_md,
                                       sec_text=None, rag=None, step=2,
                                       plog=None, status=""):
                         return (query, {}, code, code,
                                 thinking_md,
+                                gr.Accordion(open=False),     # step2_accordion
                                 gr.Textbox(value=""),        # selection_status
                                 gr.Dropdown(choices=[]),      # family
                                 gr.Radio(choices=[]),         # level
@@ -654,8 +731,10 @@ def create_bridge_tab():
                                 gr.Row(visible=False), None,
                                 gr.Textbox(visible=bool(sec_text), value=sec_text or ""),
                                 rag,
+                                "",                           # exec_result
                                 _step_md(step, MAIN_STEPS, status=status,
-                                         pipeline_log=plog, elapsed=_elapsed()))
+                                         pipeline_log=plog),
+                                "", "")                       # tool_name, tool_info
 
                     with httpx.stream(
                         "POST", _bridge_url("/generate-stream"),
@@ -672,7 +751,7 @@ def create_bridge_tab():
 
                         for event_type, data1, data2 in _parse_sse_stream(resp):
                             elapsed = _time.monotonic() - t_start
-                            elapsed_str = f"{elapsed:.0f}s"
+                            elapsed_str = f"{elapsed:.1f}s"
 
                             if event_type == "progress":
                                 # Append to log (replace last if it was active)
@@ -690,8 +769,8 @@ def create_bridge_tab():
                                 final_code = data2
                                 token_count += 1
                                 now = _time.monotonic()
-                                # First token yields immediately, then throttle 0.25s
-                                if token_count > 1 and now - last_yield < 0.25:
+                                # First token yields immediately, then throttle 0.15s
+                                if token_count > 1 and now - last_yield < 0.15:
                                     continue
                                 last_yield = now
 
@@ -715,7 +794,7 @@ def create_bridge_tab():
 
                     # Final yield — Step 3
                     elapsed = _time.monotonic() - t_start
-                    elapsed_str = f"{elapsed:.0f}s"
+                    elapsed_str = f"{elapsed:.1f}s"
                     if done_info:
                         final_code = done_info.get("code", final_code)
                         safe = done_info.get("safe", True)
@@ -762,6 +841,10 @@ def create_bridge_tab():
                 params = q.get("params", {})
                 label = q.get("label", cmd)
                 data = _query_revit(cmd, params)
+                logger.info(f"[on_generate] query_revit cmd={cmd} "
+                            f"result_type={type(data).__name__} "
+                            f"len={len(data) if isinstance(data, list) else 'N/A'} "
+                            f"sample={str(data[:2]) if isinstance(data, list) and data else data}")
 
                 if cmd == "get_available_family_types" and isinstance(data, list):
                     for item in data:
@@ -813,8 +896,12 @@ def create_bridge_tab():
                 if level_default:
                     status_msg += f" -> Level: {level_default}"
 
+            logger.info(f"[on_generate] interactive: family_choices={len(family_choices)} "
+                       f"level_choices={len(level_choices)}")
+
             yield (query, {}, "", "",
                    "",  # thinking — clear
+                   gr.Accordion(open=True),          # auto-open Step 2
                    gr.Textbox(value=status_msg),
                    gr.Dropdown(choices=family_choices,
                                value=family_choices[0] if family_choices else None),
@@ -825,7 +912,9 @@ def create_bridge_tab():
                    gr.Row(visible=need_host), None,
                    gr.Textbox(visible=False),
                    None,
-                   _step_md(2, MAIN_STEPS, elapsed=_elapsed()))
+                   "",  # exec_result — clear
+                   _step_md(2, MAIN_STEPS),
+                   "", "")  # tool_name, tool_info
         except Exception:
             err = traceback.format_exc()
             logger.error(f"[on_generate] EXCEPTION:\n{err}")
@@ -866,7 +955,7 @@ def create_bridge_tab():
                     gr.Textbox(visible=bool(sec_text), value=sec_text),
                     rag,
                     _step_md(step, MAIN_STEPS, status=status,
-                             pipeline_log=plog, elapsed=_el()))
+                             pipeline_log=plog))
 
         try:
             selections = {}
@@ -966,8 +1055,7 @@ def create_bridge_tab():
             yield "No code to execute.", _step_md(3, MAIN_STEPS)
             return
         yield ("Sending code to Revit...",
-               _step_md(4, MAIN_STEPS, status="Executing in Revit...",
-                        elapsed=f"{_time.monotonic() - t0:.1f}s"))
+               _step_md(4, MAIN_STEPS, status="Executing in Revit..."))
         result = _execute_code(code)
         el = f"{_time.monotonic() - t0:.1f}s"
         if result.get("success"):
@@ -977,7 +1065,7 @@ def create_bridge_tab():
             error = result.get("error", "Unknown error")
             logger.error(f"[on_execute] FAILED: {error}")
             msg = f"✗ 执行失败 ({el}): {error}"
-        yield msg, _step_md(4, MAIN_STEPS, elapsed=el)
+        yield msg, _step_md(4, MAIN_STEPS)
 
     def on_solidify(name, description, code, query):
         """Solidify tool and auto-refresh tool list."""
@@ -1090,7 +1178,7 @@ def create_bridge_tab():
         """
         logger.info(f"[on_load_choices_render] radio_names={radio_names} input_names={input_names}")
         N_RADIOS, N_INPUTS = 2, 6
-        config = (choices_data or {}).pop("__config__", {"radio_configs": [], "text_configs": []})
+        config = (choices_data or {}).get("__config__", {"radio_configs": [], "text_configs": []})
 
         radios = []
         for i in range(N_RADIOS):
@@ -1168,9 +1256,6 @@ def create_bridge_tab():
 
         logger.info(f"[on_run_tool] final params={params}")
 
-        if not params:
-            return "No parameters provided. Please fill in the fields above.", _step_md(3, TOOL_STEPS)
-
         result = _run_tool(name, params)
         logger.info(f"[on_run_tool] result={result}")
         if result.get("success"):
@@ -1182,22 +1267,71 @@ def create_bridge_tab():
             else:
                 msg = f"Success\n{res_json}"
         else:
-            msg = f"Failed: {result.get('error', 'Unknown')}"
+            error = result.get("error") or result.get("detail") or "Unknown"
+            msg = f"Failed: {error}"
         return msg, _step_md(4, TOOL_STEPS)
+
+    # === Timer handlers ===
+    def on_timer_start():
+        """Start the pipeline timer."""
+        import time as _time
+        return _time.monotonic(), gr.Timer(active=True), "processing | 0.0s"
+
+    def on_timer_tick(start_ts):
+        """Update elapsed display every 0.5s."""
+        import time as _time
+        if not start_ts:
+            return ""
+        elapsed = _time.monotonic() - start_ts
+        return f"processing | {elapsed:.1f}s"
+
+    def on_timer_stop(start_ts):
+        """Stop the timer and show final elapsed."""
+        import time as _time
+        elapsed = _time.monotonic() - start_ts if start_ts else 0.0
+        return gr.Timer(active=False), f"completed | {elapsed:.1f}s"
 
     # === Wire events ===
     refresh_btn.click(on_page_load, outputs=[revit_status, unit_selector])
     unit_selector.change(on_change_unit, inputs=[unit_selector], outputs=[unit_selector])
     detect_unit_btn.click(on_detect_unit, outputs=[unit_selector])
 
+    # Timer tick — updates elapsed display while active
+    pipeline_timer.tick(
+        on_timer_tick, inputs=[timer_start],
+        outputs=[elapsed_display],
+    )
+
     generate_btn.click(
+        # Phase 0: start timer
+        on_timer_start, outputs=[timer_start, pipeline_timer, elapsed_display],
+    ).then(
         on_generate, inputs=[query_input],
         outputs=[current_query, current_selections, code_display, last_code,
                  thinking_display,
+                 step2_accordion,
                  selection_status, family_radio, level_radio,
                  x_input, y_input, confirm_selection_btn,
                  host_row, host_element_id,
-                 security_status, rag_info, step_display],
+                 security_status, rag_info,
+                 exec_result, step_display,
+                 run_tool_name, tool_choices_info],
+    ).then(
+        # Stop timer after generation completes
+        on_timer_stop, inputs=[timer_start],
+        outputs=[pipeline_timer, elapsed_display],
+    ).then(
+        # Auto-load tool parameters when a tool was matched
+        on_load_choices_fetch, inputs=[run_tool_name],
+        outputs=[tool_choices_state, tool_radio_names, tool_input_names,
+                 tool_choices_info],
+    ).then(
+        on_load_choices_render,
+        inputs=[tool_choices_state, tool_radio_names, tool_input_names],
+        outputs=[tool_param_radio_1, tool_param_radio_2,
+                 tool_param_input_1, tool_param_input_2, tool_param_input_3,
+                 tool_param_input_4, tool_param_input_5, tool_param_input_6,
+                 tool_step_display],
     )
 
     select_host_btn.click(

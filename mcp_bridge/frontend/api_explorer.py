@@ -1,48 +1,129 @@
 """
 Gradio Tab — API Explorer: Search Revit API docs → Rerank → Generate code examples.
 
-Replaces the Intent Bridge tab. Flow:
+Flow:
   Step 1: User types keyword (e.g. "Part", "Wall.Create")
   Step 2: RAG search + rerank → display ranked API results
   Step 3: User selects an API → LLM generates code example
 """
 from __future__ import annotations
 
-import json
 import logging
-import traceback
 import httpx
 import gradio as gr
 
 logger = logging.getLogger("mcp_bridge.api_explorer")
 
 
-def _bridge_url(path: str) -> str:
-    return f"http://127.0.0.1:7860/api/v1/bridge{path}"
-
-
 # ---------------------------------------------------------------------------
-# API helpers
+# Direct retriever access (avoids self-HTTP deadlock on same port)
 # ---------------------------------------------------------------------------
 
-def _search_api(query: str, top_k: int = 15) -> dict:
+def _search_direct(query: str, top_k: int = 15, fast: bool = False) -> dict:
+    """Search via retriever directly — no HTTP round-trip."""
     try:
-        resp = httpx.post(_bridge_url("/api-search"),
-                          json={"query": query, "top_k": top_k}, timeout=30)
-        return resp.json()
+        from server.app.deps import get_retriever
+        retriever = get_retriever()
+        results = retriever.search(
+            query,
+            api_top_k=top_k,
+            code_top_k=3,
+            rewrite=not fast,
+        )
+
+        api_items = []
+        for item in results.api_items:
+            api_items.append({
+                "name": item.name,
+                "full_id": item.full_id,
+                "summary": item.summary,
+                "syntax": item.syntax,
+                "parameters": item.parameters,
+                "remark": item.remark,
+                "distance": round(item.distance, 4),
+            })
+
+        sdk_items = []
+        for item in results.sdk_items:
+            sdk_items.append({
+                "project": item.project,
+                "content": item.content[:500],
+                "mentioned_apis": item.mentioned_apis,
+                "distance": round(item.distance, 4),
+            })
+
+        return {
+            "rewritten_query": results.rewritten_query,
+            "api_items": api_items,
+            "sdk_items": sdk_items,
+        }
     except Exception as e:
+        logger.error(f"[_search_direct] {e}", exc_info=True)
         return {"error": str(e), "api_items": [], "sdk_items": []}
 
 
 def _generate_example(api_name: str, api_context: str, hint: str = "") -> dict:
+    """Code generation uses HTTP (long-running LLM call, won't deadlock)."""
     try:
-        resp = httpx.post(_bridge_url("/api-codegen"),
-                          json={"api_name": api_name,
-                                "api_context": api_context,
-                                "user_hint": hint}, timeout=120)
+        resp = httpx.post(
+            "http://127.0.0.1:7860/api/v1/bridge/api-codegen",
+            json={"api_name": api_name,
+                  "api_context": api_context,
+                  "user_hint": hint},
+            timeout=120,
+        )
         return resp.json()
     except Exception as e:
         return {"code": "", "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# HTML table builder
+# ---------------------------------------------------------------------------
+
+def _build_results_html(api_items: list[dict]) -> str:
+    """Build an HTML table for search results."""
+    if not api_items:
+        return "<p style='color:#888;'>No results found.</p>"
+
+    rows = []
+    for i, item in enumerate(api_items):
+        name = item.get("name", "?")
+        summary = (item.get("summary") or "")[:120]
+        dist = item.get("distance", 0)
+        rows.append(
+            f"<tr>"
+            f"<td style='padding:4px 8px;'>{i+1}</td>"
+            f"<td style='padding:4px 8px;font-weight:600;'>{name}</td>"
+            f"<td style='padding:4px 8px;color:#555;'>{summary}</td>"
+            f"<td style='padding:4px 8px;text-align:right;'>{dist:.4f}</td>"
+            f"</tr>"
+        )
+    return (
+        "<table style='width:100%;border-collapse:collapse;font-size:14px;'>"
+        "<thead><tr style='background:#f0f0f0;'>"
+        "<th style='padding:6px 8px;text-align:left;'>#</th>"
+        "<th style='padding:6px 8px;text-align:left;'>API Name</th>"
+        "<th style='padding:6px 8px;text-align:left;'>Summary</th>"
+        "<th style='padding:6px 8px;text-align:right;'>Distance</th>"
+        "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table>"
+    )
+
+
+def _build_sdk_md(sdk_items: list[dict]) -> str:
+    """Build markdown for SDK examples."""
+    if not sdk_items:
+        return "No SDK examples found."
+    parts = []
+    for si in sdk_items:
+        proj = si.get("project", "?")
+        content = si.get("content", "")[:400]
+        raw_apis = si.get("mentioned_apis", "")
+        apis = raw_apis[:200] if isinstance(raw_apis, str) else ", ".join(raw_apis[:5])
+        parts.append(f"**{proj}** (APIs: {apis})\n```csharp\n{content}\n```\n")
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -57,30 +138,38 @@ def create_api_explorer_tab():
     # Step 1: Search
     with gr.Row():
         search_input = gr.Textbox(
-            placeholder="Type API keyword: Part, Wall.Create, FamilyInstance, FilteredElementCollector...",
+            placeholder="Type API keyword or describe what you need (中文/English): "
+                        "Part, Wall.Create, 创建墙体, 获取房间面积...",
             show_label=False, scale=5, lines=1, max_lines=1,
         )
         search_btn = gr.Button("Search API", variant="primary", scale=1)
+    with gr.Row():
+        search_mode = gr.Radio(
+            choices=["Fast (embedding only)", "Full (rewrite + rerank)"],
+            value="Full (rewrite + rerank)",
+            label="Search Mode", scale=3,
+        )
+        top_k_slider = gr.Slider(
+            minimum=5, maximum=30, value=15, step=5,
+            label="Results", scale=1,
+        )
 
     search_status = gr.Textbox(
-        label="Step 1: Rerank Results", interactive=False, visible=False, max_lines=2,
+        label="Search Status", interactive=False, visible=False, max_lines=3,
     )
 
-    # Step 2: Results table
-    results_table = gr.Dataframe(
-        headers=["#", "API Name", "Summary", "Distance"],
-        label="Step 2: Ranked API Results (click row to select)",
-        interactive=False, visible=False,
+    # Step 2: Results — HTML table + dropdown selector
+    results_html = gr.HTML(visible=False)
+    result_selector = gr.Dropdown(
+        label="Select an API from results above",
+        choices=[], visible=False, interactive=True,
     )
 
-    # SDK examples accordion
+    # SDK examples
     with gr.Accordion("SDK Code Examples", open=False, visible=False) as sdk_accordion:
         sdk_display = gr.Markdown("No SDK examples found.")
 
     # Step 3: Selected API detail + code generation
-    selected_api_name = gr.Textbox(
-        label="Selected API", interactive=False, visible=False,
-    )
     api_detail = gr.Code(
         language="cpp", label="API Detail (Syntax + Parameters)",
         visible=False, lines=8, interactive=False,
@@ -100,91 +189,107 @@ def create_api_explorer_tab():
         visible=False, lines=15, interactive=True,
     )
 
-    # State for search results
+    # Hidden state
     search_results_state = gr.State([])  # list of api_items dicts
 
     # =====================================================================
     # Handlers
     # =====================================================================
 
-    def on_search(query):
-        """Search API docs, return reranked results."""
-        logger.info(f"[api_explorer] search: {query!r}")
+    def on_search(query, mode, top_k):
+        """Search API docs, return results."""
+        import time as _time
+        t0 = _time.monotonic()
+        logger.info(f"[api_explorer] search: {query!r} mode={mode!r} top_k={top_k}")
+
         if not query or not query.strip():
-            return (gr.Textbox(visible=False),
-                    gr.Dataframe(visible=False),
-                    [],
-                    gr.Textbox(visible=False),
-                    gr.Code(visible=False),
-                    gr.Textbox(visible=False),
+            return ("", gr.HTML(visible=False), gr.Dropdown(choices=[], visible=False),
+                    [], gr.Code(visible=False, value=""),
+                    gr.Textbox(visible=False, value=""),
                     gr.Button(visible=False),
-                    gr.Code(visible=False),
-                    gr.Markdown(""))
+                    gr.Code(visible=False, value=""), "")
 
-        result = _search_api(query.strip())
+        try:
+            fast = mode.startswith("Fast")
+            result = _search_direct(query.strip(), top_k=int(top_k), fast=fast)
 
-        if "error" in result and not result.get("api_items"):
-            return (gr.Textbox(visible=True, value=f"Error: {result['error']}"),
-                    gr.Dataframe(visible=False),
-                    [],
-                    gr.Textbox(visible=False),
-                    gr.Code(visible=False),
-                    gr.Textbox(visible=False),
+            if "error" in result and not result.get("api_items"):
+                err = result["error"]
+                return (f"Error: {err}",
+                        gr.HTML(visible=False),
+                        gr.Dropdown(choices=[], visible=False),
+                        [], gr.Code(visible=False, value=""),
+                        gr.Textbox(visible=False, value=""),
+                        gr.Button(visible=False),
+                        gr.Code(visible=False, value=""), "")
+
+            api_items = result.get("api_items", [])
+            sdk_items = result.get("sdk_items", [])
+            rewritten = result.get("rewritten_query", query)
+
+            # Build HTML table
+            html = _build_results_html(api_items)
+
+            # Build dropdown choices: "1. Wall.Create Method"
+            choices = [
+                f"{i+1}. {item.get('name', '?')}"
+                for i, item in enumerate(api_items)
+            ]
+
+            # SDK markdown
+            sdk_md = _build_sdk_md(sdk_items)
+
+            elapsed = _time.monotonic() - t0
+            status = f"Found {len(api_items)} API docs, {len(sdk_items)} SDK examples ({elapsed:.1f}s)"
+            if rewritten != query:
+                status += f"\nRewritten query: {rewritten}"
+            if fast:
+                status += "\nMode: Fast (embedding only, no rewrite/rerank)"
+
+            logger.info(f"[api_explorer] done: {len(api_items)} results in {elapsed:.2f}s")
+
+            return (status,
+                    gr.HTML(value=html, visible=True),
+                    gr.Dropdown(choices=choices, value=choices[0] if choices else None,
+                                visible=bool(choices)),
+                    api_items,
+                    gr.Code(visible=False, value=""),
+                    gr.Textbox(visible=False, value=""),
                     gr.Button(visible=False),
-                    gr.Code(visible=False),
-                    gr.Markdown(""))
+                    gr.Code(visible=False, value=""),
+                    sdk_md)
 
-        api_items = result.get("api_items", [])
-        sdk_items = result.get("sdk_items", [])
-        rewritten = result.get("rewritten_query", query)
-
-        # Build table rows
-        table_data = []
-        for i, item in enumerate(api_items):
-            summary = (item.get("summary") or "")[:100]
-            table_data.append([
-                i + 1,
-                item.get("name", "?"),
-                summary,
-                item.get("distance", 0),
-            ])
-
-        # Build SDK display
-        sdk_md = ""
-        if sdk_items:
-            for si in sdk_items:
-                proj = si.get("project", "?")
-                content = si.get("content", "")[:400]
-                apis = ", ".join(si.get("mentioned_apis", [])[:5])
-                sdk_md += f"**{proj}** (APIs: {apis})\n```csharp\n{content}\n```\n\n"
-        else:
-            sdk_md = "No SDK examples found."
-
-        status = f"Found {len(api_items)} API docs, {len(sdk_items)} SDK examples"
-        if rewritten != query:
-            status += f"\nRewritten query: {rewritten}"
-
-        return (gr.Textbox(visible=True, value=status),
-                gr.Dataframe(visible=True, value=table_data),
-                api_items,
-                gr.Textbox(visible=False),
-                gr.Code(visible=False),
-                gr.Textbox(visible=False),
-                gr.Button(visible=False),
-                gr.Code(visible=False),
-                gr.Markdown(sdk_md))
-
-    def on_select_result(evt: gr.SelectData, api_items):
-        """User clicks a row in results table → show API detail."""
-        row_idx = evt.index[0]
-        if row_idx >= len(api_items):
-            return (gr.Textbox(visible=False),
-                    gr.Code(visible=False),
-                    gr.Textbox(visible=False),
+        except Exception as e:
+            logger.error(f"[api_explorer] on_search error: {e}", exc_info=True)
+            return (f"Error: {e}",
+                    gr.HTML(visible=False),
+                    gr.Dropdown(choices=[], visible=False),
+                    [], gr.Code(visible=False, value=""),
+                    gr.Textbox(visible=False, value=""),
                     gr.Button(visible=False),
-                    gr.Code(visible=False))
+                    gr.Code(visible=False, value=""), "")
 
-        item = api_items[row_idx]
+    def on_select_api(selection, api_items):
+        """User selects an API from dropdown → show detail."""
+        if not selection or not api_items:
+            return (gr.Code(visible=False, value=""),
+                    gr.Textbox(visible=False, value=""),
+                    gr.Button(visible=False),
+                    gr.Code(visible=False, value=""))
+
+        try:
+            # Parse index from "1. Wall.Create Method"
+            idx = int(selection.split(".")[0]) - 1
+        except (ValueError, IndexError):
+            idx = 0
+
+        if idx < 0 or idx >= len(api_items):
+            return (gr.Code(visible=False, value=""),
+                    gr.Textbox(visible=False, value=""),
+                    gr.Button(visible=False),
+                    gr.Code(visible=False, value=""))
+
+        item = api_items[idx]
         name = item.get("name", "?")
         full_id = item.get("full_id", "")
         syntax = item.get("syntax", "")
@@ -203,20 +308,26 @@ def create_api_explorer_tab():
 
         detail_text = "\n".join(detail_parts) if detail_parts else f"// {name}"
 
-        return (gr.Textbox(visible=True, value=f"{name} ({full_id})"),
-                gr.Code(visible=True, value=detail_text),
-                gr.Textbox(visible=True),
+        return (gr.Code(visible=True, value=detail_text),
+                gr.Textbox(visible=True, value=""),
                 gr.Button(visible=True),
-                gr.Code(visible=False))
+                gr.Code(visible=False, value=""))
 
-    def on_generate(api_name, api_detail_code, hint):
+    def on_generate(selection, api_detail_code, hint, api_items):
         """Generate code example for selected API."""
-        logger.info(f"[api_explorer] generate: {api_name!r}")
-        if not api_name:
+        if not selection or not api_items:
             return gr.Code(visible=True, value="// No API selected")
 
+        try:
+            idx = int(selection.split(".")[0]) - 1
+        except (ValueError, IndexError):
+            idx = 0
+
+        api_name = api_items[idx].get("name", "?") if 0 <= idx < len(api_items) else "?"
+        logger.info(f"[api_explorer] generate: {api_name!r}")
+
         result = _generate_example(
-            api_name=api_name.split(" (")[0],  # strip full_id
+            api_name=api_name,
             api_context=api_detail_code or "",
             hint=hint or "",
         )
@@ -230,26 +341,25 @@ def create_api_explorer_tab():
     # Wire events
     # =====================================================================
 
-    search_btn.click(
-        on_search, inputs=[search_input],
-        outputs=[search_status, results_table, search_results_state,
-                 selected_api_name, api_detail, user_hint, gen_btn,
-                 generated_code, sdk_display],
-    )
-    search_input.submit(
-        on_search, inputs=[search_input],
-        outputs=[search_status, results_table, search_results_state,
-                 selected_api_name, api_detail, user_hint, gen_btn,
-                 generated_code, sdk_display],
-    )
+    _search_outputs = [search_status, results_html, result_selector,
+                       search_results_state, api_detail, user_hint, gen_btn,
+                       generated_code, sdk_display]
 
-    results_table.select(
-        on_select_result, inputs=[search_results_state],
-        outputs=[selected_api_name, api_detail, user_hint, gen_btn,
-                 generated_code],
+    search_btn.click(on_search,
+                     inputs=[search_input, search_mode, top_k_slider],
+                     outputs=_search_outputs)
+    search_input.submit(on_search,
+                        inputs=[search_input, search_mode, top_k_slider],
+                        outputs=_search_outputs)
+
+    result_selector.change(
+        on_select_api,
+        inputs=[result_selector, search_results_state],
+        outputs=[api_detail, user_hint, gen_btn, generated_code],
     )
 
     gen_btn.click(
-        on_generate, inputs=[selected_api_name, api_detail, user_hint],
+        on_generate,
+        inputs=[result_selector, api_detail, user_hint, search_results_state],
         outputs=[generated_code],
     )

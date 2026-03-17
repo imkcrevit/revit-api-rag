@@ -64,17 +64,20 @@ Respond with ONLY valid JSON (no markdown, no explanation):
 }
 
 Rules:
-- "direct": No element selection needed (queries, modifications, deletions, info requests)
-- "select_family": User wants to CREATE an element that needs family type selection
+- "direct": No element selection needed (queries, info requests, deletions,
+  modifications that do NOT involve changing an element's TYPE/family)
+- "select_family": User wants to CREATE an element OR CHANGE/MODIFY an element's
+  TYPE/FAMILY TYPE. This requires presenting available family types for selection.
   (walls, columns, beams, floors, etc.)
 - "select_both": User wants to CREATE a HOSTED element that needs both:
   1. A host element (e.g., wall for windows/doors)
   2. A family type selection
-- need_level: true if the element is placed at a specific level
+- need_level: true if the element is placed at a specific level (creation only, not modification)
 - need_host: true for hosted elements (windows, doors on walls; skylights on roofs)
-- element_type: the PRIMARY element being created, not the host
+- element_type: the PRIMARY element type involved
   Example: "在墙上创建窗户" → element_type="window" (NOT "wall")
   Example: "创建一面墙" → element_type="wall"
+  Example: "修改墙体类型" → element_type="wall"
 - select_prompt: Chinese prompt asking user to select the host element in Revit
 
 Examples:
@@ -82,7 +85,10 @@ Examples:
 - "在墙上放窗户" → select_both, window, need_host=true, select_prompt="请在Revit中选择要放置窗户的墙体"
 - "选择一个墙体创建窗户" → select_both, window, need_host=true
 - "创建一面墙" → select_family, wall, need_level=true
-- "修改墙高度" → direct
+- "修改墙体类型" → select_family, wall, need_level=false (changing type, not creating)
+- "修改选择墙体类型" → select_family, wall, need_level=false
+- "更换柱子类型" → select_family, structural_column, need_level=false
+- "修改墙高度" → direct (not changing type)
 - "删除所有柱子" → direct
 """
 
@@ -204,12 +210,20 @@ class IntentClassifier:
         """Fallback keyword-based classification."""
         query_lower = user_query.lower()
 
+        # Check if query is about modifying/changing TYPE (not other properties)
+        _type_change_keywords = ["类型", "type", "族型"]
+        _modify_keywords = ["修改", "更换", "更改", "变更", "切换", "改变", "change", "modify"]
+        is_type_change = (
+            any(tk in query_lower for tk in _type_change_keywords)
+            and any(mk in query_lower for mk in _modify_keywords)
+        )
+
         # Keyword rules — ordered: hosted elements first
         _rules = [
             (["窗户", "window", "窗", "创建窗"], "window", InteractionType.SELECT_BOTH),
             (["门", "door", "创建门"], "door", InteractionType.SELECT_BOTH),
             (["结构柱", "structural column", "柱子"], "structural_column", InteractionType.SELECT_FAMILY),
-            (["墙", "wall", "创建墙"], "wall", InteractionType.SELECT_FAMILY),
+            (["墙", "wall", "创建墙", "墙体"], "wall", InteractionType.SELECT_FAMILY),
             (["梁", "beam", "结构梁"], "beam", InteractionType.SELECT_FAMILY),
             (["楼板", "floor", "板"], "floor", InteractionType.SELECT_FAMILY),
         ]
@@ -226,10 +240,14 @@ class IntentClassifier:
                     select_prompt = None
                     if itype == InteractionType.SELECT_BOTH:
                         select_prompt = f"请在 Revit 中选择要放置{cat_info['label'][:2]}的宿主元素"
+                    # For type change queries, always use SELECT_FAMILY and no level needed
+                    if is_type_change:
+                        itype = InteractionType.SELECT_FAMILY
+                        select_prompt = None
                     return {
                         "interaction_type": itype.value,
                         "queries": queries,
-                        "need_level": True,
+                        "need_level": False if is_type_change else True,
                         "select_prompt": select_prompt,
                         "parsed_coords": coords,
                     }

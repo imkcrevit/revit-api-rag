@@ -53,14 +53,16 @@ embedding:
       base_url: "https://openrouter.ai/api/v1"
 
 # --- Rerank 配置 ---
+# NOTE: Cohere rerank uses Cohere's native API (not OpenRouter).
+# Set COHERE_API_KEY env var. Get free key at https://dashboard.cohere.com/api-keys
+# If no COHERE_API_KEY is set, rerank is skipped (keyword + vector search still work).
 rerank:
   enabled: true
   provider: "cohere"
   models:
     cohere:
-      model: "cohere/rerank-v3.5"
-      api_key_env: "OPENROUTER_API_KEY"
-      base_url: "https://openrouter.ai/api/v1"
+      model: "rerank-v3.5"
+      api_key_env: "COHERE_API_KEY"
 
 # --- 检索参数 ---
 retrieval:

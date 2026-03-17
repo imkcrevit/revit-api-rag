@@ -215,11 +215,49 @@ class ToolStore:
 
     def match_tool(self, user_query: str) -> SolidifiedTool | None:
         """Smart tool matching: return a tool only if there is exactly one
-        keyword match that has been successfully executed before.
+        high-confidence keyword match that has been successfully executed before.
 
+        Uses keyword overlap scoring to find the best match.
         Returns None when the caller should fall back to RAG generation.
         """
+        # First try exact substring match
         matches = self.search(user_query)
         if len(matches) == 1 and matches[0].execution_count > 0:
             return matches[0]
-        return None
+
+        # Keyword-based matching: split query into tokens and score tools
+        # Chinese-aware: treat each character as a potential keyword
+        query_lower = user_query.lower()
+        # Extract meaningful keywords (Chinese chars + English words)
+        import re as _re
+        keywords = set(_re.findall(r'[\u4e00-\u9fff]+|[a-z_]+', query_lower))
+        if not keywords:
+            return None
+
+        scored: list[tuple[float, SolidifiedTool]] = []
+        for tool in self.list_tools():
+            if tool.execution_count <= 0:
+                continue
+            searchable = (
+                f"{tool.name} {tool.display_name} {tool.description} "
+                f"{' '.join(tool.tags)} {tool.source_query}"
+            ).lower()
+            # Count how many keywords match
+            hit = sum(1 for kw in keywords if kw in searchable)
+            if hit > 0:
+                score = hit / len(keywords)
+                scored.append((score, tool))
+
+        if not scored:
+            return None
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_tool = scored[0]
+
+        # Only return if score > 50% and clear winner (no close second)
+        if best_score < 0.4:
+            return None
+        if len(scored) > 1 and scored[1][0] >= best_score * 0.8:
+            return None  # ambiguous — two tools score similarly
+
+        return best_tool

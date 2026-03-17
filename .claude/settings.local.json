@@ -101,7 +101,18 @@
       "Bash(grep -r \"dynamic\\\\|Dynamic\\\\|Register\\\\|registry\" \"/f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/revit_plugin/plugin/\" --include=\"*.cs\" 2>/dev/null | head -20)",
       "Bash(dotnet build:*)",
       "Bash(netstat -ano | grep 7860 | head -5)",
-      "Bash(netstat -ano | findstr 7860)"
+      "Bash(netstat -ano | findstr 7860)",
+      "Bash(cd \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" && pip show gradio 2>/dev/null | head -3 || conda run -n revit-rag python -c \"import gradio; print\\(gradio.__version__\\)\" 2>/dev/null || echo \"gradio not in default env\")",
+      "Bash(cd \"F:\\\\DevProjects\\\\imkcrevit\\\\revit-api-rag\\\\revit-api-rag\" && where python && python --version)",
+      "Bash(find /f/DevProjects/imkcrevit/revit-api-rag/revit-api-rag -type f -name \"*.addin\" 2>/dev/null | head -20)",
+      "Bash(cd \"F:/DevProjects/imkcrevit/revit-api-rag/revit-api-rag\" && gh release create v0.2 \\\\\n  --title \"revit-mcp v0.2 — Revit 2026 Plugin Release\" \\\\\n  --notes \"$\\(cat <<'EOF'\n## revit-mcp v0.2\n\nRevit MCP Plugin for Revit 2026 — connects Revit to the AI Reasoning Stack via JSON-RPC 2.0 over TCP.\n\n### What's included\n- `mcp-servers-for-revit.addin` — Revit add-in manifest\n- `revit_mcp_plugin/` — Plugin DLL + dependencies\n- `revit_mcp_plugin/Commands/RevitMCPCommandSet/` — 23 built-in commands \\(element CRUD, family types, selection, dynamic code execution, etc.\\)\n\n### Installation\n1. Download `revit-mcp-plugin-v0.2-R2026.zip`\n2. Extract to `%APPDATA%\\\\Autodesk\\\\Revit\\\\Addins\\\\2026\\\\`\n3. Restart Revit 2026\n\n### Changes in v0.2\n- Rich connection status display \\(version, protocol, endpoint, latency, timestamp\\)\n- Updated vendor description to GitHub repo URL\n- Streaming thinking display in Gradio frontend\n- Enhanced pipeline progress with granular stage logging\n- Interactive intent classification \\(LLM + keyword fallback\\)\n- Confirm path now uses SSE streaming\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\nEOF\n\\)\" \\\\\n  revit-mcp-plugin-v0.2-R2026.zip)",
+      "Bash(cd \"F:/DevProjects/imkcrevit/revit-api-rag/revit-api-rag\" && rm -rf release_tmp revit-mcp-plugin-v0.2-R2026.zip)",
+      "Bash(sleep 30 && ls -la \"F:/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/README.en.md\" \"F:/DevProjects/imkcrevit/revit-api-rag/revit-api-rag/docs/\"*en* 2>&1)",
+      "Bash(gh search:*)",
+      "Bash(cd:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(wait b9vdhne39:*)"
     ]
   }
 }

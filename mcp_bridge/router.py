@@ -103,6 +103,7 @@ class UnitSettingRequest(BaseModel):
 class ApiSearchRequest(BaseModel):
     query: str
     top_k: int = 15
+    fast: bool = False  # skip query rewriting for speed
 
 
 class ApiCodeGenRequest(BaseModel):
@@ -190,7 +191,12 @@ async def api_search(req: ApiSearchRequest):
     """Search Revit API docs via RAG — returns reranked results."""
     from server.app.deps import get_retriever
     retriever = get_retriever()
-    results = retriever.search(req.query, api_top_k=req.top_k, code_top_k=3)
+    results = retriever.search(
+        req.query,
+        api_top_k=req.top_k,
+        code_top_k=3,
+        rewrite=not req.fast,
+    )
 
     api_items = []
     for item in results.api_items:
@@ -585,9 +591,19 @@ async def get_tool(name: str):
 @bridge_router.post("/tools/{name}/run")
 async def run_tool(name: str, req: RunToolRequest):
     """Execute a solidified tool with parameters."""
-    code = _tool_store.render_code(name, req.params)
-    if code is None:
+    tool = _tool_store.load(name)
+    if not tool:
         raise HTTPException(404, f"Tool '{name}' not found")
+
+    valid, errors, filled = _tool_store.validate_params(name, req.params)
+    if not valid:
+        raise HTTPException(
+            422, f"Parameter validation failed: {'; '.join(errors)}"
+        )
+
+    code = tool.code_template
+    for k, v in filled.items():
+        code = code.replace(f"{{{k}}}", str(v))
 
     try:
         client = await _get_revit_client()
@@ -611,6 +627,14 @@ async def get_tool_choices(name: str):
     dynamic_params = _tool_store.get_dynamic_params(name)
     if not dynamic_params:
         return {}
+
+    def _extract_type_name(item: dict) -> str:
+        """Extract type name from Revit response — handles all known key formats."""
+        return (item.get("TypeName")
+                or item.get("typeName")
+                or item.get("name")
+                or item.get("Name")
+                or str(item))
 
     async def _fetch_choices():
         client = await _get_revit_client()
@@ -636,8 +660,8 @@ async def get_tool_choices(name: str):
                 types = await executor.get_family_types([category])
                 _logger.info(f"[choices] family_types returned: {len(types)} items")
                 items = [
-                    {"label": t.get("name", t.get("Name", str(t))),
-                     "value": t.get("name", t.get("Name", str(t)))}
+                    {"label": _extract_type_name(t),
+                     "value": _extract_type_name(t)}
                     for t in types
                 ]
             elif source == "floor_types":
@@ -653,8 +677,8 @@ async def get_tool_choices(name: str):
                 if resp.success and resp.result:
                     data = resp.result if isinstance(resp.result, list) else [resp.result]
                     items = [
-                        {"label": ft.get("Name", str(ft)),
-                         "value": ft.get("Name", str(ft))}
+                        {"label": _extract_type_name(ft),
+                         "value": _extract_type_name(ft)}
                         for ft in data
                     ]
             elif source.startswith("elements:"):
@@ -695,6 +719,30 @@ async def delete_tool(name: str):
     if _tool_store.delete(name):
         return {"status": "deleted", "name": name}
     raise HTTPException(404, f"Tool '{name}' not found")
+
+
+@bridge_router.post("/match-tool")
+async def match_tool(req: ClassifyRequest):
+    """Check if an existing solidified tool matches the user query.
+
+    Returns matched tool info with parameter validation, or null if no match.
+    """
+    tool = _tool_store.match_tool(req.query)
+    if not tool:
+        return {"matched": False}
+    # Check if tool has usable parameters
+    has_params = bool(tool.parameters)
+    has_dynamic = any("choices_from" in p for p in tool.parameters)
+    return {
+        "matched": True,
+        "name": tool.name,
+        "display_name": tool.display_name,
+        "description": tool.description,
+        "parameters": tool.parameters,
+        "has_params": has_params,
+        "has_dynamic_params": has_dynamic,
+        "execution_count": tool.execution_count,
+    }
 
 
 # -- Interactive Selection Routes ----------------------------------------------
