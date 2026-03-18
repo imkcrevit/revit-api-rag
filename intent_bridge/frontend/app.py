@@ -305,6 +305,8 @@ def create_intent_bridge_tab():
             # Build contextual placeholder based on parameter type
             if any(kw in slot_name.lower() for kw in ("host", "element", "wall", "id")):
                 placeholder = f"输入 ElementId (例: 12345) / Enter ElementId for {slot_name}"
+            elif any(kw in slot_name.lower() for kw in ("array", "positions", "coordinates_array")):
+                placeholder = f"输入多组坐标，分号分隔 (例: 1000,0,0; 5000,0,0) / Enter multiple XYZ, semicolon-separated"
             elif any(kw in slot_name.lower() for kw in ("xyz", "location", "point", "position")):
                 placeholder = f"输入坐标 (例: 1000,500,0) / Enter XYZ coordinates"
             elif any(kw in slot_name.lower() for kw in ("height", "width", "offset", "length")):

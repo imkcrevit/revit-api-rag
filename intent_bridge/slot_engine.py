@@ -378,15 +378,48 @@ f) Other API parameters
 
 ### Rule 8: QUANTITY — When user requests N items (N>1)
 Detect quantity keywords: 两/三/四/五/多个/几个/two/three/four/multiple etc.
-- Extract into "quantity" slot
-- Position-dependent params (coordinates, host elements) become ARRAYS — ask for N values
+- Extract "quantity" into "slots"
+- Position-dependent params (coordinates, host elements) MUST ask for ALL N values in ONE question
 - Shared params (type, height, material) stay single values — ask once
-- Question text must clearly show N entries needed
+- Question text MUST clearly list N entries with numbered placeholders
 
-Example: "创建两个结构柱" with quantity=2:
-- Column type: ask ONCE (shared)
-- Level: ask ONCE (shared)
-- Coordinates: ask for 2 positions (array)
+**CRITICAL**: Do NOT ask for only 1 position when quantity > 1. The code generator CANNOT invent positions.
+
+Example output for "创建两个结构柱" (quantity=2):
+{{
+  "intent": "custom",
+  "confidence": 0.85,
+  "api_method": "NewFamilyInstance",
+  "slots": {{ "quantity": 2 }},
+  "questions": [
+    {{
+      "slot": "column_type",
+      "text": "请选择结构柱族类型：",
+      "options": ["矩形柱 300×300mm", "矩形柱 300×450mm", "矩形柱 450×450mm", "圆柱 D300mm", "其他 (自定义)"],
+      "values": ["300x300", "300x450", "450x450", "D300", "custom"]
+    }},
+    {{
+      "slot": "level",
+      "text": "放置在哪个标高？",
+      "options": ["标高 1 (0mm)", "标高 2 (3000mm)", "标高 3 (6000mm)", "其他 (自定义)"],
+      "values": ["Level 1", "Level 2", "Level 3", "custom"]
+    }},
+    {{
+      "slot": "positions_array",
+      "text": "请输入 2 个柱子的放置坐标（每个柱子一组 XYZ）：\\n柱 1: (x, y, z)\\n柱 2: (x, y, z)\\n格式示例: 1000,0,0; 5000,0,0",
+      "options": ["其他 (自定义)"],
+      "values": ["custom"]
+    }}
+  ]
+}}
+
+For English input with quantity=3:
+{{
+  "slot": "positions_array",
+  "text": "Enter XYZ coordinates for 3 columns:\\nColumn 1: (x,y,z)\\nColumn 2: (x,y,z)\\nColumn 3: (x,y,z)\\nFormat: 1000,0,0; 5000,0,0; 9000,0,0",
+  "options": ["Other (custom)"],
+  "values": ["custom"]
+}}
 
 ### Rule 9: MULTI-ACTION DECOMPOSITION
 Some requests need multiple API calls (e.g., "create a room" needs walls first).
