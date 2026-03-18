@@ -87,6 +87,14 @@ class RAGRetriever:
         self._code_rerank_n = ret_cfg.get("code", {}).get("rerank_top_n", 3)
 
         # ChromaDB collections
+        import os
+        for label, d in [("api", chromadb_api_dir), ("code", chromadb_code_dir)]:
+            if not os.path.isdir(d):
+                self._log.error(f"ChromaDB {label} dir missing: {d}")
+            elif not os.path.exists(os.path.join(d, "chroma.sqlite3")):
+                self._log.error(f"ChromaDB {label} dir has no chroma.sqlite3: {d} — "
+                                "check volume mounts or COPY in Dockerfile")
+
         self._api_collection = (
             chromadb.PersistentClient(path=chromadb_api_dir)
             .get_collection("revit_api")
