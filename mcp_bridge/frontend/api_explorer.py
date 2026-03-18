@@ -81,35 +81,15 @@ def _generate_example(api_name: str, api_context: str, hint: str = "") -> dict:
 # HTML table builder
 # ---------------------------------------------------------------------------
 
-def _build_results_html(api_items: list[dict]) -> str:
-    """Build an HTML table for search results."""
-    if not api_items:
-        return "<p style='color:#888;'>No results found.</p>"
-
+def _build_results_dataframe(api_items: list[dict]) -> list[list]:
+    """Build dataframe rows for search results."""
     rows = []
     for i, item in enumerate(api_items):
         name = item.get("name", "?")
         summary = (item.get("summary") or "")[:120]
         dist = item.get("distance", 0)
-        rows.append(
-            f"<tr>"
-            f"<td style='padding:4px 8px;'>{i+1}</td>"
-            f"<td style='padding:4px 8px;font-weight:600;'>{name}</td>"
-            f"<td style='padding:4px 8px;color:#555;'>{summary}</td>"
-            f"<td style='padding:4px 8px;text-align:right;'>{dist:.4f}</td>"
-            f"</tr>"
-        )
-    return (
-        "<table style='width:100%;border-collapse:collapse;font-size:14px;'>"
-        "<thead><tr style='background:#f0f0f0;'>"
-        "<th style='padding:6px 8px;text-align:left;'>#</th>"
-        "<th style='padding:6px 8px;text-align:left;'>API Name</th>"
-        "<th style='padding:6px 8px;text-align:left;'>Summary</th>"
-        "<th style='padding:6px 8px;text-align:right;'>Distance</th>"
-        "</tr></thead><tbody>"
-        + "".join(rows)
-        + "</tbody></table>"
-    )
+        rows.append([i + 1, name, summary, f"{dist:.4f}"])
+    return rows
 
 
 def _build_sdk_md(sdk_items: list[dict]) -> str:
@@ -158,11 +138,12 @@ def create_api_explorer_tab():
         label="Search Status", interactive=False, visible=False, max_lines=3,
     )
 
-    # Step 2: Results — HTML table + dropdown selector
-    results_html = gr.HTML(visible=False)
-    result_selector = gr.Dropdown(
-        label="Select an API from results above",
-        choices=[], visible=False, interactive=True,
+    # Step 2: Results — clickable dataframe
+    results_table = gr.Dataframe(
+        headers=["#", "API Name", "Summary", "Distance"],
+        datatype=["number", "str", "str", "str"],
+        label="Search Results (click a row to view details)",
+        visible=False, interactive=False,
     )
 
     # SDK examples
@@ -203,7 +184,7 @@ def create_api_explorer_tab():
         logger.info(f"[api_explorer] search: {query!r} mode={mode!r} top_k={top_k}")
 
         if not query or not query.strip():
-            return ("", gr.HTML(visible=False), gr.Dropdown(choices=[], visible=False),
+            return ("", gr.Dataframe(visible=False),
                     [], gr.Code(visible=False, value=""),
                     gr.Textbox(visible=False, value=""),
                     gr.Button(visible=False),
@@ -216,8 +197,7 @@ def create_api_explorer_tab():
             if "error" in result and not result.get("api_items"):
                 err = result["error"]
                 return (f"Error: {err}",
-                        gr.HTML(visible=False),
-                        gr.Dropdown(choices=[], visible=False),
+                        gr.Dataframe(visible=False),
                         [], gr.Code(visible=False, value=""),
                         gr.Textbox(visible=False, value=""),
                         gr.Button(visible=False),
@@ -227,14 +207,8 @@ def create_api_explorer_tab():
             sdk_items = result.get("sdk_items", [])
             rewritten = result.get("rewritten_query", query)
 
-            # Build HTML table
-            html = _build_results_html(api_items)
-
-            # Build dropdown choices: "1. Wall.Create Method"
-            choices = [
-                f"{i+1}. {item.get('name', '?')}"
-                for i, item in enumerate(api_items)
-            ]
+            # Build dataframe rows
+            df_rows = _build_results_dataframe(api_items)
 
             # SDK markdown
             sdk_md = _build_sdk_md(sdk_items)
@@ -249,9 +223,7 @@ def create_api_explorer_tab():
             logger.info(f"[api_explorer] done: {len(api_items)} results in {elapsed:.2f}s")
 
             return (status,
-                    gr.HTML(value=html, visible=True),
-                    gr.Dropdown(choices=choices, value=choices[0] if choices else None,
-                                visible=bool(choices)),
+                    gr.Dataframe(value=df_rows, visible=bool(df_rows)),
                     api_items,
                     gr.Code(visible=False, value=""),
                     gr.Textbox(visible=False, value=""),
@@ -262,27 +234,21 @@ def create_api_explorer_tab():
         except Exception as e:
             logger.error(f"[api_explorer] on_search error: {e}", exc_info=True)
             return (f"Error: {e}",
-                    gr.HTML(visible=False),
-                    gr.Dropdown(choices=[], visible=False),
+                    gr.Dataframe(visible=False),
                     [], gr.Code(visible=False, value=""),
                     gr.Textbox(visible=False, value=""),
                     gr.Button(visible=False),
                     gr.Code(visible=False, value=""), "")
 
-    def on_select_api(selection, api_items):
-        """User selects an API from dropdown → show detail."""
-        if not selection or not api_items:
+    def on_select_api(api_items, evt: gr.SelectData):
+        """User clicks a row in results table → show detail."""
+        if not api_items:
             return (gr.Code(visible=False, value=""),
                     gr.Textbox(visible=False, value=""),
                     gr.Button(visible=False),
                     gr.Code(visible=False, value=""))
 
-        try:
-            # Parse index from "1. Wall.Create Method"
-            idx = int(selection.split(".")[0]) - 1
-        except (ValueError, IndexError):
-            idx = 0
-
+        idx = evt.index[0]  # row index
         if idx < 0 or idx >= len(api_items):
             return (gr.Code(visible=False, value=""),
                     gr.Textbox(visible=False, value=""),
@@ -313,17 +279,14 @@ def create_api_explorer_tab():
                 gr.Button(visible=True),
                 gr.Code(visible=False, value=""))
 
-    def on_generate(selection, api_detail_code, hint, api_items):
+    def on_generate(api_detail_code, hint):
         """Generate code example for selected API."""
-        if not selection or not api_items:
+        if not api_detail_code:
             return gr.Code(visible=True, value="// No API selected")
 
-        try:
-            idx = int(selection.split(".")[0]) - 1
-        except (ValueError, IndexError):
-            idx = 0
-
-        api_name = api_items[idx].get("name", "?") if 0 <= idx < len(api_items) else "?"
+        # Extract API name from detail (first line: "// Namespace.Class.Method")
+        first_line = api_detail_code.strip().split("\n")[0]
+        api_name = first_line.lstrip("/ ").strip() if first_line.startswith("//") else "Unknown"
         logger.info(f"[api_explorer] generate: {api_name!r}")
 
         result = _generate_example(
@@ -341,7 +304,7 @@ def create_api_explorer_tab():
     # Wire events
     # =====================================================================
 
-    _search_outputs = [search_status, results_html, result_selector,
+    _search_outputs = [search_status, results_table,
                        search_results_state, api_detail, user_hint, gen_btn,
                        generated_code, sdk_display]
 
@@ -352,14 +315,14 @@ def create_api_explorer_tab():
                         inputs=[search_input, search_mode, top_k_slider],
                         outputs=_search_outputs)
 
-    result_selector.change(
+    results_table.select(
         on_select_api,
-        inputs=[result_selector, search_results_state],
+        inputs=[search_results_state],
         outputs=[api_detail, user_hint, gen_btn, generated_code],
     )
 
     gen_btn.click(
         on_generate,
-        inputs=[result_selector, api_detail, user_hint, search_results_state],
+        inputs=[api_detail, user_hint],
         outputs=[generated_code],
     )
