@@ -53,7 +53,7 @@ revit-api-rag/
 │   │   └── embed.py       # SQLite → ChromaDB
 │   ├── retriever.py       # 两层检索器
 │   └── llm_client.py      # LLM 客户端（OpenRouter）
-├── mcp_bridge/            # Intent Bridge — Revit 交互桥接层
+├── mcp_bridge/            # Revit 交互桥接层
 │   ├── router.py          # FastAPI 路由（SSE 流式生成、健康检查等）
 │   ├── code_generator.py  # RAG 上下文组装 + LLM 代码生成
 │   ├── interactive.py     # LLM 意图分类 + Revit 数据查询
@@ -63,6 +63,13 @@ revit-api-rag/
 │   ├── tool_store.py      # Solidified Tool 持久化
 │   └── frontend/          # Gradio Web UI
 │       └── app.py         # 多步交互界面（Thinking + Pipeline + 代码执行）
+├── intent_bridge/         # Intent Bridge Agent — 意图解析 + 参数收集
+│   ├── slot_engine.py     # 核心引擎（动态 RAG + LLM Agent + 问答队列）
+│   ├── router.py          # FastAPI 路由（会话管理、意图解析）
+│   ├── llm_adapter.py     # LLM 适配器（primary/fallback + 重试）
+│   ├── models.py          # Pydantic 数据模型
+│   └── schemas/
+│       └── intent_registry.yaml  # 轻量 intent 注册表（~65 行）
 ├── revit_plugin/          # Revit 2026 插件（C# / .NET 8）
 │   ├── plugin/            # RevitMCPPlugin — TCP Socket 服务
 │   └── commandset/        # RevitMCPCommandSet — 23 个预置命令
@@ -237,6 +244,32 @@ python -m server.main
 ---
 
 ## 更新日志
+
+### 2026.03 — V0.3 Intent Bridge Agent 重构
+
+**Intent Bridge 架构重构**
+- 删除 974 行 `intent_slots.yaml` 硬编码 slot 定义，替换为 ~65 行 `intent_registry.yaml` 轻量注册表
+- 每个 intent 只保留分类信息（display_name、keywords、mapped_commands），参数由 RAG + LLM 动态推理
+- 新增 `custom` intent：未匹配已知 intent 时自动降级为 RAG 匹配，不再直接拒绝
+
+**动态 RAG 搜索**
+- 新增 `_extract_search_terms()` 动态搜索词提取，替代硬编码 `_INTENT_API_PATTERNS`
+- 支持三种提取策略：registry 关键词匹配、中英文术语映射（~20 条）、正则提取技术术语
+- 未知操作（如 "create a ramp"）也能通过 RAG 查找相关 API 文档
+
+**Agent 风格 Prompt 重写**
+- 移除所有 intent 特定的硬编码规则，改为通用 Agent 指令
+- 强制 LLM 从 RAG API 文档推理参数，禁止静默默认坐标/类型/标高
+- 数量检测：`quantity > 1` 时位置参数自动要求数组输入
+- 明确的"禁止行为"列表防止 LLM 自作主张
+
+**执行匹配层（Execution Matching）**
+- structured_output 新增 `execution` 字段：包含 `strategy` 和 `mapped_commands`
+- 每个 intent 关联 Solidified Tool 命令名，为后续 intent → Revit 命令自动翻译做准备
+- 新增 `/execution-map` API 端点：返回全部 intent → command 映射关系
+
+**文档**
+- 新增 `intent_bridge/README.md`：架构图、模型配置表、API 端点列表、多人部署方案
 
 ### 2026.03 — V0.2 Intent Bridge + Revit 交互
 
