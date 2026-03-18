@@ -26,7 +26,6 @@ legacy/
 # Pipeline training data (not needed at runtime)
 data/raw/
 data/knowledge/
-pipeline/embedder/
 pipeline/parser/
 pipeline/cleaner/
 
