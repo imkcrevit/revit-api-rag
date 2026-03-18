@@ -9,6 +9,8 @@ services:
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - DATA_DIR=/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data/sqlite:/app/data/sqlite
       - ./data/chromadb:/app/data/chromadb

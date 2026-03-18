@@ -116,7 +116,7 @@ sdk:
 
 # --- MCP Bridge (Revit 插件通信) ---
 mcp_bridge:
-  revit_host: "localhost"
+  revit_host: "host.docker.internal"
   revit_port: 18080
   command_timeout: 60
   connect_timeout: 5
