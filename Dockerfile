@@ -15,6 +15,8 @@ RUN pip install --no-cache-dir -r requirements-server.txt
 COPY config/ config/
 COPY pipeline/ pipeline/
 COPY server/ server/
+COPY mcp_bridge/ mcp_bridge/
+COPY intent_bridge/ intent_bridge/
 
 # Copy data (ChromaDB + SQLite)
 # For VM deployment: prefer volume mount (-v ./data:/app/data) instead
