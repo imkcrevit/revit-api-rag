@@ -34,9 +34,9 @@ def get_retriever() -> RAGRetriever:
     data_dir = _resolve_data_dir(config)
     data_cfg = config.get("data", {})
 
-    # Resolve paths relative to data_dir or as-is if absolute
-    sqlite_dir = Path(data_cfg.get("sqlite_dir", "./data/sqlite"))
-    chromadb_dir = Path(data_cfg.get("chromadb_dir", "./data/chromadb"))
+    # Resolve paths: use DATA_DIR as root, fall back to config relative paths
+    sqlite_dir = data_dir / "sqlite"
+    chromadb_dir = data_dir / "chromadb"
 
     api_db = str(sqlite_dir / "revit_api.db")
     sdk_db = str(sqlite_dir / "revit_sdk.db")
