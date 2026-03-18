@@ -85,7 +85,14 @@ def main():
     port = server_cfg.get("gradio_port", 7860)
     host = server_cfg.get("host", "0.0.0.0")
 
-    uvicorn.run("server.main:app", host=host, port=port, reload=False)
+    uvicorn.run(
+        "server.main:app",
+        host=host,
+        port=port,
+        reload=False,
+        forwarded_allow_ips="*",
+        proxy_headers=True,
+    )
 
 
 if __name__ == "__main__":
