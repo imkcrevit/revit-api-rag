@@ -199,11 +199,26 @@ async def list_schemas():
             intents.append({
                 "name": name,
                 "display_name": schema.get("display_name", name),
+                "display_name_en": schema.get("display_name_en", name),
                 "description": schema.get("description", ""),
-                "api_method": schema.get("api_method", ""),
-                "slots": list(schema.get("slots", {}).keys()),
+                "keywords": schema.get("keywords", []),
+                "mapped_commands": schema.get("mapped_commands", []),
             })
     return {"intents": intents}
+
+
+@intent_router.get("/execution-map")
+async def execution_map():
+    """Return intent → command/tool mapping for all intents."""
+    registry = get_schema_registry()
+    mapping = {}
+    for name in registry.get_all_intent_names():
+        mapping[name] = {
+            "display_name": registry.get_intent_display_name(name, "zh"),
+            "mapped_commands": registry.get_mapped_commands(name),
+            "keywords": registry.get_intent_keywords(name),
+        }
+    return {"execution_map": mapping}
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,67 @@
+# Intent Registry — lightweight intent definitions
+# Parameters are driven by RAG (Revit API docs in SQLite), NOT defined here.
+# This file only defines: classification info, keywords for RAG search, and command mappings.
+
+intents:
+  create_wall:
+    display_name: "创建墙体"
+    display_name_en: "Create Wall"
+    description: "沿指定路径创建墙体"
+    keywords: ["Wall.Create", "WallType", "墙", "wall"]
+    mapped_commands: ["create_line_based_element", "create_wall"]
+
+  create_floor:
+    display_name: "创建楼板"
+    display_name_en: "Create Floor"
+    description: "创建楼板"
+    keywords: ["Floor.Create", "FloorType", "楼板", "floor", "slab"]
+    mapped_commands: ["create_surface_based_element", "create_floor"]
+
+  create_door:
+    display_name: "创建门"
+    display_name_en: "Create Door"
+    description: "在墙上放置门"
+    keywords: ["FamilyInstance", "Door", "门"]
+    mapped_commands: ["create_point_based_element"]
+
+  create_window:
+    display_name: "创建窗户"
+    display_name_en: "Create Window"
+    description: "在墙上放置窗户"
+    keywords: ["FamilyInstance", "Window", "窗"]
+    mapped_commands: ["create_point_based_element"]
+
+  create_room:
+    display_name: "创建房间"
+    display_name_en: "Create Room"
+    description: "在封闭区域创建房间"
+    keywords: ["NewRoom", "Room.Create", "房间", "room"]
+    mapped_commands: ["create_room"]
+
+  modify_element:
+    display_name: "修改元素"
+    display_name_en: "Modify Element"
+    description: "修改已有元素属性"
+    keywords: ["Move", "Rotate", "ElementTransformUtils", "修改", "modify"]
+    mapped_commands: ["operate_element"]
+
+  query_element:
+    display_name: "查询元素"
+    display_name_en: "Query Element"
+    description: "查询模型中元素信息"
+    keywords: ["FilteredElementCollector", "get_Parameter", "查询", "query"]
+    mapped_commands: ["ai_element_filter", "get_current_view_elements"]
+
+  delete_element:
+    display_name: "删除元素"
+    display_name_en: "Delete Element"
+    description: "删除元素"
+    keywords: ["Document.Delete", "删除", "delete"]
+    mapped_commands: ["delete_element"]
+
+  custom:
+    display_name: "自定义操作"
+    display_name_en: "Custom Operation"
+    description: "RAG 匹配的其他 Revit API 操作"
+    keywords: []
+    mapped_commands: ["send_code_to_revit"]

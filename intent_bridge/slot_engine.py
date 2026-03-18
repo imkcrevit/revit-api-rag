@@ -2,11 +2,12 @@
 Slot Engine — RAG-driven LLM Agent with Question Queue
 
 Architecture:
-  1. User sends text → query RAG for real Revit API docs → ONE LLM call
+  1. User sends text → dynamic RAG query for Revit API docs → ONE LLM call
   2. LLM sees actual API syntax/parameters and decides what to ask
   3. Questions stored in session queue
   4. User answers each question → no LLM, just fill param + pop next question
   5. When queue empty → complete with summary + structured JSON
+  6. Execution matching: intent params → solidified tool or code generation
 
 Parameters are driven by the Revit API documentation (via RAG retrieval),
 NOT hardcoded YAML slot definitions.
@@ -17,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from functools import lru_cache
 from typing import Any
@@ -32,7 +34,6 @@ from intent_bridge.models import (
     SessionStatus,
     SlotSource,
     SlotState,
-    SlotStatus,
     TurnResponse,
 )
 
@@ -63,15 +64,43 @@ def _get_localized(sdef: dict, key: str, lang: str) -> str:
 
 
 # ===================================================================
-# SchemaRegistry (intent classification only, NOT for slot definitions)
+# Chinese → API keyword mapping (for dynamic RAG search)
+# ===================================================================
+
+_ZH_TO_API_KEYWORDS: dict[str, list[str]] = {
+    "墙": ["Wall.Create", "WallType"],
+    "楼板": ["Floor.Create", "FloorType"],
+    "地板": ["Floor.Create", "FloorType"],
+    "门": ["NewFamilyInstance", "Door"],
+    "窗": ["NewFamilyInstance", "Window"],
+    "窗户": ["NewFamilyInstance", "Window"],
+    "房间": ["NewRoom", "Room.Create"],
+    "删除": ["Document.Delete"],
+    "修改": ["ElementTransformUtils", "Move", "Rotate"],
+    "移动": ["ElementTransformUtils.Move"],
+    "旋转": ["ElementTransformUtils.Rotate"],
+    "查询": ["FilteredElementCollector", "get_Parameter"],
+    "柱": ["NewFamilyInstance", "Column"],
+    "梁": ["NewFamilyInstance", "Beam"],
+    "屋顶": ["RoofBase", "FootPrintRoof"],
+    "楼梯": ["Stairs", "StairsRun"],
+    "栏杆": ["Railing"],
+    "坡道": ["Ramp"],
+    "幕墙": ["CurtainWall", "Wall.Create"],
+    "族": ["FamilyInstance", "FamilySymbol"],
+}
+
+
+# ===================================================================
+# SchemaRegistry — loads intent_registry.yaml
 # ===================================================================
 
 class SchemaRegistry:
-    """Loads intent YAML for classification. Slot definitions come from RAG."""
+    """Loads intent registry for classification and command mapping."""
 
     def __init__(self, yaml_path: str | None = None):
         if yaml_path is None:
-            yaml_path = os.path.join(os.path.dirname(__file__), "schemas", "intent_slots.yaml")
+            yaml_path = os.path.join(os.path.dirname(__file__), "schemas", "intent_registry.yaml")
         with open(yaml_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         self._intents: dict[str, dict] = data.get("intents", {})
@@ -86,14 +115,32 @@ class SchemaRegistry:
         schema = self._intents.get(intent_name, {})
         return _get_localized(schema, "display_name", lang) or intent_name
 
+    def get_intent_keywords(self, intent_name: str) -> list[str]:
+        schema = self._intents.get(intent_name, {})
+        return schema.get("keywords", [])
+
+    def get_mapped_commands(self, intent_name: str) -> list[str]:
+        schema = self._intents.get(intent_name, {})
+        return schema.get("mapped_commands", [])
+
     def get_intent_summary(self) -> str:
         lines = []
         for name, schema in self._intents.items():
+            if name == "custom":
+                continue
             zh = schema.get("display_name", name)
             en = schema.get("display_name_en", name)
-            api = schema.get("api_method", "")
-            lines.append(f"- {name} ({zh}/{en}) api={api}")
+            desc = schema.get("description", "")
+            lines.append(f"- {name} ({zh}/{en}): {desc}")
+        lines.append("- custom (自定义操作/Custom Operation): RAG-matched Revit API operations")
         return "\n".join(lines)
+
+    def get_all_keywords(self) -> list[str]:
+        """Get all keywords from all intents (for search term extraction)."""
+        keywords = []
+        for schema in self._intents.values():
+            keywords.extend(schema.get("keywords", []))
+        return keywords
 
 
 @lru_cache(maxsize=1)
@@ -180,17 +227,48 @@ def _query_api_by_method(method_patterns: list[str], limit: int = 5) -> list[dic
         return []
 
 
-# Per-intent API method patterns (targeted, not generic)
-_INTENT_API_PATTERNS: dict[str, list[str]] = {
-    "create_wall": ["Wall.Create("],
-    "create_floor": ["Floor.Create("],
-    "create_door": ["NewFamilyInstance("],
-    "create_window": ["NewFamilyInstance("],
-    "create_room": ["NewRoom(", "Room.Create("],
-    "modify_element": ["ElementTransformUtils", "Move(", "Rotate("],
-    "query_element": ["FilteredElementCollector", "get_Parameter("],
-    "delete_element": ["Document.Delete("],
-}
+def _extract_search_terms(user_input: str, registry: SchemaRegistry) -> list[str]:
+    """
+    Dynamically extract API search terms from user input.
+    Strategy:
+    1. Match registry keywords against input
+    2. Map Chinese terms via _ZH_TO_API_KEYWORDS
+    3. Extract English technical terms via regex
+    4. Fallback: use raw input words
+    """
+    terms: list[str] = []
+
+    # 1. Registry keyword matching
+    for intent_name in registry.get_all_intent_names():
+        for kw in registry.get_intent_keywords(intent_name):
+            if kw.lower() in user_input.lower():
+                terms.append(kw)
+
+    # 2. Chinese → API keyword mapping
+    for zh_term, api_terms in _ZH_TO_API_KEYWORDS.items():
+        if zh_term in user_input:
+            terms.extend(api_terms)
+
+    # 3. English technical terms (PascalCase, camelCase, dotted names)
+    tech_terms = re.findall(r'[A-Z][a-z]+(?:[A-Z][a-z]+)+', user_input)  # PascalCase
+    tech_terms += re.findall(r'\b\w+\.\w+\b', user_input)  # Dotted (Wall.Create)
+    terms.extend(tech_terms)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for t in terms:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+
+    # 4. Fallback: if nothing matched, use the raw input as search
+    if not unique:
+        # Extract meaningful words (skip very short ones)
+        words = re.findall(r'[a-zA-Z]{3,}', user_input)
+        unique = words[:3] if words else [user_input[:50]]
+
+    return unique
 
 
 def _format_api_context(api_docs: list[dict]) -> str:
@@ -221,121 +299,109 @@ def _format_api_context(api_docs: list[dict]) -> str:
 
 
 # ===================================================================
-# LLM Prompt — RAG-enhanced, ONE call, returns ALL questions
+# LLM Prompt — Agent-style, RAG-enhanced, ONE call
 # ===================================================================
 
-_ANALYZE_PROMPT = """You are a Revit architectural design assistant agent.
+_ANALYZE_PROMPT = """You are a Revit API Agent. Analyze user requests using the retrieved API documentation below.
 
 ## LANGUAGE RULE (HIGHEST PRIORITY):
 Detect the user's input language:
 - If Chinese input -> ALL question text, option labels, and descriptions MUST be in Chinese.
   FORBIDDEN: English model names like "Casement_W_1200x1500", "Fixed", "Sliding".
   CORRECT: options=["平开窗 1200×1500", "推拉窗 1800×1500", "固定窗 900×1200", "其他 (自定义)"]
-  WRONG:   options=["Casement W_1200x1500", "Sliding W_1800x1500"]
 - If English input -> ALL output in pure English.
-
-## Available intents:
-{intent_list}
 
 {rag_context}
 
-## YOUR TASK:
-Analyze the user input. Use the Revit API documentation above to determine the EXACT API method
-and ALL its required parameters.
+## Known intents (for classification):
+{intent_list}
 
-Do ALL of these in ONE response:
-1. Classify intent from the available list.
-2. Identify the specific API method (from the documentation above).
-3. List ALL parameters of that API method.
-4. Extract any parameter values the user already provided.
-5. For EVERY remaining parameter, create a question. DO NOT skip or default ANY parameter.
+If the user's request doesn't match any known intent above, use intent="custom" with the
+api_method derived from the API documentation. Do NOT reject unknown operations.
 
-## AMBIGUITY DETECTION (MANDATORY):
+## Core Rules:
 
-Scan the user input for these ambiguous Chinese terms. If ANY are found, questions[0] MUST be
-a disambiguation question. Never assume meaning silently.
+### Rule 1: NEVER silently default ANY parameter (HIGHEST PRIORITY AFTER LANGUAGE)
+You are NOT connected to a live Revit session. You CANNOT look up types, levels, or positions.
+For EVERY parameter in the API method signature, you MUST either:
+  a) Extract its EXACT value from the user's input text (put in "slots"), OR
+  b) Create a question for the user (put in "questions")
 
-| User text | Possible meanings | Must ask |
-|-----------|-------------------|----------|
-| 背面 | 北面(north) vs 背面(rear of building) | Which one? |
-| 前面 | 南面(south) vs 前面(entrance side) | Which one? |
-| 左边/右边 | Depends on viewing direction | From which direction? |
-| 那面墙/这个/那个 | Ambiguous reference | Must specify exactly |
-| 大的/小的/标准 | Unknown dimensions | Must give concrete sizes |
+FORBIDDEN behaviors (these are ERRORS):
+- Picking a default type/family (e.g., "use the first available column type") — ASK the user
+- Inventing coordinates (e.g., "(0,0,0)" and "(10,0,0)") — ASK the user
+- Assuming a level (e.g., "use the first level") — ASK the user
+- Picking StructuralType silently — ASK the user if ambiguous
+- Saying "I'll find it in the document" — you CANNOT, the user must provide it
 
-## PARAMETER RULES (CRITICAL — MUST FOLLOW ALL):
-
-### Rule 1: Ask about EVERY parameter — no silent defaults
-For each parameter in the API method signature, you MUST either:
-  a) Extract its value from the user's input (put in "slots"), OR
-  b) Create a question for it (put in "questions")
-DO NOT silently default ANY parameter. Even "structuralType" or "level" must be asked if not stated.
+If the user says "创建两个结构柱", you must ask about ALL of:
+- Column type/family (with options)
+- Level (with options)
+- XYZ coordinates for EACH column (since quantity=2, ask for 2 positions)
+- StructuralType if not obvious
 
 ### Rule 2: Parameter values must be Revit-executable types
-Every parameter value must be a type that Revit API can actually consume:
-- ElementId parameters -> user must provide an actual ElementId (integer number)
+- ElementId parameters -> user must provide an actual ElementId (integer)
 - XYZ/coordinate parameters -> numeric coordinates (e.g., "1000,500,0")
 - Enum parameters -> valid enum member name
 - Type parameters -> FamilySymbol name or type name
-
-NOTE: This system is NOT connected to a live Revit session. The user needs to provide
-ElementId numbers directly (they can look them up in Revit). Do NOT accept vague descriptions
-like "客厅背面" or "living room back wall" as parameter values.
+- Level parameters -> level name string (e.g., "Level 1", "F1", "标高 1")
 
 ### Rule 3: Host element / ElementId parameters
-For parameters that require an Element or ElementId (e.g., host wall for door/window):
-- The question MUST explain that an ElementId is required.
-- Chinese example: "请输入宿主墙体的 ElementId（在 Revit 中选择墙体可查看其 Id）"
-- English example: "Enter the host wall ElementId (select the wall in Revit to see its Id)"
-- Provide "其他 (自定义)" / "Other (custom)" as the ONLY option so user enters the ElementId.
-  This is because ElementId values are project-specific and cannot be pre-filled.
-- WRONG: slots.host = "客厅背面" (vague text, not an ElementId)
-- CORRECT: Ask user to input ElementId, value will be like "12345"
+For parameters requiring Element or ElementId (e.g., host wall for door/window):
+- Explain that an ElementId is required
+- Chinese: "请输入宿主墙体的 ElementId（在 Revit 中选择墙体可查看其 Id）"
+- English: "Enter the host wall ElementId (select the wall in Revit to see its Id)"
 
-### Rule 4: Type/family parameters are mandatory
-Wall type, window type, door type, floor type etc. are NEVER optional.
+### Rule 4: Type/family parameters are ALWAYS mandatory
+Wall type, column type, window type, door type, floor type, beam type etc. are NEVER optional.
 Always ask about them with concrete options showing dimensions and properties.
+You MUST NOT silently pick "the first available" or "default" type.
 
-### Rule 5: Question options format
+### Rule 5: Position/coordinate parameters are ALWAYS mandatory
+XYZ coordinates, start/end points, placement locations are NEVER optional.
+You MUST NOT invent coordinates. Always ask the user to provide them.
+
+### Rule 6: Question options format
 Each question MUST have:
 - 3-6 concrete options with details (dimensions, specs)
 - Last option: "其他 (自定义)" (Chinese) or "Other (custom)" (English)
-- Options in the user's language (Chinese options for Chinese input)
+- Options in the user's language
 
-GOOD options: ["平开窗 1200×1500", "推拉窗 1800×1500", "固定窗 900×1200", "其他 (自定义)"]
-BAD options:  ["窗户类型？"] (no concrete choices)
-BAD options:  ["Casement_W_1200x1500"] (English model name for Chinese user)
+### Rule 7: Question ordering priority
+a) Ambiguity disambiguation (if any)
+b) Type / family selection
+c) Level selection
+d) Position / coordinates
+e) Dimensions and properties
+f) Other API parameters
 
-### Rule 6: Question ordering priority
-a) Ambiguity disambiguation (if any found above)
-b) Host element / location
-c) Type / family selection
-d) Dimensions and properties
-e) Other API parameters
+### Rule 8: QUANTITY — When user requests N items (N>1)
+Detect quantity keywords: 两/三/四/五/多个/几个/two/three/four/multiple etc.
+- Extract into "quantity" slot
+- Position-dependent params (coordinates, host elements) become ARRAYS — ask for N values
+- Shared params (type, height, material) stay single values — ask once
+- Question text must clearly show N entries needed
 
-## MULTI-ACTION DECOMPOSITION (CRITICAL):
+Example: "创建两个结构柱" with quantity=2:
+- Column type: ask ONCE (shared)
+- Level: ask ONCE (shared)
+- Coordinates: ask for 2 positions (array)
 
-Some user requests require MULTIPLE sequential API calls. You MUST detect these and decompose
-them into an action plan. Examples:
+### Rule 9: MULTI-ACTION DECOMPOSITION
+Some requests need multiple API calls (e.g., "create a room" needs walls first).
+Use "action_plan" format for composite operations.
 
-| User request | Requires | Action plan |
-|---|---|---|
-| "Create a room" | Room needs enclosed walls | Step 1: Check/create walls -> Step 2: Create room |
-| "Add a door to the new wall" | Wall + door | Step 1: Create wall -> Step 2: Place door |
-| "Create a room with a window" | Walls + room + window | Step 1: Create walls -> Step 2: Create room -> Step 3: Place window |
+## AMBIGUITY DETECTION:
+| User text | Possible meanings | Must ask |
+|-----------|-------------------|----------|
+| 背面 | 北面(north) vs 背面(rear) | Which one? |
+| 前面 | 南面(south) vs 前面(entrance) | Which one? |
+| 左边/右边 | Depends on viewing direction | From which direction? |
+| 那面墙/这个 | Ambiguous reference | Must specify exactly |
+| 大的/小的/标准 | Unknown dimensions | Must give concrete sizes |
 
-For composite actions, use "action_plan" in the output (array of steps).
-Each step has its own intent, api_method, and questions.
-
-For a SINGLE action (most cases), just use the flat format (no action_plan field).
-
-**Room creation specifically:**
-- Room.Create / NewRoom requires enclosed walls (boundary).
-- Ask user: center point, desired area or length+width, wall height, wall type.
-- Step 1: create 4 walls forming a closed rectangle.
-- Step 2: create room inside the boundary.
-
-## OUTPUT FORMAT (pure JSON, no markdown, no other text):
+## OUTPUT FORMAT (pure JSON, no markdown):
 
 For SINGLE action:
 {{
@@ -365,29 +431,13 @@ For MULTI-ACTION (composite operations):
       "display_name": "创建闭合墙体 / Create enclosed walls",
       "api_method": "Wall.Create",
       "description": "Create 4 walls forming a rectangle",
-      "questions": [
-        {{
-          "slot": "center_point",
-          "text": "question text",
-          "options": ["..."],
-          "values": ["..."]
-        }}
-      ]
-    }},
-    {{
-      "step": 2,
-      "intent": "create_room",
-      "display_name": "创建房间 / Create room",
-      "api_method": "NewRoom",
-      "description": "Create room inside the walls",
       "questions": [...]
     }}
   ],
   "summary": ""
 }}
 
-IMPORTANT: "summary" should ONLY appear when ALL questions across ALL steps are empty.
-Do NOT include "please confirm" in the summary.
+IMPORTANT: "summary" should ONLY appear when ALL questions are empty.
 
 ## User input:
 "{user_input}"
@@ -400,7 +450,7 @@ Do NOT include "please confirm" in the summary.
 
 class ConversationOrchestrator:
     """
-    RAG-enhanced: query API docs → one LLM call → question queue → instant answers → complete.
+    RAG-enhanced: dynamic search → query API docs → one LLM call → question queue → complete.
 
     process_turn(): called for initial user text (RAG + LLM call)
     answer_question(): called for each option selection (NO LLM, instant)
@@ -417,7 +467,7 @@ class ConversationOrchestrator:
     async def process_turn(
         self, user_input: str, session: SessionState,
     ) -> TurnResponse:
-        """Initial user text → RAG API lookup → LLM call → returns first question or complete."""
+        """Initial user text → dynamic RAG → LLM call → returns first question or complete."""
         session.touch()
         session.turn_count += 1
         session.add_message("user", user_input)
@@ -425,15 +475,13 @@ class ConversationOrchestrator:
         lang = _detect_language(user_input)
         start = time.time()
 
-        # Step 1: Look up relevant Revit API docs from SQLite
-        # Fetch docs for all intents (fast SQL — <10ms) so LLM can classify + extract in one call
-        all_patterns = set()
-        for iname in self._registry.get_all_intent_names():
-            all_patterns.update(_INTENT_API_PATTERNS.get(iname, []))
+        # Step 1: Dynamic search term extraction (replaces hardcoded _INTENT_API_PATTERNS)
+        search_terms = _extract_search_terms(user_input, self._registry)
+        logger.info("Dynamic search terms: %s", search_terms)
 
         loop = asyncio.get_event_loop()
         api_docs = await loop.run_in_executor(
-            None, _query_api_by_method, list(all_patterns), 8,
+            None, _query_api_by_method, search_terms, 8,
         )
         rag_context = _format_api_context(api_docs)
 
@@ -461,15 +509,20 @@ class ConversationOrchestrator:
         if intent_name == "composite" and action_plan_raw:
             return await self._init_action_plan(session, result, lang)
 
-        # --- Single action (original flow) ---
+        # --- Single action ---
         api_method = result.get("api_method", "")
         extracted_slots = result.get("slots", {})
         questions_raw = result.get("questions", [])
         summary = result.get("summary", "")
 
-        # Unknown intent
-        if intent_name == "unknown" or not self._registry.get_intent_schema(intent_name):
-            return self._unknown_response(session, lang)
+        # Flexible intent handling: unknown → try "custom", don't reject
+        known_intents = self._registry.get_all_intent_names()
+        if intent_name == "unknown" or (intent_name not in known_intents and intent_name != "composite"):
+            if api_method:
+                # LLM found an API method but not a known intent → use custom
+                intent_name = "custom"
+            else:
+                return self._unknown_response(session, lang)
 
         # Set intent
         display = self._registry.get_intent_display_name(intent_name, lang)
@@ -683,6 +736,10 @@ class ConversationOrchestrator:
                     for name, slot in step.filled_slots.items()
                 },
             }
+            # Add mapped_commands for each step
+            mapped = self._registry.get_mapped_commands(step.intent)
+            if mapped:
+                step_output["mapped_commands"] = mapped
             all_steps.append(step_output)
 
         structured = {
@@ -788,7 +845,7 @@ class ConversationOrchestrator:
     # -------------------------------------------------------------------
 
     def _apply_slots(self, intent: IntentState, extracted: dict[str, Any]):
-        """Apply LLM-extracted parameters directly (no alias resolution needed — LLM handles it)."""
+        """Apply LLM-extracted parameters directly."""
         for key, value in extracted.items():
             if value is None:
                 continue
@@ -821,23 +878,27 @@ class ConversationOrchestrator:
             slot_values[name] = slot.value
             slot_sources[name] = slot.source.value
 
-        # Fallback: look up api_method from YAML schema if not from LLM
-        if not api_method:
-            schema = self._registry.get_intent_schema(intent.name)
-            api_method = schema.get("api_method", "") if schema else ""
+        # Get mapped commands from registry
+        mapped_commands = self._registry.get_mapped_commands(intent.name)
 
-        return {
+        structured = {
             "$schema": "intent_bridge_output_v1",
             "intent": intent.name,
             "confidence": intent.confidence,
             "api_method": api_method,
             "parameters": slot_values,
+            "execution": {
+                "strategy": "solidified_tool",
+                "mapped_commands": mapped_commands,
+            },
             "metadata": {
                 "session_id": session.session_id,
                 "turns": session.turn_count,
                 "parameter_sources": slot_sources,
             },
         }
+
+        return structured
 
     async def _llm_summary(self, session: SessionState, lang: str) -> str:
         """Use LLM to generate a natural language summary from collected parameters."""

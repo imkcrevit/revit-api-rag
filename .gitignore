@@ -221,3 +221,6 @@ revit_plugin/commandset/obj/
 
 # Temporary analysis scripts
 scratch/
+
+# Local deployment notes
+DEPLOY_NOTES.md
