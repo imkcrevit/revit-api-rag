@@ -98,6 +98,15 @@ class IntentClassifier:
 
     _llm = None  # lazy-loaded LLM client
 
+    # Chinese number words → digits
+    _CN_NUMS = {
+        "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
+        "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+    }
+    _QUANTITY_PATTERN = re.compile(
+        r'([两二三四五六七八九十]|\d+)\s*[个根面道堵条块]'
+    )
+
     # Patterns for extracting coordinates from queries
     _COORD_PATTERNS = [
         re.compile(
@@ -135,6 +144,7 @@ class IntentClassifier:
             }
         """
         coords = self._extract_coords(user_query)
+        quantity = self._extract_quantity(user_query)
 
         # Try LLM classification first
         llm = self._get_llm()
@@ -143,15 +153,19 @@ class IntentClassifier:
                 result = self._classify_with_llm(llm, user_query)
                 if result:
                     result["parsed_coords"] = coords
+                    result["quantity"] = quantity
                     _log.info(f"[classify] LLM result: type={result['interaction_type']} "
-                              f"element={result.get('_element_type', '?')}")
+                              f"element={result.get('_element_type', '?')} "
+                              f"quantity={quantity}")
                     return result
             except Exception as e:
                 _log.warning(f"[classify] LLM classification failed: {e}")
 
         # Fallback: keyword-based
         _log.info("[classify] using keyword fallback")
-        return self._classify_keywords(user_query, coords)
+        result = self._classify_keywords(user_query, coords)
+        result["quantity"] = quantity
+        return result
 
     def _classify_with_llm(self, llm, user_query: str) -> dict | None:
         """Use LLM to classify intent."""
@@ -259,6 +273,22 @@ class IntentClassifier:
             "select_prompt": None,
             "parsed_coords": coords,
         }
+
+    def _extract_quantity(self, query: str) -> int:
+        """Extract quantity from Chinese number words like 两个/三面/5根.
+
+        Returns 1 if no quantity found.
+        """
+        m = self._QUANTITY_PATTERN.search(query)
+        if not m:
+            return 1
+        raw = m.group(1)
+        if raw in self._CN_NUMS:
+            return self._CN_NUMS[raw]
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return 1
 
     def _extract_coords(self, query: str) -> dict | None:
         """Extract coordinates from natural language query.

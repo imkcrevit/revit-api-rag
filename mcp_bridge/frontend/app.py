@@ -414,9 +414,16 @@ def create_bridge_tab():
             select_host_btn = gr.Button("Select Host in Revit", variant="secondary", scale=1)
         host_element_id = gr.State(None)
 
-        with gr.Row():
+        with gr.Row() as single_coord_row:
             x_input = gr.Number(label="X (mm)", value=0)
             y_input = gr.Number(label="Y (mm)", value=0)
+        with gr.Row(visible=False) as multi_coord_row:
+            coords_text = gr.Textbox(
+                label="坐标 Coordinates (x,y; x,y; ...)",
+                placeholder="例: 1000,0; 5000,0; 9000,0",
+                lines=2,
+            )
+        quantity_state = gr.State(1)
         confirm_selection_btn = gr.Button(
             "Confirm & Generate Code", variant="primary",
         )
@@ -633,7 +640,7 @@ def create_bridge_tab():
         def _elapsed():
             return f"{_time.monotonic() - t_start:.1f}s"
 
-        # 20-value tuple helper — resets all controls including exec_result + tool library
+        # 24-value tuple helper — resets all controls including exec_result + tool library
         # Selection controls are inside Accordion (always visible),
         # so we just clear their values instead of toggling visible.
         def _reset(step=1, status="", plog=None,
@@ -647,6 +654,10 @@ def create_bridge_tab():
                     gr.Radio(choices=[]),              # level_radio
                     gr.Number(value=0),                # x_input
                     gr.Number(value=0),                # y_input
+                    gr.Row(visible=True),              # single_coord_row
+                    gr.Row(visible=False),             # multi_coord_row
+                    gr.Textbox(value=""),              # coords_text
+                    1,                                 # quantity_state
                     gr.Button(interactive=True),       # confirm_btn
                     gr.Row(visible=False), None,       # host_row, host_id
                     gr.Textbox(visible=False), None,   # security, rag
@@ -693,6 +704,10 @@ def create_bridge_tab():
                        gr.Radio(choices=[]),
                        gr.Number(value=0),
                        gr.Number(value=0),
+                       gr.Row(visible=True),           # single_coord_row
+                       gr.Row(visible=False),          # multi_coord_row
+                       gr.Textbox(value=""),            # coords_text
+                       1,                               # quantity_state
                        gr.Button(interactive=True),
                        gr.Row(visible=False), None,
                        gr.Textbox(visible=False), None,
@@ -715,7 +730,7 @@ def create_bridge_tab():
                 yield _reset(2, "Initializing pipeline...")
 
                 try:
-                    # Helper to build the 20-value tuple for streaming yields
+                    # Helper to build the 24-value tuple for streaming yields
                     def _stream_yield(code, thinking_md,
                                       sec_text=None, rag=None, step=2,
                                       plog=None, status=""):
@@ -727,6 +742,10 @@ def create_bridge_tab():
                                 gr.Radio(choices=[]),         # level
                                 gr.Number(value=0),           # x
                                 gr.Number(value=0),           # y
+                                gr.Row(visible=True),         # single_coord_row
+                                gr.Row(visible=False),        # multi_coord_row
+                                gr.Textbox(value=""),         # coords_text
+                                1,                            # quantity_state
                                 gr.Button(interactive=True),  # confirm
                                 gr.Row(visible=False), None,
                                 gr.Textbox(visible=bool(sec_text), value=sec_text or ""),
@@ -896,8 +915,12 @@ def create_bridge_tab():
                 if level_default:
                     status_msg += f" -> Level: {level_default}"
 
+            quantity = intent.get("quantity", 1)
+            is_multi = quantity > 1
+            if is_multi:
+                status_msg += f"\nQuantity: {quantity} — please enter {quantity} coordinate pairs"
             logger.info(f"[on_generate] interactive: family_choices={len(family_choices)} "
-                       f"level_choices={len(level_choices)}")
+                       f"level_choices={len(level_choices)} quantity={quantity}")
 
             yield (query, {}, "", "",
                    "",  # thinking — clear
@@ -908,6 +931,14 @@ def create_bridge_tab():
                    gr.Radio(choices=level_choices, value=level_default),
                    gr.Number(value=x_val),
                    gr.Number(value=y_val),
+                   gr.Row(visible=not is_multi),     # single_coord_row
+                   gr.Row(visible=is_multi),         # multi_coord_row
+                   gr.Textbox(                       # coords_text
+                       value="",
+                       placeholder=f"请输入 {quantity} 组坐标，例: 1000,0; 5000,0"
+                           if is_multi else "",
+                   ),
+                   quantity,                          # quantity_state
                    gr.Button(interactive=True),
                    gr.Row(visible=need_host), None,
                    gr.Textbox(visible=False),
@@ -935,7 +966,8 @@ def create_bridge_tab():
         logger.warning("[on_select_host] no element selected")
         return "No element selected — try again", None
 
-    def on_confirm_selection(query, family, level, x, y, host_id):
+    def on_confirm_selection(query, family, level, x, y,
+                             coords_text_val, quantity, host_id):
         """Generator — uses SSE streaming for real-time thinking + timer.
 
         Yields 7 values: selections, code, last_code, thinking,
@@ -944,7 +976,9 @@ def create_bridge_tab():
         import time as _time
         t0 = _time.monotonic()
         logger.info(f"[on_confirm] query={query!r} family={family!r} "
-                    f"level={level!r} x={x} y={y} host_id={host_id}")
+                    f"level={level!r} x={x} y={y} "
+                    f"coords_text={coords_text_val!r} quantity={quantity} "
+                    f"host_id={host_id}")
 
         def _el():
             return f"{_time.monotonic() - t0:.1f}s"
@@ -964,8 +998,30 @@ def create_bridge_tab():
             if level:
                 level_name = level.split(" (")[0] if " (" in level else level
                 selections["level"] = level_name
-            if x or y:
+
+            qty = quantity if isinstance(quantity, int) else 1
+            if qty > 1 and coords_text_val and coords_text_val.strip():
+                # Parse semicolon-separated coordinates: "x,y; x,y; ..."
+                positions = []
+                for pair in coords_text_val.split(";"):
+                    pair = pair.strip()
+                    if not pair:
+                        continue
+                    parts = pair.split(",")
+                    if len(parts) >= 2:
+                        try:
+                            positions.append({
+                                "x": float(parts[0].strip()),
+                                "y": float(parts[1].strip()),
+                            })
+                        except ValueError:
+                            continue
+                if positions:
+                    selections["positions"] = positions
+                    selections["quantity"] = len(positions)
+            elif x or y:
                 selections["position"] = {"x": x, "y": y}
+
             if host_id:
                 selections["host_element_id"] = host_id
 
@@ -1311,7 +1367,9 @@ def create_bridge_tab():
                  thinking_display,
                  step2_accordion,
                  selection_status, family_radio, level_radio,
-                 x_input, y_input, confirm_selection_btn,
+                 x_input, y_input,
+                 single_coord_row, multi_coord_row, coords_text, quantity_state,
+                 confirm_selection_btn,
                  host_row, host_element_id,
                  security_status, rag_info,
                  exec_result, step_display,
@@ -1342,7 +1400,7 @@ def create_bridge_tab():
     confirm_selection_btn.click(
         on_confirm_selection,
         inputs=[current_query, family_radio, level_radio, x_input, y_input,
-                host_element_id],
+                coords_text, quantity_state, host_element_id],
         outputs=[current_selections, code_display, last_code, thinking_display,
                  security_status, rag_info, step_display],
     )
