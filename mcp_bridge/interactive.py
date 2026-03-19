@@ -313,10 +313,13 @@ class IntentClassifier:
                         "parsed_coords": coords,
                     }
 
-        # Extended fallback — check _KEYWORD_TO_ELEMENT for broader coverage
+        # Creation-intent catch-all: if creation keywords present, try keyword
+        # match first, then fall back to generic_model so ANY creation goes
+        # through interactive selection — never silently skip to DIRECT.
         _creation_keywords = ["创建", "放置", "放", "添加", "新建", "create", "place", "add"]
         has_creation = any(ck in query_lower for ck in _creation_keywords)
         if has_creation:
+            # Try specific keyword match
             for keywords, elem_type in _KEYWORD_TO_ELEMENT:
                 if any(kw in query_lower for kw in keywords):
                     cat_info = _CATEGORY_MAP.get(elem_type)
@@ -332,6 +335,21 @@ class IntentClassifier:
                             "select_prompt": None,
                             "parsed_coords": coords,
                         }
+            # No specific match — use generic_model as catch-all
+            gm = _CATEGORY_MAP["generic_model"]
+            _log.info("[classify] creation intent detected but no specific type — "
+                      "using generic_model")
+            return {
+                "interaction_type": InteractionType.SELECT_FAMILY.value,
+                "queries": [{
+                    "command": "get_available_family_types",
+                    "params": {"categoryList": [gm["ost"]]},
+                    "label": gm["label"],
+                }],
+                "need_level": True,
+                "select_prompt": None,
+                "parsed_coords": coords,
+            }
 
         return {
             "interaction_type": InteractionType.DIRECT.value,
