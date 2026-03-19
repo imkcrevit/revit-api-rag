@@ -32,99 +32,83 @@ class InteractionType(str, Enum):
     SELECT_BOTH = "select_both"
 
 
-# Category mapping — maps LLM-returned element_type to Revit OST category
-_CATEGORY_MAP = {
-    "wall": {"ost": "OST_Walls", "label": "墙族类型"},
-    "structural_column": {"ost": "OST_StructuralColumns", "label": "结构柱族类型"},
-    "column": {"ost": "OST_Columns", "label": "柱族类型"},
-    "beam": {"ost": "OST_StructuralFraming", "label": "梁族类型"},
-    "floor": {"ost": "OST_Floors", "label": "楼板族类型"},
-    "window": {"ost": "OST_Windows", "label": "窗户族类型"},
-    "door": {"ost": "OST_Doors", "label": "门族类型"},
-    "ceiling": {"ost": "OST_Ceilings", "label": "天花板族类型"},
-    "roof": {"ost": "OST_Roofs", "label": "屋顶族类型"},
-    "railing": {"ost": "OST_StairsRailing", "label": "栏杆族类型"},
-    "stair": {"ost": "OST_Stairs", "label": "楼梯族类型"},
-    "furniture": {"ost": "OST_Furniture", "label": "家具族类型"},
-    "plumbing": {"ost": "OST_PlumbingFixtures", "label": "卫浴族类型"},
-    "lighting": {"ost": "OST_LightingFixtures", "label": "灯具族类型"},
-    "mechanical": {"ost": "OST_MechanicalEquipment", "label": "机械设备族类型"},
-    "electrical": {"ost": "OST_ElectricalEquipment", "label": "电气设备族类型"},
-    "generic_model": {"ost": "OST_GenericModel", "label": "常规模型族类型"},
+# OST reference — provided to LLM as context, not used for hard-coded mapping
+_OST_REFERENCE = {
+    "OST_Walls": "墙", "OST_StructuralColumns": "结构柱", "OST_Columns": "柱",
+    "OST_StructuralFraming": "梁/结构框架", "OST_Floors": "楼板",
+    "OST_Windows": "窗户", "OST_Doors": "门",
+    "OST_Ceilings": "天花板", "OST_Roofs": "屋顶",
+    "OST_StairsRailing": "栏杆", "OST_Stairs": "楼梯",
+    "OST_Furniture": "家具", "OST_FurnitureSystems": "家具系统",
+    "OST_PlumbingFixtures": "卫浴洁具", "OST_LightingFixtures": "灯具",
+    "OST_MechanicalEquipment": "机械设备", "OST_ElectricalEquipment": "电气设备",
+    "OST_GenericModel": "常规模型",
+    "OST_CurtainWallPanels": "幕墙嵌板", "OST_CurtainWallMullions": "幕墙竖梃",
+    "OST_Rooms": "房间", "OST_Parking": "停车场",
+    "OST_Site": "场地", "OST_Topography": "地形",
+    "OST_Casework": "橱柜", "OST_SpecialityEquipment": "专用设备",
+    "OST_Entourage": "环境", "OST_Planting": "植物",
 }
 
-# Keyword → element_type fallback — used when LLM returns "other"
-_KEYWORD_TO_ELEMENT = [
-    (["家具", "桌", "椅", "沙发", "床", "柜", "furniture"], "furniture"),
-    (["灯", "照明", "light"], "lighting"),
-    (["卫浴", "洁具", "马桶", "水槽", "plumbing"], "plumbing"),
-    (["设备", "空调", "mechanical"], "mechanical"),
-    (["电气", "配电", "electrical"], "electrical"),
-    (["墙", "wall"], "wall"),
-    (["柱", "column"], "structural_column"),
-    (["梁", "beam"], "beam"),
-    (["窗", "window"], "window"),
-    (["门", "door"], "door"),
-    (["楼板", "floor", "板"], "floor"),
-    (["天花", "ceiling"], "ceiling"),
-    (["屋顶", "roof"], "roof"),
-    (["栏杆", "railing"], "railing"),
-    (["楼梯", "stair"], "stair"),
-]
-
-# Hosted element types — these need a host element (wall, floor, etc.)
-_HOSTED_TYPES = {"window", "door"}
+# Hosted element categories — need a host element (wall, floor, etc.)
+_HOSTED_CATEGORIES = {"OST_Windows", "OST_Doors"}
 
 # LLM system prompt for intent classification
 _CLASSIFY_SYSTEM = """\
-You are a Revit intent classifier. Given a user query about Revit operations,
-determine what type of interaction is needed.
+You are a Revit intent classifier. Analyze the user query and determine
+what interaction workflow is needed.
 
 Respond with ONLY valid JSON (no markdown, no explanation):
 {
   "interaction_type": "direct|select_family|select_both",
-  "element_type": "<see list below>",
+  "revit_categories": ["OST_xxx", ...],
+  "label": "human-readable label for the family type selection",
   "need_level": true/false,
   "need_host": true/false,
-  "select_prompt": "prompt for host selection if need_host=true, else null"
+  "select_prompt": "Chinese prompt for host selection, or null"
 }
 
-element_type must be one of:
-  wall, structural_column, column, beam, floor, window, door, ceiling, roof,
-  railing, stair, furniture, plumbing, lighting, mechanical, electrical,
-  generic_model, other
+## interaction_type
 
-Rules:
-- "direct": No element selection needed (queries, info requests, deletions,
-  modifications that do NOT involve changing an element's TYPE/family,
-  purely informational or analytical requests)
-- "select_family": User wants to CREATE an element OR CHANGE/MODIFY an element's
-  TYPE/FAMILY TYPE. This requires presenting available family types for selection.
-  ANY request that involves creating/placing a physical element should use this.
-- "select_both": User wants to CREATE a HOSTED element that needs both:
-  1. A host element (e.g., wall for windows/doors)
-  2. A family type selection
-- need_level: true if the element is placed at a specific level (creation only)
-- need_host: true for hosted elements (windows, doors on walls; skylights on roofs)
-- element_type: the PRIMARY element being created/modified.
-  For complex queries mentioning multiple elements, pick the MAIN target element.
-  If the element doesn't fit any specific type, use "generic_model".
-  AVOID using "other" — only use it for non-creation operations.
-- select_prompt: Chinese prompt asking user to select the host element in Revit
+- "direct": purely informational, deletion, property modification (NOT type/family
+  change). No family selection needed.
+- "select_family": user wants to CREATE an element, or CHANGE an element's
+  TYPE/FAMILY. Requires querying Revit for available family types.
+- "select_both": user wants to CREATE a HOSTED element (e.g., window on wall,
+  door on wall). Needs host element selection + family type selection.
 
-IMPORTANT: If the query involves CREATING or PLACING any physical element
-(even if complex or multi-step), classify as "select_family" with the most
-relevant element_type. Do NOT classify creation requests as "direct".
+## revit_categories
 
-Examples:
-- "创建结构柱" → select_family, structural_column, need_level=true
-- "在墙上放窗户" → select_both, window, need_host=true
-- "创建一面墙" → select_family, wall, need_level=true
-- "放一个沙发" → select_family, furniture, need_level=true
-- "创建灯具" → select_family, lighting, need_level=true
-- "修改墙体类型" → select_family, wall, need_level=false
-- "修改墙高度" → direct (not changing type)
-- "删除所有柱子" → direct
+The Revit BuiltInCategory OST names to query for available family types.
+You may return one or more categories.
+
+Common categories for reference (you are not limited to these):
+  OST_Walls, OST_StructuralColumns, OST_Columns, OST_StructuralFraming,
+  OST_Floors, OST_Windows, OST_Doors, OST_Ceilings, OST_Roofs,
+  OST_StairsRailing, OST_Stairs, OST_Furniture, OST_FurnitureSystems,
+  OST_PlumbingFixtures, OST_LightingFixtures,
+  OST_MechanicalEquipment, OST_ElectricalEquipment,
+  OST_GenericModel, OST_CurtainWallPanels, OST_Casework,
+  OST_SpecialityEquipment, OST_Entourage, OST_Planting
+
+If you are unsure which category fits, use OST_GenericModel.
+
+## Other fields
+
+- label: a short Chinese label describing what the user is selecting,
+  e.g. "结构柱族类型", "家具族类型", "墙族类型"
+- need_level: true only for element creation that requires a level
+- need_host: true only for hosted elements
+- select_prompt: Chinese prompt for host selection (null if not needed)
+
+## Key rules
+
+- ANY query involving creation/placement of a physical element → "select_family"
+  or "select_both". NEVER classify creation as "direct".
+- For complex multi-part queries (e.g., "创建房间并放置家具"), use the PRIMARY
+  creation target's category. The code generator will handle multi-step logic.
+- For queries mentioning multiple distinct element types to create, pick the
+  categories for ALL of them in revit_categories.
 """
 
 
@@ -203,7 +187,8 @@ class IntentClassifier:
         return result
 
     def _classify_with_llm(self, llm, user_query: str) -> dict | None:
-        """Use LLM to classify intent."""
+        """Use LLM to classify intent — trusts LLM judgment for interaction type
+        and Revit categories. No hard-coded element_type mapping."""
         raw = llm.generate_text(user_query, system_prompt=_CLASSIFY_SYSTEM)
 
         # Strip markdown fences
@@ -212,49 +197,54 @@ class IntentClassifier:
 
         data = json.loads(cleaned)
         itype = data.get("interaction_type", "direct")
-        element_type = data.get("element_type", "other")
         need_level = data.get("need_level", False)
         need_host = data.get("need_host", False)
         select_prompt = data.get("select_prompt")
+        categories = data.get("revit_categories", [])
+        label = data.get("label", "族类型")
 
-        # Map to our format
+        # --- backward compat: if LLM returned old element_type format ---
+        if not categories and data.get("element_type"):
+            et = data["element_type"]
+            ost = _OST_REFERENCE and f"OST_{et}" not in _OST_REFERENCE
+            # Try common mapping
+            _compat = {
+                "wall": "OST_Walls", "structural_column": "OST_StructuralColumns",
+                "column": "OST_Columns", "beam": "OST_StructuralFraming",
+                "floor": "OST_Floors", "window": "OST_Windows",
+                "door": "OST_Doors", "ceiling": "OST_Ceilings",
+                "roof": "OST_Roofs", "furniture": "OST_Furniture",
+                "generic_model": "OST_GenericModel",
+            }
+            if et in _compat:
+                categories = [_compat[et]]
+            elif et != "other":
+                categories = ["OST_GenericModel"]
+
         if itype == "direct":
             return {
                 "interaction_type": InteractionType.DIRECT.value,
                 "queries": [],
                 "need_level": False,
                 "select_prompt": None,
-                "_element_type": element_type,
             }
 
-        # When LLM says select_family/select_both but element_type is unknown,
-        # try keyword fallback to find a matching category
-        if element_type == "other" or element_type not in _CATEGORY_MAP:
-            resolved = self._resolve_element_type(user_query)
-            if resolved:
-                element_type = resolved
-                _log.info(f"[classify] resolved 'other' → {element_type} via keywords")
-            else:
-                # Use generic_model as last resort for creation intents
-                element_type = "generic_model"
-                _log.info("[classify] no keyword match, using generic_model")
-
-        # Build queries from element_type
-        cat_info = _CATEGORY_MAP.get(element_type)
-        if not cat_info:
-            return None  # fall through to keyword
+        # Ensure we have at least one category for non-direct
+        if not categories:
+            categories = ["OST_GenericModel"]
+            _log.info("[classify] LLM returned no categories, using OST_GenericModel")
 
         queries = [{
             "command": "get_available_family_types",
-            "params": {"categoryList": [cat_info["ost"]]},
-            "label": cat_info["label"],
+            "params": {"categoryList": categories},
+            "label": label,
         }]
 
         # Determine interaction type
-        if need_host or element_type in _HOSTED_TYPES:
+        if need_host or any(c in _HOSTED_CATEGORIES for c in categories):
             actual_type = InteractionType.SELECT_BOTH.value
             if not select_prompt:
-                select_prompt = f"请在 Revit 中选择要放置{cat_info['label'][:2]}的宿主元素"
+                select_prompt = f"请在 Revit 中选择宿主元素"
         else:
             actual_type = InteractionType.SELECT_FAMILY.value
 
@@ -263,13 +253,28 @@ class IntentClassifier:
             "queries": queries,
             "need_level": need_level,
             "select_prompt": select_prompt if actual_type == InteractionType.SELECT_BOTH.value else None,
-            "_element_type": element_type,
         }
 
     @staticmethod
     def _classify_keywords(user_query: str, coords: dict | None) -> dict:
-        """Fallback keyword-based classification."""
+        """Fallback keyword-based classification (used only when LLM unavailable).
+
+        Uses simple keyword hints to map to OST categories. Not meant to be
+        exhaustive — the LLM path handles the full range of queries.
+        """
         query_lower = user_query.lower()
+
+        # Non-creation intents → direct (delete, query, list, etc.)
+        _direct_keywords = ["删除", "delete", "remove", "查看", "查询", "列出",
+                            "list", "获取", "get", "显示", "show", "统计", "count"]
+        if any(dk in query_lower for dk in _direct_keywords):
+            return {
+                "interaction_type": InteractionType.DIRECT.value,
+                "queries": [],
+                "need_level": False,
+                "select_prompt": None,
+                "parsed_coords": coords,
+            }
 
         # Check if query is about modifying/changing TYPE (not other properties)
         _type_change_keywords = ["类型", "type", "族型"]
@@ -279,72 +284,52 @@ class IntentClassifier:
             and any(mk in query_lower for mk in _modify_keywords)
         )
 
-        # Keyword rules — ordered: hosted elements first
+        # Keyword → (categories, label, interaction_type) — ordered by specificity
         _rules = [
-            (["窗户", "window", "窗", "创建窗"], "window", InteractionType.SELECT_BOTH),
-            (["门", "door", "创建门"], "door", InteractionType.SELECT_BOTH),
-            (["结构柱", "structural column", "柱子"], "structural_column", InteractionType.SELECT_FAMILY),
-            (["墙", "wall", "创建墙", "墙体"], "wall", InteractionType.SELECT_FAMILY),
-            (["梁", "beam", "结构梁"], "beam", InteractionType.SELECT_FAMILY),
-            (["楼板", "floor", "板"], "floor", InteractionType.SELECT_FAMILY),
+            (["窗户", "窗", "window"],  ["OST_Windows"], "窗户族类型", InteractionType.SELECT_BOTH),
+            (["门", "door"],            ["OST_Doors"], "门族类型", InteractionType.SELECT_BOTH),
+            (["结构柱", "柱子"],         ["OST_StructuralColumns"], "结构柱族类型", InteractionType.SELECT_FAMILY),
+            (["墙", "wall", "墙体"],    ["OST_Walls"], "墙族类型", InteractionType.SELECT_FAMILY),
+            (["梁", "beam", "结构梁"],  ["OST_StructuralFraming"], "梁族类型", InteractionType.SELECT_FAMILY),
+            (["楼板", "floor"],         ["OST_Floors"], "楼板族类型", InteractionType.SELECT_FAMILY),
+            (["天花", "ceiling"],       ["OST_Ceilings"], "天花板族类型", InteractionType.SELECT_FAMILY),
+            (["屋顶", "roof"],          ["OST_Roofs"], "屋顶族类型", InteractionType.SELECT_FAMILY),
+            (["家具", "桌", "椅", "沙发", "床", "柜"], ["OST_Furniture"], "家具族类型", InteractionType.SELECT_FAMILY),
+            (["灯", "照明"],            ["OST_LightingFixtures"], "灯具族类型", InteractionType.SELECT_FAMILY),
+            (["栏杆", "railing"],       ["OST_StairsRailing"], "栏杆族类型", InteractionType.SELECT_FAMILY),
+            (["楼梯", "stair"],         ["OST_Stairs"], "楼梯族类型", InteractionType.SELECT_FAMILY),
         ]
 
-        for keywords, elem_type, itype in _rules:
-            for kw in keywords:
-                if kw in query_lower:
-                    cat_info = _CATEGORY_MAP[elem_type]
-                    queries = [{
-                        "command": "get_available_family_types",
-                        "params": {"categoryList": [cat_info["ost"]]},
-                        "label": cat_info["label"],
-                    }]
+        for keywords, categories, label, itype in _rules:
+            if any(kw in query_lower for kw in keywords):
+                select_prompt = None
+                if itype == InteractionType.SELECT_BOTH:
+                    select_prompt = "请在 Revit 中选择宿主元素"
+                if is_type_change:
+                    itype = InteractionType.SELECT_FAMILY
                     select_prompt = None
-                    if itype == InteractionType.SELECT_BOTH:
-                        select_prompt = f"请在 Revit 中选择要放置{cat_info['label'][:2]}的宿主元素"
-                    # For type change queries, always use SELECT_FAMILY and no level needed
-                    if is_type_change:
-                        itype = InteractionType.SELECT_FAMILY
-                        select_prompt = None
-                    return {
-                        "interaction_type": itype.value,
-                        "queries": queries,
-                        "need_level": False if is_type_change else True,
-                        "select_prompt": select_prompt,
-                        "parsed_coords": coords,
-                    }
+                return {
+                    "interaction_type": itype.value,
+                    "queries": [{
+                        "command": "get_available_family_types",
+                        "params": {"categoryList": categories},
+                        "label": label,
+                    }],
+                    "need_level": False if is_type_change else True,
+                    "select_prompt": select_prompt,
+                    "parsed_coords": coords,
+                }
 
-        # Creation-intent catch-all: if creation keywords present, try keyword
-        # match first, then fall back to generic_model so ANY creation goes
-        # through interactive selection — never silently skip to DIRECT.
+        # Creation-intent catch-all → generic_model
         _creation_keywords = ["创建", "放置", "放", "添加", "新建", "create", "place", "add"]
-        has_creation = any(ck in query_lower for ck in _creation_keywords)
-        if has_creation:
-            # Try specific keyword match
-            for keywords, elem_type in _KEYWORD_TO_ELEMENT:
-                if any(kw in query_lower for kw in keywords):
-                    cat_info = _CATEGORY_MAP.get(elem_type)
-                    if cat_info:
-                        return {
-                            "interaction_type": InteractionType.SELECT_FAMILY.value,
-                            "queries": [{
-                                "command": "get_available_family_types",
-                                "params": {"categoryList": [cat_info["ost"]]},
-                                "label": cat_info["label"],
-                            }],
-                            "need_level": True,
-                            "select_prompt": None,
-                            "parsed_coords": coords,
-                        }
-            # No specific match — use generic_model as catch-all
-            gm = _CATEGORY_MAP["generic_model"]
-            _log.info("[classify] creation intent detected but no specific type — "
-                      "using generic_model")
+        if any(ck in query_lower for ck in _creation_keywords):
+            _log.info("[classify/keywords] creation intent, no specific match → OST_GenericModel")
             return {
                 "interaction_type": InteractionType.SELECT_FAMILY.value,
                 "queries": [{
                     "command": "get_available_family_types",
-                    "params": {"categoryList": [gm["ost"]]},
-                    "label": gm["label"],
+                    "params": {"categoryList": ["OST_GenericModel"]},
+                    "label": "族类型",
                 }],
                 "need_level": True,
                 "select_prompt": None,
@@ -358,15 +343,6 @@ class IntentClassifier:
             "select_prompt": None,
             "parsed_coords": coords,
         }
-
-    @staticmethod
-    def _resolve_element_type(query: str) -> str | None:
-        """Try to resolve element_type from keywords when LLM returns 'other'."""
-        q = query.lower()
-        for keywords, elem_type in _KEYWORD_TO_ELEMENT:
-            if any(kw in q for kw in keywords):
-                return elem_type
-        return None
 
     def _extract_quantity(self, query: str) -> int:
         """Extract quantity from Chinese number words like 两个/三面/5根.
