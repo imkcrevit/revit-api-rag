@@ -717,7 +717,7 @@ def create_bridge_tab():
             yield _reset(1, "Checking tool library...")
 
             matched = _match_tool(query)
-            if matched and matched.get("has_params"):
+            if matched:
                 tool_name = matched["name"]
                 display = matched.get("display_name", tool_name)
                 params = matched.get("parameters", [])
@@ -725,17 +725,21 @@ def create_bridge_tab():
                 logger.info(f"[on_generate] TOOL MATCHED: {tool_name} "
                             f"params={param_names}")
 
+                has_params = matched.get("has_params", False)
                 thinking_md = (
-                    f"**Found existing tool: `{display}`**\n\n"
-                    f"Description: {matched.get('description', '')}\n\n"
-                    f"Parameters: {', '.join(param_names)}\n\n"
-                    f"This tool has been used {matched.get('execution_count', 0)} "
-                    f"time(s) before. Please review/modify the parameters below "
-                    f"in the **Tool Library** section, then click **Run Tool**."
+                    f"**已匹配工具 / Found existing tool: `{display}`**\n\n"
+                    f"描述 / Description: {matched.get('description', '')}\n\n"
+                    + (f"参数 / Parameters: {', '.join(param_names)}\n\n"
+                       if param_names else "此工具无参数 / No parameters needed.\n\n")
+                    + f"已使用 / Used {matched.get('execution_count', 0)} time(s). "
+                    + ("请在下方 **Tool Library** 中配置参数后点击 **Run Tool**。"
+                       if has_params
+                       else "直接点击下方 **Run Tool** 执行。")
                 )
                 tool_info = (
                     f"Matched from query: '{query}' — "
-                    f"click 'Load Parameters' to configure"
+                    + ("click 'Load Parameters' to configure"
+                       if has_params else "click 'Run Tool' to execute directly")
                 )
                 yield (query, {}, "", "",
                        thinking_md,
