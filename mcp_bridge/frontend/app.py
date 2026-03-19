@@ -190,6 +190,20 @@ def _match_tool(query: str) -> dict | None:
         return None
 
 
+def _orchestrate(query: str, session_id: str | None = None) -> dict:
+    """Call Intent Bridge orchestrator for full LLM intent analysis."""
+    try:
+        payload = {"query": query}
+        if session_id:
+            payload["session_id"] = session_id
+        resp = httpx.post(_bridge_url("/orchestrate"),
+                          json=payload, timeout=60)
+        return resp.json()
+    except Exception as e:
+        logger.error(f"[_orchestrate] error: {e}")
+        return {"error": str(e), "questions": []}
+
+
 # ---------------------------------------------------------------------------
 # Step indicator
 # ---------------------------------------------------------------------------
@@ -425,6 +439,24 @@ def create_bridge_tab():
             )
         quantity_state = gr.State(1)
         intent_meta = gr.State({})  # stores classification metadata for code generation
+
+        # Orchestrator questions — pre-allocated Dropdowns for LLM-generated questions
+        gr.Markdown("#### LLM 参数分析 / Orchestrator Questions",
+                     elem_classes=["bridge-section"])
+        orch_q1 = gr.Dropdown(label="(waiting for analysis)", choices=[],
+                               interactive=False, allow_custom_value=True)
+        orch_q2 = gr.Dropdown(label="(waiting for analysis)", choices=[],
+                               interactive=False, allow_custom_value=True)
+        orch_q3 = gr.Dropdown(label="(waiting for analysis)", choices=[],
+                               interactive=False, allow_custom_value=True)
+        orch_q4 = gr.Dropdown(label="(waiting for analysis)", choices=[],
+                               interactive=False, allow_custom_value=True)
+        orch_q5 = gr.Dropdown(label="(waiting for analysis)", choices=[],
+                               interactive=False, allow_custom_value=True)
+        orch_q6 = gr.Dropdown(label="(waiting for analysis)", choices=[],
+                               interactive=False, allow_custom_value=True)
+        orch_state = gr.State({})  # full orchestrator response
+
         confirm_selection_btn = gr.Button(
             "Confirm & Generate Code", variant="primary",
         )
@@ -641,9 +673,12 @@ def create_bridge_tab():
         def _elapsed():
             return f"{_time.monotonic() - t_start:.1f}s"
 
-        # 25-value tuple helper — resets all controls including exec_result + tool library
+        # 32-value tuple helper — resets all controls including exec_result + tool library
         # Selection controls are inside Accordion (always visible),
         # so we just clear their values instead of toggling visible.
+        _ORCH_EMPTY = gr.Dropdown(label="(waiting for analysis)", choices=[],
+                                   value=None, interactive=False)
+
         def _reset(step=1, status="", plog=None,
                    tool_name_val="", tool_info_val="",
                    open_select=False):
@@ -667,7 +702,11 @@ def create_bridge_tab():
                     _step_md(step, MAIN_STEPS, status,
                              pipeline_log=plog),
                     tool_name_val,                     # run_tool_name
-                    tool_info_val)                     # tool_choices_info
+                    tool_info_val,                     # tool_choices_info
+                    # Orchestrator questions (6 Dropdowns + 1 State)
+                    _ORCH_EMPTY, _ORCH_EMPTY, _ORCH_EMPTY,
+                    _ORCH_EMPTY, _ORCH_EMPTY, _ORCH_EMPTY,
+                    {})                                # orch_state
 
         try:
             if not query.strip():
@@ -718,7 +757,10 @@ def create_bridge_tab():
                        _step_md(1, MAIN_STEPS,
                                 status=f"Matched tool: {display}"),
                        tool_name,
-                       tool_info)
+                       tool_info,
+                       _ORCH_EMPTY, _ORCH_EMPTY, _ORCH_EMPTY,
+                       _ORCH_EMPTY, _ORCH_EMPTY, _ORCH_EMPTY,
+                       {})
                 return
 
             # --- Step 1: Intent Classification ---
@@ -733,7 +775,7 @@ def create_bridge_tab():
                 yield _reset(2, "Initializing pipeline...")
 
                 try:
-                    # Helper to build the 25-value tuple for streaming yields
+                    # Helper to build the 32-value tuple for streaming yields
                     def _stream_yield(code, thinking_md,
                                       sec_text=None, rag=None, step=2,
                                       plog=None, status=""):
@@ -757,7 +799,10 @@ def create_bridge_tab():
                                 "",                           # exec_result
                                 _step_md(step, MAIN_STEPS, status=status,
                                          pipeline_log=plog),
-                                "", "")                       # tool_name, tool_info
+                                "", "",                       # tool_name, tool_info
+                                _ORCH_EMPTY, _ORCH_EMPTY, _ORCH_EMPTY,
+                                _ORCH_EMPTY, _ORCH_EMPTY, _ORCH_EMPTY,
+                                {})
 
                     with httpx.stream(
                         "POST", _bridge_url("/generate-stream"),
@@ -942,8 +987,61 @@ def create_bridge_tab():
             logger.info(f"[on_generate] interactive: family_choices={len(family_choices)} "
                        f"level_choices={len(level_choices)} quantity={quantity}")
 
+            # --- Call orchestrator for detailed LLM parameter analysis ---
+            yield _reset(2, "LLM 深度分析中 / Orchestrator analyzing...")
+            orch_data = _orchestrate(query)
+            orch_questions = orch_data.get("questions", [])
+            orch_intent = orch_data.get("intent", {})
+            orch_error = orch_data.get("error")
+            logger.info(f"[on_generate] orchestrator: {len(orch_questions)} questions, "
+                       f"intent={orch_intent.get('intent', 'N/A')}, error={orch_error}")
+
+            # Build thinking markdown from orchestrator analysis
+            thinking_parts = []
+            if orch_intent and not orch_error:
+                intent_name = orch_intent.get("intent", "")
+                confidence = orch_intent.get("confidence", 0)
+                thinking_parts.append(f"**Intent**: `{intent_name}` (confidence: {confidence})")
+                # Show action plan for composite intents
+                action_plan = orch_intent.get("action_plan", [])
+                if action_plan:
+                    thinking_parts.append(f"**Composite**: {len(action_plan)} steps")
+                    for ap in action_plan:
+                        step_n = ap.get("step", "?")
+                        disp = ap.get("display_name", "")
+                        api = ap.get("api_method", "")
+                        desc = ap.get("description", "")
+                        thinking_parts.append(f"  - Step {step_n}: **{disp}** (`{api}`)\n    {desc}")
+                summary = orch_data.get("summary", "")
+                if summary:
+                    thinking_parts.append(f"\n**Summary**: {summary}")
+            elif orch_error:
+                thinking_parts.append(f"Orchestrator error: {orch_error}")
+            thinking_md = "\n".join(thinking_parts) if thinking_parts else ""
+
+            if orch_questions:
+                status_msg += f"\nLLM 分析: {len(orch_questions)} 个参数需要确认"
+
+            # Build orchestrator question Dropdowns (up to 6)
+            orch_dd = []
+            for i in range(6):
+                if i < len(orch_questions):
+                    q = orch_questions[i]
+                    q_text = q.get("text", f"Question {i+1}")
+                    q_opts = q.get("options", [])
+                    orch_dd.append(gr.Dropdown(
+                        label=q_text, choices=q_opts,
+                        value=None, interactive=True,
+                        allow_custom_value=q.get("allow_custom", True),
+                    ))
+                else:
+                    orch_dd.append(gr.Dropdown(
+                        label="(waiting for analysis)", choices=[],
+                        value=None, interactive=False,
+                    ))
+
             yield (query, {}, "", "",
-                   "",  # thinking — clear
+                   thinking_md,
                    gr.Accordion(open=True),          # auto-open Step 2
                    gr.Textbox(value=status_msg),
                    gr.Dropdown(choices=family_choices,
@@ -969,7 +1067,10 @@ def create_bridge_tab():
                    None,
                    "",  # exec_result — clear
                    _step_md(2, MAIN_STEPS),
-                   "", "")  # tool_name, tool_info
+                   "", "",  # tool_name, tool_info
+                   # Orchestrator questions + state
+                   *orch_dd,
+                   orch_data)
         except Exception:
             err = traceback.format_exc()
             logger.error(f"[on_generate] EXCEPTION:\n{err}")
@@ -991,7 +1092,8 @@ def create_bridge_tab():
         return "No element selected — try again", None
 
     def on_confirm_selection(query, family, level, x, y,
-                             coords_text_val, quantity, intent_meta_val, host_id):
+                             coords_text_val, quantity, intent_meta_val, host_id,
+                             oq1, oq2, oq3, oq4, oq5, oq6, orch_data):
         """Generator — uses SSE streaming for real-time thinking + timer.
 
         Yields 7 values: selections, code, last_code, thinking,
@@ -1055,6 +1157,37 @@ def create_bridge_tab():
                 selections["_revit_categories"] = meta["categories"]
             if meta.get("label"):
                 selections["_classification_label"] = meta["label"]
+
+            # Collect orchestrator question answers
+            orch_answers = {}
+            orch_questions = (orch_data or {}).get("questions", [])
+            oq_values = [oq1, oq2, oq3, oq4, oq5, oq6]
+            for i, q in enumerate(orch_questions):
+                if i >= 6:
+                    break
+                selected = oq_values[i]
+                if selected is None or selected == "":
+                    continue
+                slot = q.get("slot", f"q{i}")
+                # Map display option back to value
+                options = q.get("options", [])
+                values = q.get("values", [])
+                if selected in options and values:
+                    idx = options.index(selected)
+                    if idx < len(values):
+                        orch_answers[slot] = values[idx]
+                    else:
+                        orch_answers[slot] = selected
+                else:
+                    orch_answers[slot] = selected  # custom input
+            if orch_answers:
+                selections["_orchestrator_answers"] = orch_answers
+                logger.info(f"[on_confirm] orch_answers={orch_answers}")
+
+            # Pass orchestrator intent/action_plan for richer code generation
+            orch_intent = (orch_data or {}).get("intent", {})
+            if orch_intent:
+                selections["_orchestrator_intent"] = orch_intent
 
             logger.info(f"[on_confirm] selections={selections}")
 
@@ -1405,7 +1538,9 @@ def create_bridge_tab():
                  host_row, host_element_id,
                  security_status, rag_info,
                  exec_result, step_display,
-                 run_tool_name, tool_choices_info],
+                 run_tool_name, tool_choices_info,
+                 orch_q1, orch_q2, orch_q3, orch_q4, orch_q5, orch_q6,
+                 orch_state],
     ).then(
         # Stop timer after generation completes
         on_timer_stop, inputs=[timer_start],
@@ -1432,7 +1567,9 @@ def create_bridge_tab():
     confirm_selection_btn.click(
         on_confirm_selection,
         inputs=[current_query, family_radio, level_radio, x_input, y_input,
-                coords_text, quantity_state, intent_meta, host_element_id],
+                coords_text, quantity_state, intent_meta, host_element_id,
+                orch_q1, orch_q2, orch_q3, orch_q4, orch_q5, orch_q6,
+                orch_state],
         outputs=[current_selections, code_display, last_code, thinking_display,
                  security_status, rag_info, step_display],
     )

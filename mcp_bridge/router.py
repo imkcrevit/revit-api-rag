@@ -84,6 +84,11 @@ class ClassifyRequest(BaseModel):
     query: str
 
 
+class OrchestrateRequest(BaseModel):
+    query: str
+    session_id: str | None = None
+
+
 class QueryRevitRequest(BaseModel):
     command: str
     params: dict = {}
@@ -751,6 +756,72 @@ async def match_tool(req: ClassifyRequest):
 async def classify_intent(req: ClassifyRequest):
     """Classify user query to determine if interactive selection is needed."""
     result = _classifier.classify(req.query)
+    return result
+
+
+# -- Orchestrator (Intent Bridge integration) ---------------------------------
+
+import logging as _logging
+import uuid as _uuid
+
+_orch_log = _logging.getLogger("mcp_bridge.orchestrate")
+_orch_sessions: dict[str, tuple] = {}  # session_id → (orchestrator, session_state)
+
+
+@bridge_router.post("/orchestrate")
+async def orchestrate(req: OrchestrateRequest):
+    """Full LLM intent analysis via Intent Bridge orchestrator.
+
+    First call: provide query, get back questions for user.
+    Follow-up calls: provide session_id + user answer, get next question or completion.
+    """
+    try:
+        from intent_bridge.llm_adapter import LLMAdapter
+        from intent_bridge.slot_engine import ConversationOrchestrator
+        from intent_bridge.models import SessionState
+    except ImportError as e:
+        raise HTTPException(500, f"Intent Bridge not available: {e}")
+
+    if req.session_id and req.session_id in _orch_sessions:
+        # Continue existing session
+        orch, session = _orch_sessions[req.session_id]
+        sid = req.session_id
+    else:
+        # New session
+        llm = LLMAdapter()
+        orch = ConversationOrchestrator(llm=llm)
+        session = SessionState()
+        sid = str(_uuid.uuid4())[:8]
+        _orch_sessions[sid] = (orch, session)
+
+    try:
+        resp = await orch.process_turn(req.query, session)
+    except Exception as e:
+        _orch_log.error(f"[orchestrate] process_turn failed: {e}")
+        raise HTTPException(500, str(e))
+
+    # Collect ALL questions (current + pending)
+    all_questions = []
+    if resp.current_question:
+        all_questions.append(resp.current_question.model_dump())
+    for q in session.pending_questions:
+        all_questions.append(q.model_dump())
+
+    result = {
+        "session_id": sid,
+        "status": resp.status.value,
+        "intent": resp.intent,
+        "slots": resp.slots,
+        "questions": all_questions,
+        "summary": resp.summary,
+    }
+    _orch_log.info(f"[orchestrate] sid={sid} status={resp.status.value} "
+                   f"questions={len(all_questions)} slots={list(resp.slots.keys())}")
+
+    # Cleanup completed sessions
+    if resp.status.value in ("complete", "cancelled", "constraint_error"):
+        _orch_sessions.pop(sid, None)
+
     return result
 
 
