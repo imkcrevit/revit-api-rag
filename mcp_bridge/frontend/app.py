@@ -770,6 +770,50 @@ def create_bridge_tab():
             itype = intent.get("interaction_type", "direct")
             logger.info(f"[on_generate] intent type={itype}")
 
+            # --- Call orchestrator for ALL queries (not just interactive) ---
+            # If orchestrator returns questions, override to interactive mode
+            yield _reset(2, "LLM 深度分析中 / Orchestrator analyzing...")
+            orch_data = _orchestrate(query)
+            orch_questions = orch_data.get("questions", [])
+            orch_intent = orch_data.get("intent", {})
+            orch_error = orch_data.get("error")
+            logger.info(f"[on_generate] orchestrator: {len(orch_questions)} questions, "
+                       f"intent={orch_intent}, error={orch_error}")
+
+            # Override: if orchestrator found questions, force interactive
+            if itype == "direct" and orch_questions:
+                logger.info(f"[on_generate] overriding direct -> select_family "
+                           f"(orchestrator has {len(orch_questions)} questions)")
+                itype = "select_family"
+                # Also run Revit family query based on orchestrator intent
+                orch_intent_name = orch_intent.get("name", "")
+                if not intent.get("queries"):
+                    # Build a default query from orchestrator data
+                    action_plan = orch_data.get("action_plan", [])
+                    cats = set()
+                    for step in action_plan:
+                        step_intent = step.get("intent", "").lower()
+                        if "wall" in step_intent:
+                            cats.add("OST_Walls")
+                        if "room" in step_intent:
+                            cats.add("OST_Rooms")
+                        if "furniture" in step_intent or "bed" in step_intent:
+                            cats.add("OST_Furniture")
+                        if "door" in step_intent:
+                            cats.add("OST_Doors")
+                        if "window" in step_intent:
+                            cats.add("OST_Windows")
+                        if "column" in step_intent or "structural" in step_intent:
+                            cats.add("OST_StructuralColumns")
+                    if not cats:
+                        cats = {"OST_Walls", "OST_Rooms"}  # sensible default
+                    intent["queries"] = [{
+                        "command": "get_available_family_types",
+                        "params": {"categoryList": list(cats)},
+                        "label": orch_intent.get("display_name", "族类型"),
+                    }]
+                    intent["need_level"] = True
+
             if itype == "direct":
                 # --- Step 2: RAG + Streaming generation ---
                 yield _reset(2, "Initializing pipeline...")
@@ -987,16 +1031,7 @@ def create_bridge_tab():
             logger.info(f"[on_generate] interactive: family_choices={len(family_choices)} "
                        f"level_choices={len(level_choices)} quantity={quantity}")
 
-            # --- Call orchestrator for detailed LLM parameter analysis ---
-            yield _reset(2, "LLM 深度分析中 / Orchestrator analyzing...")
-            orch_data = _orchestrate(query)
-            orch_questions = orch_data.get("questions", [])
-            orch_intent = orch_data.get("intent", {})
-            orch_error = orch_data.get("error")
-            logger.info(f"[on_generate] orchestrator: {len(orch_questions)} questions, "
-                       f"intent={orch_intent.get('intent', 'N/A')}, error={orch_error}")
-
-            # Build thinking markdown from orchestrator analysis
+            # Build thinking markdown from orchestrator analysis (orch_data already fetched above)
             thinking_parts = []
             if orch_intent and not orch_error:
                 intent_name = orch_intent.get("name", orch_intent.get("intent", ""))
