@@ -277,21 +277,25 @@ identify hardcoded values that should become reusable parameters, and replace th
 
 ## Rules
 1. Replace hardcoded values with {param_name} placeholders (lowercase_snake_case)
-2. Common parameterizable values:
-   - Wall/Floor/Column type names → {type_name} or {wall_type} with choices_from
-   - Level names → {level_name} with choices_from: "levels"
-   - Dimensions (width, depth, height) → {width}, {depth}, {height} (keep units in description)
+2. MANDATORY parameters — you MUST extract these if the code uses them:
+   - Any wall/floor/column type name string (e.g. "Generic - 200mm", "Basic Wall") → {wall_type} with choices_from
+   - Any level name string (e.g. "L1", "Level 1") → {level_name} with choices_from: "levels"
+   - Any .FirstOrDefault() or .First() on type/level collections → replace the filter string with a parameter
+   - Dimensions (width, depth, height in mm) → {width_mm}, {depth_mm}, {height_mm}
    - Coordinates → {x}, {y}
    - Room/element names/numbers → {room_name}, {room_number}
-3. For type name parameters, add choices_from based on category:
+3. For type name parameters, ALWAYS add choices_from based on category:
    - Wall types → "family_types:OST_Walls"
    - Structural columns → "family_types:OST_StructuralColumns"
-   - Floor types → "floor_types"
+   - Floor types → "family_types:OST_Floors"
    - Levels → "levels"
+   - Rooms → "family_types:OST_Rooms"
 4. Keep structural code unchanged — only replace literal values
 5. For numeric placeholders in expressions like `5.0 / 0.3048`, replace the user-facing value:
-   `{width} / 0.3048` (width in meters) or `{width_mm} / 304.8` (width in mm)
+   `{width_mm} / 304.8` (width in mm)
 6. Do NOT parameterize Revit API constants, enum values, or boolean flags
+7. CRITICAL: If the code references ANY WallType/Level by hardcoded name, it MUST become a parameter.
+   Never leave type names or level names hardcoded.
 
 ## Output Format
 Return ONLY valid JSON (no markdown fences):
