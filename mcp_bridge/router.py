@@ -800,12 +800,18 @@ async def orchestrate(req: OrchestrateRequest):
         _orch_log.error(f"[orchestrate] process_turn failed: {e}")
         raise HTTPException(500, str(e))
 
-    # Collect ALL questions (current + pending)
+    # Collect ALL questions (current + remaining pending)
+    # NOTE: current_question comes from peek_question() which does NOT pop,
+    # so pending_questions[0] IS current_question — skip it to avoid duplicates.
     all_questions = []
     if resp.current_question:
         all_questions.append(resp.current_question.model_dump())
-    for q in session.pending_questions:
-        all_questions.append(q.model_dump())
+        # pending_questions[1:] = remaining (skip [0] which is current_question)
+        for q in session.pending_questions[1:]:
+            all_questions.append(q.model_dump())
+    else:
+        for q in session.pending_questions:
+            all_questions.append(q.model_dump())
 
     # Include action_plan from session for composite intents
     action_plan_data = []
