@@ -305,11 +305,11 @@ def _format_api_context(api_docs: list[dict]) -> str:
 _ANALYZE_PROMPT = """You are a Revit API Agent. Analyze user requests using the retrieved API documentation below.
 
 ## LANGUAGE RULE (HIGHEST PRIORITY):
-Detect the user's input language:
-- If Chinese input -> ALL question text, option labels, and descriptions MUST be in Chinese.
-  FORBIDDEN: English model names like "Casement_W_1200x1500", "Fixed", "Sliding".
-  CORRECT: options=["平开窗 1200×1500", "推拉窗 1800×1500", "固定窗 900×1200", "其他 (自定义)"]
-- If English input -> ALL output in pure English.
+ALL question text and descriptions MUST be bilingual (Chinese + English), regardless of input language.
+Format: "中文说明 / English description"
+Example question text: "请选择墙体类型 / Select wall type:"
+Example option labels: Keep Revit family names as-is (e.g. "Generic - 200mm"), add Chinese prefix if helpful (e.g. "常规 - 200mm")
+Last option should be: "其他 (自定义) / Other (custom)"
 
 {rag_context}
 

@@ -1080,18 +1080,24 @@ def create_bridge_tab():
                         value=None, interactive=False,
                     ))
 
+            # When orchestrator has questions, hide redundant old controls
+            has_orch = bool(orch_questions)
             yield (query, {}, "", "",
                    thinking_md,
                    gr.Accordion(open=True),          # auto-open Step 2
                    gr.Textbox(value=status_msg),
-                   gr.Dropdown(choices=family_choices,
-                               value=family_choices[0] if family_choices else None,
-                               label=f"{family_label} — select one (type to filter)"),
-                   gr.Radio(choices=level_choices, value=level_default),
+                   gr.Dropdown(choices=[] if has_orch else family_choices,
+                               value=None if has_orch else (family_choices[0] if family_choices else None),
+                               label="(由 LLM 分析控制)" if has_orch
+                                     else f"{family_label} — select one (type to filter)",
+                               interactive=not has_orch),
+                   gr.Radio(choices=[] if has_orch else level_choices,
+                            value=None if has_orch else level_default,
+                            interactive=not has_orch),
                    gr.Number(value=x_val),
                    gr.Number(value=y_val),
-                   gr.Row(visible=not is_multi),     # single_coord_row
-                   gr.Row(visible=is_multi),         # multi_coord_row
+                   gr.Row(visible=False if has_orch else not is_multi),  # single_coord_row
+                   gr.Row(visible=False if has_orch else is_multi),      # multi_coord_row
                    gr.Textbox(                       # coords_text
                        value="",
                        placeholder=f"请输入 {quantity} 组坐标，例: 1000,0; 5000,0"
