@@ -99,6 +99,8 @@ class QueryRevitRequest(BaseModel):
 class ParameterizeRequest(BaseModel):
     code: str
     source_query: str = ""
+    thinking: str = ""          # LLM thinking chain from code generation
+    selections: dict = {}       # user's interactive selections (family_type, level, etc.)
 
 
 class UnitSettingRequest(BaseModel):
@@ -187,7 +189,10 @@ async def parameterize_code(req: ParameterizeRequest):
     llm = create_llm_client(config)
     gen = CodeGenerator(None, llm)  # retriever not needed for parameterization
 
-    param_code, parameters = gen.parameterize(req.code, req.source_query)
+    param_code, parameters = gen.parameterize(
+        req.code, req.source_query,
+        thinking=req.thinking, selections=req.selections,
+    )
     return {"code": param_code, "parameters": parameters}
 
 

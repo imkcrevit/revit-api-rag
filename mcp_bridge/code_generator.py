@@ -266,47 +266,79 @@ class CodeGenerator:
         m = re.search(r'<thinking>(.*?)</thinking>', text, re.DOTALL)
         return m.group(1).strip() if m else ""
 
-    def parameterize(self, code: str, source_query: str) -> tuple[str, list[dict]]:
-        """Use LLM to replace hardcoded values with {placeholders} for tool solidification.
+    def parameterize(self, code: str, source_query: str,
+                     thinking: str = "", selections: dict | None = None,
+                     ) -> tuple[str, list[dict]]:
+        """Use LLM agent to analyze thinking chain + code and determine variable parameters.
 
         Returns (parameterized_code, parameters_list).
         """
         system = """\
-You are a Revit API code parameterization expert. Given C# code generated for a specific task,
-identify hardcoded values that should become reusable parameters, and replace them with {placeholder} syntax.
+You are an intelligent agent that analyzes Revit API code to determine which values should
+become reusable parameters. You have access to the original user query, the LLM's thinking
+process, and the user's interactive selections.
 
-## Rules
-1. Replace hardcoded values with {param_name} placeholders (lowercase_snake_case)
-2. MANDATORY parameters — you MUST extract these if the code uses them:
-   - Any wall/floor/column type name string (e.g. "Generic - 200mm", "Basic Wall") → {wall_type} with choices_from
-   - Any level name string (e.g. "L1", "Level 1") → {level_name} with choices_from: "levels"
-   - Any .FirstOrDefault() or .First() on type/level collections → replace the filter string with a parameter
-   - Dimensions (width, depth, height in mm) → {width_mm}, {depth_mm}, {height_mm}
-   - Coordinates → {x}, {y}
-   - Room/element names/numbers → {room_name}, {room_number}
-3. For type name parameters, ALWAYS add choices_from based on category:
-   - Wall types → "family_types:OST_Walls"
-   - Structural columns → "family_types:OST_StructuralColumns"
-   - Floor types → "family_types:OST_Floors"
-   - Levels → "levels"
-   - Rooms → "family_types:OST_Rooms"
-4. Keep structural code unchanged — only replace literal values
-5. For numeric placeholders in expressions like `5.0 / 0.3048`, replace the user-facing value:
-   `{width_mm} / 304.8` (width in mm)
-6. Do NOT parameterize Revit API constants, enum values, or boolean flags
-7. CRITICAL: If the code references ANY WallType/Level by hardcoded name, it MUST become a parameter.
-   Never leave type names or level names hardcoded.
+## Your Task
+Think step by step:
+1. Read the THINKING CHAIN to understand what decisions were made and why
+2. Read the USER SELECTIONS to see what the user explicitly chose (these are definitely variable)
+3. Examine every literal value in the CODE
+4. For each literal, reason: "If a different user ran this tool for a different scenario,
+   would this value need to change?" If YES → make it a parameter.
+
+## What should be parameterized:
+- Values the user SELECTED interactively (family types, levels) — these change per project
+- Dimension values (width, height, depth) — users will want different sizes
+- Position coordinates — users will want different locations
+- Element names/numbers — users will want custom naming
+- Type/family names hardcoded as strings — different projects have different types loaded
+
+## What should NOT be parameterized:
+- Revit API method names, class names, enum values (BuiltInParameter.*, BuiltInCategory.*)
+- Boolean flags that control API behavior (true/false in API calls)
+- Unit conversion constants (304.8, 0.3048)
+- Structural code patterns (loops, conditions, variable declarations)
+
+## choices_from — for parameters that need dynamic options from Revit:
+- Wall type names → choices_from: "family_types:OST_Walls"
+- Floor type names → choices_from: "family_types:OST_Floors"
+- Column type names → choices_from: "family_types:OST_StructuralColumns"
+- Level names → choices_from: "levels"
+- Any other family type → choices_from: "family_types:OST_<CategoryName>"
 
 ## Output Format
 Return ONLY valid JSON (no markdown fences):
 {
-  "code": "// the parameterized code...",
+  "reasoning": "brief explanation of which values are variable and why",
+  "code": "// the parameterized code with {placeholder} syntax...",
   "parameters": [
-    {"name": "param_name", "type": "string|double", "description": "...", "default": "value", "choices_from": "optional"}
+    {"name": "param_name", "type": "string|double", "description": "bilingual description", "default": "value", "choices_from": "optional"}
   ]
 }
 """
-        prompt = f"Source query: {source_query}\n\nCode to parameterize:\n```csharp\n{code}\n```"
+        # Build a rich context prompt with all available information
+        parts = [f"## User Query\n{source_query}"]
+        if thinking:
+            # Strip markdown formatting from thinking
+            clean_thinking = thinking.replace("**Thinking:**\n\n", "").strip()
+            if clean_thinking:
+                parts.append(f"## LLM Thinking Chain\n{clean_thinking}")
+        if selections:
+            # Show what the user explicitly selected
+            sel_lines = []
+            for k, v in selections.items():
+                if not k.startswith("_"):  # skip internal keys
+                    sel_lines.append(f"- {k}: {v}")
+            if sel_lines:
+                parts.append(f"## User Selections (these values ARE variable)\n" +
+                             "\n".join(sel_lines))
+            # Also show orchestrator answers if present
+            orch = selections.get("_orchestrator_answers", {})
+            if orch:
+                orch_lines = [f"- {k}: {v}" for k, v in orch.items()]
+                parts.append(f"## Orchestrator Answers\n" + "\n".join(orch_lines))
+        parts.append(f"## Code to Parameterize\n```csharp\n{code}\n```")
+        prompt = "\n\n".join(parts)
 
         raw = self.llm.generate_text(prompt, system_prompt=system)
 

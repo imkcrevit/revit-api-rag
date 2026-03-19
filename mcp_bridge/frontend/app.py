@@ -103,12 +103,16 @@ def _execute_code(code: str, params: list | None = None) -> dict:
 
 
 def _solidify_tool(name: str, code: str, description: str,
-                   source_query: str) -> dict:
+                   source_query: str, thinking: str = "",
+                   selections: dict | None = None) -> dict:
     try:
-        # Step 1: Use LLM to parameterize hardcoded values into {placeholders}
-        logger.info(f"[_solidify_tool] parameterizing code ({len(code)} chars)")
+        # Step 1: Use LLM agent to analyze thinking + selections + code
+        logger.info(f"[_solidify_tool] parameterizing code ({len(code)} chars) "
+                    f"thinking_len={len(thinking)} selections_keys={list((selections or {}).keys())}")
         param_resp = httpx.post(_bridge_url("/parameterize"),
-                                json={"code": code, "source_query": source_query},
+                                json={"code": code, "source_query": source_query,
+                                      "thinking": thinking,
+                                      "selections": selections or {}},
                                 timeout=60)
         param_data = param_resp.json()
         param_code = param_data.get("code", code)
@@ -1337,14 +1341,17 @@ def create_bridge_tab():
             msg = f"✗ 执行失败 ({el}): {error}"
         yield msg, _step_md(4, MAIN_STEPS)
 
-    def on_solidify(name, description, code, query):
+    def on_solidify(name, description, code, query, thinking, selections):
         """Solidify tool and auto-refresh tool list."""
-        logger.info(f"[on_solidify] name={name!r} code_len={len(code) if code else 0}")
+        logger.info(f"[on_solidify] name={name!r} code_len={len(code) if code else 0} "
+                    f"thinking_len={len(thinking) if thinking else 0}")
         try:
             if not name.strip():
                 return ("Please enter a tool name.", _step_md(4, MAIN_STEPS),
                         on_refresh_tools())
-            result = _solidify_tool(name, code, description, query)
+            result = _solidify_tool(name, code, description, query,
+                                    thinking=thinking or "",
+                                    selections=selections if isinstance(selections, dict) else {})
             if "error" in result:
                 return (f"Error: {result['error']}", _step_md(4, MAIN_STEPS),
                         on_refresh_tools())
@@ -1628,7 +1635,9 @@ def create_bridge_tab():
                       outputs=[exec_result, step_display])
 
     solidify_btn.click(
-        on_solidify, inputs=[tool_name, tool_desc, last_code, current_query],
+        on_solidify,
+        inputs=[tool_name, tool_desc, last_code, current_query,
+                thinking_display, current_selections],
         outputs=[solidify_result, step_display, tools_table],
     )
 
