@@ -807,12 +807,18 @@ async def orchestrate(req: OrchestrateRequest):
     for q in session.pending_questions:
         all_questions.append(q.model_dump())
 
+    # Include action_plan from session for composite intents
+    action_plan_data = []
+    for step in session.action_plan:
+        action_plan_data.append(step.model_dump())
+
     result = {
         "session_id": sid,
         "status": resp.status.value,
         "intent": resp.intent,
         "slots": resp.slots,
         "questions": all_questions,
+        "action_plan": action_plan_data,
         "summary": resp.summary,
     }
     _orch_log.info(f"[orchestrate] sid={sid} status={resp.status.value} "

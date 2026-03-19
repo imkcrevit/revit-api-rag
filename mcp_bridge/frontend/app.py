@@ -999,11 +999,16 @@ def create_bridge_tab():
             # Build thinking markdown from orchestrator analysis
             thinking_parts = []
             if orch_intent and not orch_error:
-                intent_name = orch_intent.get("intent", "")
+                intent_name = orch_intent.get("name", orch_intent.get("intent", ""))
+                display_name = orch_intent.get("display_name", "")
                 confidence = orch_intent.get("confidence", 0)
-                thinking_parts.append(f"**Intent**: `{intent_name}` (confidence: {confidence})")
-                # Show action plan for composite intents
-                action_plan = orch_intent.get("action_plan", [])
+                thinking_parts.append(
+                    f"**Intent**: `{intent_name}`"
+                    + (f" — {display_name}" if display_name else "")
+                    + f" (confidence: {confidence})"
+                )
+                # Show action plan for composite intents (from top-level response)
+                action_plan = orch_data.get("action_plan", [])
                 if action_plan:
                     thinking_parts.append(f"**Composite**: {len(action_plan)} steps")
                     for ap in action_plan:
