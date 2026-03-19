@@ -36,6 +36,7 @@ class InteractionType(str, Enum):
 _CATEGORY_MAP = {
     "wall": {"ost": "OST_Walls", "label": "墙族类型"},
     "structural_column": {"ost": "OST_StructuralColumns", "label": "结构柱族类型"},
+    "column": {"ost": "OST_Columns", "label": "柱族类型"},
     "beam": {"ost": "OST_StructuralFraming", "label": "梁族类型"},
     "floor": {"ost": "OST_Floors", "label": "楼板族类型"},
     "window": {"ost": "OST_Windows", "label": "窗户族类型"},
@@ -44,7 +45,32 @@ _CATEGORY_MAP = {
     "roof": {"ost": "OST_Roofs", "label": "屋顶族类型"},
     "railing": {"ost": "OST_StairsRailing", "label": "栏杆族类型"},
     "stair": {"ost": "OST_Stairs", "label": "楼梯族类型"},
+    "furniture": {"ost": "OST_Furniture", "label": "家具族类型"},
+    "plumbing": {"ost": "OST_PlumbingFixtures", "label": "卫浴族类型"},
+    "lighting": {"ost": "OST_LightingFixtures", "label": "灯具族类型"},
+    "mechanical": {"ost": "OST_MechanicalEquipment", "label": "机械设备族类型"},
+    "electrical": {"ost": "OST_ElectricalEquipment", "label": "电气设备族类型"},
+    "generic_model": {"ost": "OST_GenericModel", "label": "常规模型族类型"},
 }
+
+# Keyword → element_type fallback — used when LLM returns "other"
+_KEYWORD_TO_ELEMENT = [
+    (["家具", "桌", "椅", "沙发", "床", "柜", "furniture"], "furniture"),
+    (["灯", "照明", "light"], "lighting"),
+    (["卫浴", "洁具", "马桶", "水槽", "plumbing"], "plumbing"),
+    (["设备", "空调", "mechanical"], "mechanical"),
+    (["电气", "配电", "electrical"], "electrical"),
+    (["墙", "wall"], "wall"),
+    (["柱", "column"], "structural_column"),
+    (["梁", "beam"], "beam"),
+    (["窗", "window"], "window"),
+    (["门", "door"], "door"),
+    (["楼板", "floor", "板"], "floor"),
+    (["天花", "ceiling"], "ceiling"),
+    (["屋顶", "roof"], "roof"),
+    (["栏杆", "railing"], "railing"),
+    (["楼梯", "stair"], "stair"),
+]
 
 # Hosted element types — these need a host element (wall, floor, etc.)
 _HOSTED_TYPES = {"window", "door"}
@@ -57,37 +83,46 @@ determine what type of interaction is needed.
 Respond with ONLY valid JSON (no markdown, no explanation):
 {
   "interaction_type": "direct|select_family|select_both",
-  "element_type": "wall|structural_column|beam|floor|window|door|ceiling|roof|other",
+  "element_type": "<see list below>",
   "need_level": true/false,
   "need_host": true/false,
   "select_prompt": "prompt for host selection if need_host=true, else null"
 }
 
+element_type must be one of:
+  wall, structural_column, column, beam, floor, window, door, ceiling, roof,
+  railing, stair, furniture, plumbing, lighting, mechanical, electrical,
+  generic_model, other
+
 Rules:
 - "direct": No element selection needed (queries, info requests, deletions,
-  modifications that do NOT involve changing an element's TYPE/family)
+  modifications that do NOT involve changing an element's TYPE/family,
+  purely informational or analytical requests)
 - "select_family": User wants to CREATE an element OR CHANGE/MODIFY an element's
   TYPE/FAMILY TYPE. This requires presenting available family types for selection.
-  (walls, columns, beams, floors, etc.)
+  ANY request that involves creating/placing a physical element should use this.
 - "select_both": User wants to CREATE a HOSTED element that needs both:
   1. A host element (e.g., wall for windows/doors)
   2. A family type selection
-- need_level: true if the element is placed at a specific level (creation only, not modification)
+- need_level: true if the element is placed at a specific level (creation only)
 - need_host: true for hosted elements (windows, doors on walls; skylights on roofs)
-- element_type: the PRIMARY element type involved
-  Example: "在墙上创建窗户" → element_type="window" (NOT "wall")
-  Example: "创建一面墙" → element_type="wall"
-  Example: "修改墙体类型" → element_type="wall"
+- element_type: the PRIMARY element being created/modified.
+  For complex queries mentioning multiple elements, pick the MAIN target element.
+  If the element doesn't fit any specific type, use "generic_model".
+  AVOID using "other" — only use it for non-creation operations.
 - select_prompt: Chinese prompt asking user to select the host element in Revit
+
+IMPORTANT: If the query involves CREATING or PLACING any physical element
+(even if complex or multi-step), classify as "select_family" with the most
+relevant element_type. Do NOT classify creation requests as "direct".
 
 Examples:
 - "创建结构柱" → select_family, structural_column, need_level=true
-- "在墙上放窗户" → select_both, window, need_host=true, select_prompt="请在Revit中选择要放置窗户的墙体"
-- "选择一个墙体创建窗户" → select_both, window, need_host=true
+- "在墙上放窗户" → select_both, window, need_host=true
 - "创建一面墙" → select_family, wall, need_level=true
-- "修改墙体类型" → select_family, wall, need_level=false (changing type, not creating)
-- "修改选择墙体类型" → select_family, wall, need_level=false
-- "更换柱子类型" → select_family, structural_column, need_level=false
+- "放一个沙发" → select_family, furniture, need_level=true
+- "创建灯具" → select_family, lighting, need_level=true
+- "修改墙体类型" → select_family, wall, need_level=false
 - "修改墙高度" → direct (not changing type)
 - "删除所有柱子" → direct
 """
@@ -183,7 +218,7 @@ class IntentClassifier:
         select_prompt = data.get("select_prompt")
 
         # Map to our format
-        if itype == "direct" or element_type == "other":
+        if itype == "direct":
             return {
                 "interaction_type": InteractionType.DIRECT.value,
                 "queries": [],
@@ -191,6 +226,18 @@ class IntentClassifier:
                 "select_prompt": None,
                 "_element_type": element_type,
             }
+
+        # When LLM says select_family/select_both but element_type is unknown,
+        # try keyword fallback to find a matching category
+        if element_type == "other" or element_type not in _CATEGORY_MAP:
+            resolved = self._resolve_element_type(user_query)
+            if resolved:
+                element_type = resolved
+                _log.info(f"[classify] resolved 'other' → {element_type} via keywords")
+            else:
+                # Use generic_model as last resort for creation intents
+                element_type = "generic_model"
+                _log.info("[classify] no keyword match, using generic_model")
 
         # Build queries from element_type
         cat_info = _CATEGORY_MAP.get(element_type)
@@ -266,6 +313,26 @@ class IntentClassifier:
                         "parsed_coords": coords,
                     }
 
+        # Extended fallback — check _KEYWORD_TO_ELEMENT for broader coverage
+        _creation_keywords = ["创建", "放置", "放", "添加", "新建", "create", "place", "add"]
+        has_creation = any(ck in query_lower for ck in _creation_keywords)
+        if has_creation:
+            for keywords, elem_type in _KEYWORD_TO_ELEMENT:
+                if any(kw in query_lower for kw in keywords):
+                    cat_info = _CATEGORY_MAP.get(elem_type)
+                    if cat_info:
+                        return {
+                            "interaction_type": InteractionType.SELECT_FAMILY.value,
+                            "queries": [{
+                                "command": "get_available_family_types",
+                                "params": {"categoryList": [cat_info["ost"]]},
+                                "label": cat_info["label"],
+                            }],
+                            "need_level": True,
+                            "select_prompt": None,
+                            "parsed_coords": coords,
+                        }
+
         return {
             "interaction_type": InteractionType.DIRECT.value,
             "queries": [],
@@ -273,6 +340,15 @@ class IntentClassifier:
             "select_prompt": None,
             "parsed_coords": coords,
         }
+
+    @staticmethod
+    def _resolve_element_type(query: str) -> str | None:
+        """Try to resolve element_type from keywords when LLM returns 'other'."""
+        q = query.lower()
+        for keywords, elem_type in _KEYWORD_TO_ELEMENT:
+            if any(kw in q for kw in keywords):
+                return elem_type
+        return None
 
     def _extract_quantity(self, query: str) -> int:
         """Extract quantity from Chinese number words like 两个/三面/5根.
