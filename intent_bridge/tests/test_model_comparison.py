@@ -100,6 +100,26 @@ TEST_CASES = {
             r"(\d+)\s*(?:面|个|段|道|walls?|lines?|segments?)",
         ],
     },
+    "创建房间并配置家具": {
+        "input": "创建一个房间，并放置room，里面配置有一张床",
+        "expected_quantity": 1,
+        "expected_intent": "composite",
+        "is_composite": True,       # expect multi-step action_plan
+        "expected_steps_min": 2,    # at least: room + bed
+        # Must ask about wall/room type AND furniture/bed type
+        "type_topic_patterns": [r"type", r"类型", r"族", r"family", r"room", r"房间",
+                                r"wall.*type", r"墙.*型",
+                                r"bed", r"床", r"家具", r"furniture"],
+        # Must ask about position/coordinates for room boundary or furniture
+        "position_topic_patterns": [r"position", r"coordinate", r"坐标", r"位置", r"xyz",
+                                    r"放置", r"location", r"where", r"哪",
+                                    r"角点", r"boundary", r"边界", r"point", r"uv"],
+        "forbidden_slot_keys": {"room_type", "furniture_type", "bed_type", "level",
+                                "position", "location", "xyz", "coordinates"},
+        "position_count_patterns": [
+            r"(\d+)\s*(?:个|处|positions?|points?|locations?)",
+        ],
+    },
 }
 
 # Shared forbidden value patterns — LLM should NEVER silently fill these
@@ -138,6 +158,10 @@ class ModelTestResult:
     slots: dict = field(default_factory=dict)
     error: str = ""
     score: int = 0  # out of 5
+    # Composite intent support
+    is_composite: bool = False
+    action_steps: list[dict] = field(default_factory=list)
+    step_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -213,10 +237,24 @@ def _check_forbidden_defaults(slots: dict, case: dict) -> tuple[bool, list[str]]
 
 
 def _evaluate(result: ModelTestResult, case: dict):
-    """Score 0-5."""
+    """Score 0-5.
+
+    For composite intents, the quantity check is replaced by a step-count
+    check since quantity is implicit in multi-step action plans.
+    """
     score = 0
-    if result.has_quantity_slot and result.quantity_value == case["expected_quantity"]:
-        score += 1
+    is_composite_case = case.get("is_composite", False)
+
+    if is_composite_case:
+        # For composite: check that we got a multi-step plan
+        min_steps = case.get("expected_steps_min", 2)
+        if result.is_composite and result.step_count >= min_steps:
+            score += 1
+    else:
+        # For simple: check quantity extraction
+        if result.has_quantity_slot and result.quantity_value == case["expected_quantity"]:
+            score += 1
+
     if result.asks_about_type:
         score += 1
     if result.asks_about_level:
@@ -323,15 +361,48 @@ async def _test_orchestrator(model_name: str, model_config: dict, case: dict) ->
     return result
 
 
+def _flatten_composite(data: dict) -> tuple[dict, list[dict], list[dict]]:
+    """Flatten composite action_plan into merged slots + questions.
+
+    Returns (merged_slots, all_questions, action_steps).
+    """
+    action_plan = data.get("action_plan", [])
+    if not action_plan:
+        return data.get("slots", {}), data.get("questions", []), []
+
+    merged_slots = dict(data.get("slots", {}))
+    all_questions = list(data.get("questions", []))
+
+    for step in action_plan:
+        # Merge step-level slots
+        step_slots = step.get("slots", {})
+        for k, v in step_slots.items():
+            # Don't overwrite if already set (first occurrence wins)
+            if k not in merged_slots:
+                merged_slots[k] = v
+
+        # Collect step questions
+        for q in step.get("questions", []):
+            all_questions.append(q)
+
+    return merged_slots, all_questions, action_plan
+
+
 def _analyze_result(result: ModelTestResult, case: dict):
-    """Common analysis for raw LLM results."""
+    """Common analysis for raw LLM results — supports both flat and composite."""
     data = result.parsed_json
     if not data:
         result.error = "Failed to parse JSON from response"
         return
 
-    result.slots = data.get("slots", {})
-    result.questions = data.get("questions", [])
+    # Detect composite intent
+    if data.get("action_plan"):
+        result.is_composite = True
+        result.action_steps = data["action_plan"]
+        result.step_count = len(result.action_steps)
+
+    # Flatten composite into unified slots/questions
+    result.slots, result.questions, _ = _flatten_composite(data)
     result.question_count = len(result.questions)
 
     qty = result.slots.get("quantity")
@@ -364,6 +435,9 @@ def _generate_report(results: list[ModelTestResult], test_input: str, test_level
     case = TEST_CASES[test_input]
     expected_qty = case["expected_quantity"]
 
+    is_composite_case = case.get("is_composite", False)
+    col1 = "Steps (min)" if is_composite_case else "Quantity"
+
     lines = [
         f"# Model Comparison Report -- \"{test_input}\" ({test_level})",
         "",
@@ -373,16 +447,21 @@ def _generate_report(results: list[ModelTestResult], test_input: str, test_level
         "",
         "## Score Summary (0-5)",
         "",
-        "| Model | Score | Quantity | Ask Type | Ask Level | Ask Position | No Defaults | Duration |",
-        "|-------|-------|----------|----------|-----------|-------------|-------------|----------|",
+        f"| Model | Score | Composite | {col1} | Ask Type | Ask Level | Ask Position | No Defaults | Duration |",
+        f"|-------|-------|-----------|----------|----------|-----------|-------------|-------------|----------|",
     ]
 
     for r in results:
         def _icon(b): return "[PASS]" if b else "[FAIL]"
-        qty_ok = r.has_quantity_slot and r.quantity_value == expected_qty
+        comp_info = f"{r.step_count} steps" if r.is_composite else "—"
+        if is_composite_case:
+            min_steps = case.get("expected_steps_min", 2)
+            col1_ok = r.is_composite and r.step_count >= min_steps
+        else:
+            col1_ok = r.has_quantity_slot and r.quantity_value == expected_qty
         lines.append(
-            f"| {r.model_name} | **{r.score}/5** | "
-            f"{_icon(qty_ok)} | {_icon(r.asks_about_type)} | {_icon(r.asks_about_level)} | "
+            f"| {r.model_name} | **{r.score}/5** | {comp_info} | "
+            f"{_icon(col1_ok)} | {_icon(r.asks_about_type)} | {_icon(r.asks_about_level)} | "
             f"{_icon(r.asks_about_positions)} | {_icon(not r.has_forbidden_defaults)} | "
             f"{r.duration_ms:.0f}ms |"
         )
@@ -393,16 +472,19 @@ def _generate_report(results: list[ModelTestResult], test_input: str, test_level
         lines.append("---")
         lines.append(f"## {r.model_name}")
         lines.append(f"**Score**: {r.score}/5 | **Duration**: {r.duration_ms:.0f}ms")
+        if r.is_composite:
+            step_names = [s.get("display_name", s.get("intent", "?")) for s in r.action_steps]
+            lines.append(f"**Composite Intent**: {r.step_count} steps — {' → '.join(step_names)}")
         if r.error:
             lines.append(f"**Error**: {r.error}")
             lines.append("")
             continue
 
         lines.append("")
-        lines.append("### Slots extracted")
+        lines.append("### Slots extracted (merged)")
         lines.append(f"```json\n{json.dumps(r.slots, ensure_ascii=False, indent=2)}\n```")
 
-        lines.append(f"### Questions ({r.question_count} total)")
+        lines.append(f"### Questions ({r.question_count} total, flattened from all steps)")
         for i, q in enumerate(r.questions, 1):
             lines.append(f"**Q{i}** [{q.get('slot', '?')}]: {q.get('text', '?')}")
             opts = q.get("options", [])
@@ -422,6 +504,28 @@ def _generate_report(results: list[ModelTestResult], test_input: str, test_level
 
         lines.append("")
 
+        # Show action_plan steps detail for composite
+        if r.is_composite and r.action_steps:
+            lines.append("### Action Plan Steps")
+            for step in r.action_steps:
+                step_num = step.get("step", "?")
+                step_intent = step.get("intent", "?")
+                step_name = step.get("display_name", step_intent)
+                step_api = step.get("api_method", "?")
+                step_desc = step.get("description", "")
+                step_qs = step.get("questions", [])
+                step_slots = step.get("slots", {})
+                lines.append(f"#### Step {step_num}: {step_name}")
+                lines.append(f"- Intent: `{step_intent}` | API: `{step_api}`")
+                if step_desc:
+                    lines.append(f"- {step_desc}")
+                if step_slots:
+                    lines.append(f"- Slots: `{json.dumps(step_slots, ensure_ascii=False)}`")
+                if step_qs:
+                    for qi, sq in enumerate(step_qs, 1):
+                        lines.append(f"- Q{qi} [{sq.get('slot', '?')}]: {sq.get('text', '?')}")
+                lines.append("")
+
         if r.parsed_json:
             lines.append("<details><summary>Raw LLM JSON</summary>")
             lines.append("")
@@ -440,17 +544,30 @@ def _generate_report(results: list[ModelTestResult], test_input: str, test_level
 def _assert_raw(result: ModelTestResult, case: dict):
     """Common assertions for raw LLM tests."""
     expected_qty = case["expected_quantity"]
+    is_composite_case = case.get("is_composite", False)
+
     assert not result.error, f"[{result.model_name}] LLM call failed: {result.error}"
     assert result.parsed_json, f"[{result.model_name}] Failed to parse JSON"
 
-    assert result.has_quantity_slot, (
-        f"[{result.model_name}] Did not extract quantity. Slots: {result.slots}"
-    )
-    assert result.quantity_value == expected_qty, (
-        f"[{result.model_name}] quantity={result.quantity_value}, expected {expected_qty}"
-    )
+    if is_composite_case:
+        min_steps = case.get("expected_steps_min", 2)
+        assert result.is_composite, (
+            f"[{result.model_name}] Expected composite action_plan but got flat response"
+        )
+        assert result.step_count >= min_steps, (
+            f"[{result.model_name}] Only {result.step_count} steps, expected >= {min_steps}"
+        )
+    else:
+        assert result.has_quantity_slot, (
+            f"[{result.model_name}] Did not extract quantity. Slots: {result.slots}"
+        )
+        assert result.quantity_value == expected_qty, (
+            f"[{result.model_name}] quantity={result.quantity_value}, expected {expected_qty}"
+        )
+
     assert result.question_count >= 2, (
-        f"[{result.model_name}] Only {result.question_count} questions. "
+        f"[{result.model_name}] Only {result.question_count} questions "
+        f"({'across all steps' if result.is_composite else 'total'}). "
         f"Must ask about type, level, positions at minimum."
     )
     assert result.asks_about_type, (
@@ -469,14 +586,19 @@ def _assert_raw(result: ModelTestResult, case: dict):
 def _assert_orch(result: ModelTestResult, case: dict):
     """Common assertions for orchestrator tests."""
     expected_qty = case["expected_quantity"]
+    is_composite_case = case.get("is_composite", False)
+
     assert not result.error, f"[{result.model_name}] Pipeline failed: {result.error}"
 
     assert result.question_count >= 2, (
         f"[{result.model_name}] Only {result.question_count} questions via orchestrator."
     )
-    assert result.has_quantity_slot, (
-        f"[{result.model_name}] quantity not extracted. Slots: {result.slots}"
-    )
+
+    if not is_composite_case:
+        assert result.has_quantity_slot, (
+            f"[{result.model_name}] quantity not extracted. Slots: {result.slots}"
+        )
+
     assert result.asks_about_type, (
         f"[{result.model_name}] No type question. "
         f"Qs: {[q.get('slot') for q in result.questions]}"
@@ -583,6 +705,54 @@ class TestOrch_三面墙:
     async def test_claude(self):
         r = await _test_orchestrator("claude", MODELS["claude"], self.CASE)
         _all_results.setdefault("创建三面墙|orch", []).append(r)
+        _assert_orch(r, self.CASE)
+
+
+# ===================================================================
+# TEST CLASS: 创建房间并配置家具
+# ===================================================================
+
+class TestRaw_房间家具:
+    CASE = TEST_CASES["创建房间并配置家具"]
+
+    @pytest.mark.asyncio
+    async def test_gemini(self):
+        r = await _test_raw("gemini", MODELS["gemini"], self.CASE)
+        _all_results.setdefault("创建房间并配置家具|raw", []).append(r)
+        _assert_raw(r, self.CASE)
+
+    @pytest.mark.asyncio
+    async def test_codex(self):
+        r = await _test_raw("codex", MODELS["codex"], self.CASE)
+        _all_results.setdefault("创建房间并配置家具|raw", []).append(r)
+        _assert_raw(r, self.CASE)
+
+    @pytest.mark.asyncio
+    async def test_claude(self):
+        r = await _test_raw("claude", MODELS["claude"], self.CASE)
+        _all_results.setdefault("创建房间并配置家具|raw", []).append(r)
+        _assert_raw(r, self.CASE)
+
+
+class TestOrch_房间家具:
+    CASE = TEST_CASES["创建房间并配置家具"]
+
+    @pytest.mark.asyncio
+    async def test_gemini(self):
+        r = await _test_orchestrator("gemini", MODELS["gemini"], self.CASE)
+        _all_results.setdefault("创建房间并配置家具|orch", []).append(r)
+        _assert_orch(r, self.CASE)
+
+    @pytest.mark.asyncio
+    async def test_codex(self):
+        r = await _test_orchestrator("codex", MODELS["codex"], self.CASE)
+        _all_results.setdefault("创建房间并配置家具|orch", []).append(r)
+        _assert_orch(r, self.CASE)
+
+    @pytest.mark.asyncio
+    async def test_claude(self):
+        r = await _test_orchestrator("claude", MODELS["claude"], self.CASE)
+        _all_results.setdefault("创建房间并配置家具|orch", []).append(r)
         _assert_orch(r, self.CASE)
 
 

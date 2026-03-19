@@ -395,11 +395,11 @@ def create_bridge_tab():
     with gr.Accordion("Step 2: Select Options", open=False,
                        elem_classes=["bridge-section"]) as step2_accordion:
         selection_status = gr.Textbox(
-            label="Query Result (from Revit)",
+            label="意图分类 / Classification",
             interactive=False, value="(waiting for intent classification)",
         )
         family_radio = gr.Dropdown(
-            label="Family Type — select one (type to filter)",
+            label="族类型 — select one (type to filter)",
             choices=[], interactive=True, filterable=True,
         )
         level_radio = gr.Radio(
@@ -424,6 +424,7 @@ def create_bridge_tab():
                 lines=2,
             )
         quantity_state = gr.State(1)
+        intent_meta = gr.State({})  # stores classification metadata for code generation
         confirm_selection_btn = gr.Button(
             "Confirm & Generate Code", variant="primary",
         )
@@ -640,7 +641,7 @@ def create_bridge_tab():
         def _elapsed():
             return f"{_time.monotonic() - t_start:.1f}s"
 
-        # 24-value tuple helper — resets all controls including exec_result + tool library
+        # 25-value tuple helper — resets all controls including exec_result + tool library
         # Selection controls are inside Accordion (always visible),
         # so we just clear their values instead of toggling visible.
         def _reset(step=1, status="", plog=None,
@@ -658,6 +659,7 @@ def create_bridge_tab():
                     gr.Row(visible=False),             # multi_coord_row
                     gr.Textbox(value=""),              # coords_text
                     1,                                 # quantity_state
+                    {},                                # intent_meta
                     gr.Button(interactive=True),       # confirm_btn
                     gr.Row(visible=False), None,       # host_row, host_id
                     gr.Textbox(visible=False), None,   # security, rag
@@ -708,6 +710,7 @@ def create_bridge_tab():
                        gr.Row(visible=False),          # multi_coord_row
                        gr.Textbox(value=""),            # coords_text
                        1,                               # quantity_state
+                       {},                              # intent_meta
                        gr.Button(interactive=True),
                        gr.Row(visible=False), None,
                        gr.Textbox(visible=False), None,
@@ -730,7 +733,7 @@ def create_bridge_tab():
                 yield _reset(2, "Initializing pipeline...")
 
                 try:
-                    # Helper to build the 24-value tuple for streaming yields
+                    # Helper to build the 25-value tuple for streaming yields
                     def _stream_yield(code, thinking_md,
                                       sec_text=None, rag=None, step=2,
                                       plog=None, status=""):
@@ -746,6 +749,7 @@ def create_bridge_tab():
                                 gr.Row(visible=False),        # multi_coord_row
                                 gr.Textbox(value=""),         # coords_text
                                 1,                            # quantity_state
+                                {},                           # intent_meta
                                 gr.Button(interactive=True),  # confirm
                                 gr.Row(visible=False), None,
                                 gr.Textbox(visible=bool(sec_text), value=sec_text or ""),
@@ -855,12 +859,20 @@ def create_bridge_tab():
             status_parts = []
             parsed_coords = intent.get("parsed_coords")
 
-            for q in intent.get("queries", []):
+            # Extract label & categories from LLM classification
+            queries = intent.get("queries", [])
+            family_label = "族类型"
+            queried_categories = []
+            for q in queries:
                 cmd = q.get("command")
                 params = q.get("params", {})
                 label = q.get("label", cmd)
+                family_label = label  # use LLM's label
+                cats = params.get("categoryList", [])
+                queried_categories.extend(cats)
                 data = _query_revit(cmd, params)
                 logger.info(f"[on_generate] query_revit cmd={cmd} "
+                            f"categories={cats} "
                             f"result_type={type(data).__name__} "
                             f"len={len(data) if isinstance(data, list) else 'N/A'} "
                             f"sample={str(data[:2]) if isinstance(data, list) and data else data}")
@@ -906,7 +918,15 @@ def create_bridge_tab():
                             level_default = lc
                             break
 
-            status_msg = "Queried from Revit: " + " | ".join(status_parts)
+            # Build status message with classification details
+            cat_display = ", ".join(c.replace("OST_", "") for c in queried_categories)
+            status_msg = f"分类: {family_label}"
+            if cat_display:
+                status_msg += f" ({cat_display})"
+            if status_parts:
+                status_msg += f"\nRevit 查询结果: {' | '.join(status_parts)}"
+            if not family_choices:
+                status_msg += "\n⚠ 未找到匹配的族类型，请在 Revit 中加载对应族文件"
             if need_host and select_prompt:
                 status_msg += f"\n{select_prompt}"
             if parsed_coords:
@@ -927,7 +947,8 @@ def create_bridge_tab():
                    gr.Accordion(open=True),          # auto-open Step 2
                    gr.Textbox(value=status_msg),
                    gr.Dropdown(choices=family_choices,
-                               value=family_choices[0] if family_choices else None),
+                               value=family_choices[0] if family_choices else None,
+                               label=f"{family_label} — select one (type to filter)"),
                    gr.Radio(choices=level_choices, value=level_default),
                    gr.Number(value=x_val),
                    gr.Number(value=y_val),
@@ -939,6 +960,9 @@ def create_bridge_tab():
                            if is_multi else "",
                    ),
                    quantity,                          # quantity_state
+                   {"label": family_label,            # intent_meta
+                    "categories": queried_categories,
+                    "interaction_type": itype},
                    gr.Button(interactive=True),
                    gr.Row(visible=need_host), None,
                    gr.Textbox(visible=False),
@@ -967,7 +991,7 @@ def create_bridge_tab():
         return "No element selected — try again", None
 
     def on_confirm_selection(query, family, level, x, y,
-                             coords_text_val, quantity, host_id):
+                             coords_text_val, quantity, intent_meta_val, host_id):
         """Generator — uses SSE streaming for real-time thinking + timer.
 
         Yields 7 values: selections, code, last_code, thinking,
@@ -978,7 +1002,7 @@ def create_bridge_tab():
         logger.info(f"[on_confirm] query={query!r} family={family!r} "
                     f"level={level!r} x={x} y={y} "
                     f"coords_text={coords_text_val!r} quantity={quantity} "
-                    f"host_id={host_id}")
+                    f"intent_meta={intent_meta_val} host_id={host_id}")
 
         def _el():
             return f"{_time.monotonic() - t0:.1f}s"
@@ -1024,6 +1048,13 @@ def create_bridge_tab():
 
             if host_id:
                 selections["host_element_id"] = host_id
+
+            # Pass classification metadata to code generator
+            meta = intent_meta_val if isinstance(intent_meta_val, dict) else {}
+            if meta.get("categories"):
+                selections["_revit_categories"] = meta["categories"]
+            if meta.get("label"):
+                selections["_classification_label"] = meta["label"]
 
             logger.info(f"[on_confirm] selections={selections}")
 
@@ -1369,6 +1400,7 @@ def create_bridge_tab():
                  selection_status, family_radio, level_radio,
                  x_input, y_input,
                  single_coord_row, multi_coord_row, coords_text, quantity_state,
+                 intent_meta,
                  confirm_selection_btn,
                  host_row, host_element_id,
                  security_status, rag_info,
@@ -1400,7 +1432,7 @@ def create_bridge_tab():
     confirm_selection_btn.click(
         on_confirm_selection,
         inputs=[current_query, family_radio, level_radio, x_input, y_input,
-                coords_text, quantity_state, host_element_id],
+                coords_text, quantity_state, intent_meta, host_element_id],
         outputs=[current_selections, code_display, last_code, thinking_display,
                  security_status, rag_info, step_display],
     )
