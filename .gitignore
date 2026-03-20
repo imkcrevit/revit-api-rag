@@ -232,3 +232,6 @@ image.png
 # React frontend
 frontend/node_modules/
 frontend/dist/
+
+# Homepage (separate repo)
+h/
