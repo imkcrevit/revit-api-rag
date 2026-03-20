@@ -1,5 +1,5 @@
 """
-入口 — FastAPI + Gradio 同进程，单端口 7860
+入口 — FastAPI + React(/) + Gradio(/app) 同进程，单端口 7860
 
 Usage:
     python -m server.main
@@ -64,14 +64,46 @@ def create_app() -> FastAPI:
     async def health():
         return {"status": "ok"}
 
-    # Mount Gradio at root
+    # Mount React SPA at / (primary frontend)
+    import os
+    from pathlib import Path
+    react_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    if react_dist.is_dir():
+        from fastapi.staticfiles import StaticFiles
+        from fastapi.responses import FileResponse
+
+        # Serve static assets (JS/CSS) directly — must be before SPA catch-all
+        fastapi_app.mount(
+            "/assets",
+            StaticFiles(directory=str(react_dist / "assets")),
+            name="react-assets",
+        )
+
+        @fastapi_app.get("/")
+        async def serve_react_root():
+            return FileResponse(react_dist / "index.html")
+
+        @fastapi_app.get("/{rest:path}")
+        async def serve_react_spa(rest: str = ""):
+            # Serve static files if they exist, otherwise SPA fallback
+            file_path = react_dist / rest
+            if rest and file_path.is_file():
+                return FileResponse(file_path)
+            return FileResponse(react_dist / "index.html")
+
+        print(f"React frontend mounted at / (from {react_dist})")
+    else:
+        print(f"React frontend not found at {react_dist} — / not available")
+
+    # Mount Gradio at /app (backup — kept for comparison during migration)
     try:
         import gradio as gr
         from server.frontend.gradio_app import create_gradio_app
         gradio_app = create_gradio_app()
-        fastapi_app = gr.mount_gradio_app(fastapi_app, gradio_app, path="/")
+        fastapi_app = gr.mount_gradio_app(fastapi_app, gradio_app, path="/app")
+        print("Gradio frontend mounted at /app")
     except ImportError:
-        print("Gradio not installed — running API-only mode")
+        print("Gradio not installed — /app not available")
 
     return fastapi_app
 

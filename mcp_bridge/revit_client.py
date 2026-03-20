@@ -37,6 +37,7 @@ class RevitClient:
         self.connect_timeout = connect_timeout
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._lock = asyncio.Lock()  # prevent concurrent command interleaving
 
     # -- connection lifecycle --------------------------------------------------
 
@@ -67,49 +68,75 @@ class RevitClient:
         return f"{int(time.time() * 1000)}{random.randint(100000, 999999)}"
 
     async def send_command(self, method: str, params: dict | None = None) -> RevitResponse:
-        """Send a JSON-RPC 2.0 command and wait for the response."""
-        if not self.connected:
-            await self.connect()
+        """Send a JSON-RPC 2.0 command and wait for the response.
 
-        request_id = self._make_id()
-        payload = {
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params or {},
-            "id": request_id,
-        }
+        Uses a lock to prevent concurrent commands from interleaving on the
+        same TCP connection.  Validates that the response id matches the
+        request id — stale responses from previous commands (e.g. a late
+        health-check reply) are discarded automatically.
+        """
+        import logging
+        _log = logging.getLogger("mcp_bridge.revit_client")
 
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self._writer.write(data)
-        await self._writer.drain()
+        async with self._lock:
+            if not self.connected:
+                await self.connect()
 
-        # Read response — accumulate until valid JSON.
-        # Plugin sends raw UTF-8 JSON with no delimiter, reads up to 8192 bytes.
-        buf = b""
-        try:
+            request_id = self._make_id()
+            payload = {
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": params or {},
+                "id": request_id,
+            }
+
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self._writer.write(data)
+            await self._writer.drain()
+
+            # Read response — accumulate until valid JSON.
+            # Plugin sends raw UTF-8 JSON with no delimiter, reads up to 8192 bytes.
+            # Loop to skip stale responses whose id doesn't match request_id.
+            deadline = time.monotonic() + self.timeout
             while True:
-                chunk = await asyncio.wait_for(
-                    self._reader.read(8192),
-                    timeout=self.timeout,
-                )
-                if not chunk:
-                    raise ConnectionError("Revit plugin closed connection")
-                buf += chunk
+                buf = b""
                 try:
-                    resp = json.loads(buf.decode("utf-8"))
-                    break
-                except json.JSONDecodeError:
-                    continue  # incomplete, keep reading
-        except asyncio.TimeoutError:
-            return RevitResponse(success=False, error=f"Timeout after {self.timeout}s")
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            return RevitResponse(success=False, error=f"Timeout after {self.timeout}s")
+                        chunk = await asyncio.wait_for(
+                            self._reader.read(8192),
+                            timeout=remaining,
+                        )
+                        if not chunk:
+                            raise ConnectionError("Revit plugin closed connection")
+                        buf += chunk
+                        try:
+                            resp = json.loads(buf.decode("utf-8"))
+                            break
+                        except json.JSONDecodeError:
+                            continue  # incomplete, keep reading
+                except asyncio.TimeoutError:
+                    return RevitResponse(success=False, error=f"Timeout after {self.timeout}s")
 
-        # Parse JSON-RPC response
-        if "error" in resp and resp["error"]:
-            err = resp["error"]
-            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            return RevitResponse(success=False, error=msg, raw=json.dumps(resp))
+                # Validate response id matches our request
+                resp_id = resp.get("id")
+                if resp_id != request_id:
+                    _log.warning(
+                        f"[send_command] Discarding stale response: "
+                        f"expected id={request_id}, got id={resp_id} "
+                        f"(likely from previous '{resp.get('result', {}).get('message', '?') if isinstance(resp.get('result'), dict) else '?'}' call)"
+                    )
+                    continue  # discard and read the next response
 
-        return RevitResponse(success=True, result=resp.get("result"), raw=json.dumps(resp))
+                # Parse JSON-RPC response
+                if "error" in resp and resp["error"]:
+                    err = resp["error"]
+                    msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                    return RevitResponse(success=False, error=msg, raw=json.dumps(resp))
+
+                return RevitResponse(success=True, result=resp.get("result"), raw=json.dumps(resp))
 
     # -- high-level: send code -------------------------------------------------
 
@@ -134,23 +161,41 @@ class RevitClient:
 
         # Unwrap the plugin's nested response format
         _log.info(f"[send_code] resp.success={resp.success} result_type={type(resp.result).__name__}")
+        _log.info(f"[send_code] RAW resp.result = {json.dumps(resp.result, ensure_ascii=False, default=str)[:500]}")
+
         if resp.success and isinstance(resp.result, dict):
             inner = resp.result
             if "success" in inner:
-                inner_result = inner.get("result", "")
-                _log.info(f"[send_code] inner.success={inner.get('success')} inner_result_type={type(inner_result).__name__} len={len(str(inner_result)[:100])}")
+                inner_result_raw = inner.get("result", "")
+                _log.info(f"[send_code] inner.success={inner.get('success')} inner_result_raw type={type(inner_result_raw).__name__} value={str(inner_result_raw)[:300]}")
                 if not inner.get("success"):
                     _log.error(f"[send_code] EXECUTION FAILED — errorMessage: {inner.get('errorMessage', '(none)')}")
+
+                inner_result = inner_result_raw
+
                 # The result field is often a JSON string — parse it
                 if isinstance(inner_result, str) and inner_result.strip():
                     try:
-                        inner_result = json.loads(inner_result)
-                        _log.info(f"[send_code] parsed inner_result: type={type(inner_result).__name__} len={len(inner_result) if isinstance(inner_result, list) else 'N/A'}")
+                        parsed = json.loads(inner_result)
+                        _log.info(f"[send_code] parsed JSON string → type={type(parsed).__name__}")
+                        # json.loads("null") → None, keep original string in that case
+                        inner_result = parsed if parsed is not None else inner_result
                     except (json.JSONDecodeError, ValueError) as e:
-                        _log.warning(f"[send_code] JSON parse failed: {e}")
+                        _log.warning(f"[send_code] JSON parse failed: {e}, keeping raw string")
+                        inner_result = {"raw_output": inner_result}
+
+                # If result is truly empty/None, provide minimal feedback
+                is_success = bool(inner.get("success", False))
+                if is_success and inner_result is None:
+                    inner_result = {"Status": "Success", "Message": "Code executed (no return statement in generated code)"}
+                    _log.warning("[send_code] C# code returned null — generated code likely missing 'return' statement")
+                elif is_success and inner_result == "":
+                    inner_result = {"Status": "Success", "Message": "Code executed (empty return value)"}
+                    _log.warning("[send_code] C# code returned empty string")
+
                 error_msg = inner.get("errorMessage") or None
                 return RevitResponse(
-                    success=bool(inner.get("success", False)),
+                    success=is_success,
                     result=inner_result,
                     error=error_msg if error_msg else resp.error,
                     raw=resp.raw,

@@ -4,7 +4,7 @@ OpenAI Embedding Provider — 兼容 OpenRouter
 OpenRouter 使用 OpenAI 兼容格式，只需设置 base_url
 """
 from .base import BaseEmbedding
-from config import get_api_key
+from config import get_api_key, get_proxy_url
 
 
 class OpenAIEmbedding(BaseEmbedding):
@@ -12,11 +12,18 @@ class OpenAIEmbedding(BaseEmbedding):
     def __init__(self, model: str = "openai/text-embedding-3-large", dimension: int = 3072,
                  api_key_env: str = "OPENROUTER_API_KEY", base_url: str = "https://openrouter.ai/api/v1"):
         from openai import OpenAI
+        import httpx
+
         self._model = model
         self._dimension = dimension
+
+        proxy = get_proxy_url()
+        http_client = httpx.Client(proxy=proxy) if proxy else None
+
         self._client = OpenAI(
             api_key=get_api_key(api_key_env),
             base_url=base_url,
+            http_client=http_client,
         )
 
     @property

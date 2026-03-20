@@ -46,3 +46,20 @@ def get_config() -> dict:
     if _config is None:
         _config = load_config()
     return _config
+
+
+def get_proxy_url() -> str | None:
+    """Return proxy URL if enabled in config or env, else None."""
+    # Env vars take priority
+    from_env = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or os.getenv("https_proxy") or os.getenv("http_proxy")
+    if from_env:
+        return from_env
+    # Fall back to config.yaml
+    try:
+        cfg = get_config()
+        proxy_cfg = cfg.get("proxy", {})
+        if proxy_cfg.get("enabled"):
+            return proxy_cfg.get("https") or proxy_cfg.get("http")
+    except FileNotFoundError:
+        pass
+    return None

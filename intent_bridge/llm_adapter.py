@@ -37,6 +37,25 @@ def _load_bridge_config() -> dict:
     return {}
 
 
+def _load_global_proxy() -> str | None:
+    """Load proxy from config/config.yaml if enabled, or from env."""
+    try:
+        from config import get_proxy_url
+        return get_proxy_url()
+    except ImportError:
+        pass
+    # Fallback: read config/config.yaml directly
+    root = os.path.dirname(os.path.dirname(__file__))
+    cfg_path = os.path.join(root, "config", "config.yaml")
+    if os.path.exists(cfg_path):
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        proxy_cfg = cfg.get("proxy", {})
+        if proxy_cfg.get("enabled"):
+            return proxy_cfg.get("https") or proxy_cfg.get("http")
+    return None
+
+
 def _get_api_key() -> str:
     return os.getenv("OPENROUTER_API_KEY", "")
 
@@ -78,8 +97,12 @@ class LLMAdapter:
         else:
             logger.info("API key loaded: %s...%s (len=%d)", self._api_key[:8], self._api_key[-4:], len(self._api_key))
 
-        # Proxy (from env: HTTPS_PROXY or HTTP_PROXY)
-        self._proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or os.getenv("https_proxy") or os.getenv("http_proxy") or None
+        # Proxy: env var > config/config.yaml proxy setting
+        self._proxy = (
+            os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            or os.getenv("https_proxy") or os.getenv("http_proxy")
+            or _load_global_proxy()
+        )
         if self._proxy:
             logger.info("Using proxy: %s", self._proxy)
 

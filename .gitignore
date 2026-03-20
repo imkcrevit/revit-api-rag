@@ -224,3 +224,11 @@ scratch/
 
 # Local deployment notes
 DEPLOY_NOTES.md
+
+# Demo script & screenshots
+demo_script.md
+image.png
+
+# React frontend
+frontend/node_modules/
+frontend/dist/

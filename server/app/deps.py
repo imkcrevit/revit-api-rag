@@ -99,10 +99,17 @@ def create_llm_for_session(session) -> LLMClient:
     # Resolve API key: session override > env var
     api_key = session.api_key or os.getenv("OPENROUTER_API_KEY", "")
 
+    # Proxy from global config
+    proxy_cfg = config.get("proxy", {})
+    proxy_url = None
+    if proxy_cfg.get("enabled", False):
+        proxy_url = proxy_cfg.get("https") or proxy_cfg.get("http")
+
     return LLMClient(
         base_url=base_url,
         api_key=api_key,
         model=model,
         temperature=llm_cfg.get("temperature", 0.3),
         max_tokens=llm_cfg.get("max_tokens", 4096),
+        proxy=proxy_url,
     )
