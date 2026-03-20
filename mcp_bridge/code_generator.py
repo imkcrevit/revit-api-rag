@@ -175,6 +175,9 @@ class CodeGenerator:
         lines = [
             "\n## User Selections — MANDATORY: use these exact values",
         ]
+        # Merge orchestrator answers into effective selections for lookup
+        orch = selections.get("_orchestrator_answers", {})
+
         if "family_type" in selections:
             ft = selections["family_type"]
             lines.append(f"- Family Type Name: \"{ft}\"")
@@ -189,6 +192,14 @@ class CodeGenerator:
         if "position" in selections:
             pos = selections["position"]
             lines.append(f"- Position: ({pos.get('x', 0)}mm, {pos.get('y', 0)}mm)")
+
+        # Include ALL orchestrator answers as explicit context for the LLM
+        if orch:
+            lines.append("")
+            lines.append("## Orchestrator Answers — user-provided values, use exactly as given:")
+            for slot, value in orch.items():
+                lines.append(f"- {slot}: {value}")
+
         lines.append(
             "\nCRITICAL: Do NOT use `.First()` or `.FirstOrDefault()` without a name filter. "
             "Always filter by the exact name provided above.\n"
