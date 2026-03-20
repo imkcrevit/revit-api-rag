@@ -202,7 +202,9 @@ class CodeGenerator:
 
         lines.append(
             "\nCRITICAL: Do NOT use `.First()` or `.FirstOrDefault()` without a name filter. "
-            "Always filter by the exact name provided above.\n"
+            "Always filter by the exact name provided above."
+            "\nNOTE: Type/family values may be in 'FamilyName: TypeName' format. "
+            "Use FamilyName to filter `fs.FamilyName` and TypeName to filter `fs.Name`.\n"
         )
         return "\n".join(lines)
 

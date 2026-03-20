@@ -772,6 +772,167 @@ import uuid as _uuid
 _orch_log = _logging.getLogger("mcp_bridge.orchestrate")
 _orch_sessions: dict[str, tuple] = {}  # session_id → (orchestrator, session_state)
 
+# ── Enrichment config (loaded from YAML) ──
+def _load_enrichment_config() -> dict:
+    """Load enrichment rules from intent_bridge/schemas/enrichment_rules.yaml."""
+    import yaml
+    from pathlib import Path
+    config_path = (Path(__file__).resolve().parent.parent
+                   / "intent_bridge" / "schemas" / "enrichment_rules.yaml")
+    if config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+_enrichment_config: dict | None = None
+
+def _get_enrichment_config() -> dict:
+    global _enrichment_config
+    if _enrichment_config is None:
+        _enrichment_config = _load_enrichment_config()
+    return _enrichment_config
+
+
+def _infer_enrich(slot: str, q_text: str, category_aliases: dict) -> str:
+    """Fallback: infer enrichment type from slot name + question text.
+
+    Uses lightweight rules from enrichment_rules.yaml inference section.
+    Returns enrich string like 'level', 'host_pick', 'family_type:window', or 'none'.
+    """
+    sl = slot.lower()
+    qt = q_text.lower()
+    combined = f"{sl} {qt}"
+
+    # Host/element pick: slot name contains host, pick, 宿主
+    # (do NOT match on question text alone — "选择" is too common)
+    if any(kw in sl for kw in ("host", "pick", "宿主")):
+        return "host_pick"
+    # Question explicitly asks for ElementId
+    if "elementid" in qt:
+        return "host_pick"
+
+    # Level: slot contains level, 标高, 楼层
+    if any(kw in sl for kw in ("level", "标高", "楼层")):
+        return "level"
+
+    # Family type: slot contains type, family, symbol, 族, 类型
+    # BUT exclude boolean-like slots (structural_type where question asks yes/no)
+    is_type_slot = any(kw in sl for kw in ("type", "family", "symbol", "族", "类型"))
+    if is_type_slot:
+        # Check if question looks boolean (yes/no, 是/否, structural/non-structural)
+        bool_indicators = ("是否", "yes/no", "true/false", "是/否",
+                           "structural/", "non-structural", "/否")
+        if any(bi in qt for bi in bool_indicators):
+            return "none"
+
+        # Infer category from slot name + question text
+        for alias in category_aliases:
+            if alias in combined:
+                return f"family_type:{alias}"
+
+    return "none"
+
+
+async def _enrich_orch_questions(
+    questions: list[dict], intent: dict | None
+) -> list[dict]:
+    """Enrich orchestrator questions with real Revit data.
+
+    Uses the LLM-tagged `enrich` field on each question to decide:
+    - "family_type:<category>" → query Revit family types
+    - "level"                  → query Revit levels
+    - "host_pick"              → mark for Revit interactive pick
+    - "none" / missing         → skip
+    """
+    try:
+        client = await _get_revit_client()
+    except (ConnectionError, OSError):
+        _orch_log.info("[enrich] Revit not connected, skipping enrichment")
+        return questions
+
+    config = _get_enrichment_config()
+    category_aliases = config.get("category_aliases", {})
+    fmt = config.get("family_type_format", "{FamilyName}: {TypeName}")
+    executor = RevitQueryExecutor(client)
+
+    for q in questions:
+        enrich = q.get("enrich", "").strip().lower()
+        slot = q.get("slot", "")
+        q_text = q.get("text", "").lower()
+
+        # ── Fallback: if LLM didn't tag enrich, infer from slot name + question text ──
+        if not enrich or enrich == "none":
+            enrich = _infer_enrich(slot, q_text, category_aliases)
+            if enrich != "none":
+                _orch_log.info(f"[enrich] slot={slot} → inferred enrich='{enrich}' (LLM didn't tag)")
+
+        if enrich == "none":
+            _orch_log.info(f"[enrich] slot={slot} → skipped (no enrichment needed)")
+            continue
+
+        # ── host_pick: mark for Revit interactive selection ──
+        if enrich == "host_pick":
+            q["_pick_mode"] = True
+            q["allow_custom"] = True
+            _orch_log.info(f"[enrich] slot={slot} → Revit pick mode")
+            continue
+
+        # ── level: query real Revit levels ──
+        if enrich == "level":
+            try:
+                levels = await executor.get_levels()
+                if levels:
+                    q["options"] = [
+                        f"{lv.get('Name', '?')} ({lv.get('ElevationMm', 0)}mm)"
+                        for lv in levels
+                    ]
+                    q["values"] = [lv.get("Name", "") for lv in levels]
+                    q["allow_custom"] = True
+                    _orch_log.info(f"[enrich] slot={slot} → {len(levels)} levels from Revit")
+            except Exception as e:
+                _orch_log.warning(f"[enrich] level query failed for slot={slot}: {e}")
+            continue
+
+        # ── family_type:<category>: query real Revit family types ──
+        if enrich.startswith("family_type:"):
+            alias = enrich.split(":", 1)[1].strip()
+            category = category_aliases.get(alias)
+            if not category:
+                # Try direct OST_ value
+                category = alias if alias.startswith("OST_") else None
+            if not category:
+                _orch_log.warning(
+                    f"[enrich] slot={slot} unknown category alias '{alias}', "
+                    f"known: {list(category_aliases.keys())}")
+                continue
+
+            try:
+                types = await executor.get_family_types([category])
+                if types:
+                    options = []
+                    values = []
+                    for t in types:
+                        fname = t.get("FamilyName", t.get("familyName", ""))
+                        tname = (t.get("TypeName") or t.get("typeName")
+                                 or t.get("Name") or t.get("name", ""))
+                        label = fmt.format(FamilyName=fname, TypeName=tname)
+                        options.append(label)
+                        values.append(label)
+                    q["options"] = options
+                    q["values"] = values
+                    q["allow_custom"] = True
+                    _orch_log.info(
+                        f"[enrich] slot={slot} category={category} "
+                        f"→ {len(types)} types from Revit"
+                    )
+            except Exception as e:
+                _orch_log.warning(f"[enrich] family_types query failed for slot={slot}: {e}")
+            continue
+
+        _orch_log.warning(f"[enrich] slot={slot} unknown enrich type: '{enrich}'")
+
+    return questions
+
 
 @bridge_router.post("/orchestrate")
 async def orchestrate(req: OrchestrateRequest):
@@ -822,6 +983,16 @@ async def orchestrate(req: OrchestrateRequest):
     action_plan_data = []
     for step in session.action_plan:
         action_plan_data.append(step.model_dump())
+
+    # ── Enrich questions with real Revit data ──
+    # Replace LLM-fabricated options with actual Revit family types / levels
+    if all_questions:
+        _orch_log.info(f"[orchestrate] enriching {len(all_questions)} questions, "
+                       f"slots: {[q.get('slot') for q in all_questions]}")
+        try:
+            all_questions = await _enrich_orch_questions(all_questions, resp.intent)
+        except Exception as e:
+            _orch_log.warning(f"[orchestrate] enrich failed (non-fatal): {e}")
 
     result = {
         "session_id": sid,

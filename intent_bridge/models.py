@@ -99,6 +99,7 @@ class QuestionItem(BaseModel):
     options: list[str] = Field(default_factory=list)     # display labels
     values: list[Any] = Field(default_factory=list)       # actual values to fill
     allow_custom: bool = False                             # allow free-text input
+    enrich: str = "none"                                   # enrichment tag: none|level|host_pick|family_type:<cat>
 
 
 class ActionStep(BaseModel):

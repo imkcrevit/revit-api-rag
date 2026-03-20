@@ -313,6 +313,3 @@ revit-api-rag/
 | Reranking | Cohere rerank-v3.5 |
 | Revit Plugin | C# / .NET 8 / Roslyn |
 | Communication | TCP JSON-RPC 2.0 / SSE |
-docker-compose logs --tail=20 homepage
-Attaching to graptolite-homepage
-

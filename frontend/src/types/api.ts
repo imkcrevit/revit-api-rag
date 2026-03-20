@@ -16,6 +16,7 @@ export interface OrchestratorQuestion {
   options: string[]
   values?: string[]
   allow_custom?: boolean
+  _pick_mode?: boolean
 }
 
 export interface OrchestrateResponse {

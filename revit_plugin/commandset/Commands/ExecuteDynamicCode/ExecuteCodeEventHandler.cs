@@ -67,7 +67,10 @@ namespace RevitMCPCommandSet.Commands.ExecuteDynamicCode
             catch (Exception ex)
             {
                 ResultInfo.Success = false;
-                ResultInfo.ErrorMessage = $"执行失败: {ex.Message}";
+                var innerMsg = ex.InnerException != null
+                    ? $"{ex.InnerException.GetType().Name}: {ex.InnerException.Message}"
+                    : ex.Message;
+                ResultInfo.ErrorMessage = $"执行失败: {innerMsg}";
             }
             finally
             {

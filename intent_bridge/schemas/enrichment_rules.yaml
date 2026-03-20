@@ -1,0 +1,47 @@
+# Enrichment Rules — maps LLM-tagged `enrich` field to Revit data sources.
+#
+# The orchestrator LLM tags each question with an `enrich` field.
+# This file defines how each enrich type resolves to a Revit query.
+#
+# Supported enrich types:
+#   family_type:<CATEGORY>  — query Revit family types for the given BuiltInCategory
+#   level                   — query all Revit levels
+#   host_pick               — trigger Revit interactive element selection
+#   none                    — no enrichment (free text, boolean, enum, coordinates, etc.)
+
+# ── Category aliases ──
+# LLM may use short names; map them to Revit BuiltInCategory enum values.
+category_aliases:
+  structural_column:  OST_StructuralColumns
+  column:             OST_StructuralColumns
+  beam:               OST_StructuralFraming
+  brace:              OST_StructuralFraming
+  wall:               OST_Walls
+  floor:              OST_Floors
+  slab:               OST_Floors
+  ceiling:            OST_Ceilings
+  roof:               OST_Roofs
+  door:               OST_Doors
+  window:             OST_Windows
+  furniture:          OST_Furniture
+  railing:            OST_StairsRailing
+  stair:              OST_Stairs
+  curtain_panel:      OST_CurtainWallPanels
+  pipe:               OST_PipeCurves
+  duct:               OST_DuctCurves
+  generic:            OST_GenericModel
+
+# ── Display format ──
+# How enriched family type options are displayed to the user.
+family_type_format: "{FamilyName}: {TypeName}"
+
+# ── Fallback inference ──
+# When LLM does not tag `enrich`, the system infers from slot name + question text.
+# Priority: LLM tag > fallback inference.
+#
+# Inference rules (built-in, uses category_aliases above):
+#   1. Slot contains "host/pick/宿主" or question mentions "select/选择/ElementId" → host_pick
+#   2. Slot contains "level/标高/楼层" → level
+#   3. Slot contains "type/family/symbol/族/类型" AND question is NOT boolean → family_type:<matched_alias>
+#      Category matched by checking slot+question text against category_aliases keys
+#   4. Otherwise → none

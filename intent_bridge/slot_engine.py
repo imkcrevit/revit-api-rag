@@ -362,11 +362,18 @@ You MUST NOT silently pick "the first available" or "default" type.
 XYZ coordinates, start/end points, placement locations are NEVER optional.
 You MUST NOT invent coordinates. Always ask the user to provide them.
 
-### Rule 6: Question options format
+### Rule 6: Question options format and `enrich` tagging
 Each question MUST have:
 - 3-6 concrete options with details (dimensions, specs)
 - Last option: "其他 (自定义)" (Chinese) or "Other (custom)" (English)
 - Options in the user's language
+- An `enrich` field indicating what Revit data should replace these placeholder options:
+  - `"family_type:<category>"` — replace with real Revit family types (category = column, beam, wall, floor, window, door, ceiling, roof, furniture, etc.)
+  - `"level"` — replace with real Revit levels
+  - `"host_pick"` — this parameter requires the user to select an element in Revit interactively
+  - `"none"` — no enrichment needed (for coordinates, booleans, enums, free text, dimensions, etc.)
+
+  Examples: `"enrich": "family_type:column"`, `"enrich": "level"`, `"enrich": "host_pick"`, `"enrich": "none"`
 
 ### Rule 7: Question ordering priority
 a) Ambiguity disambiguation (if any)
@@ -396,19 +403,22 @@ Example output for "创建两个结构柱" (quantity=2):
       "slot": "column_type",
       "text": "请选择结构柱族类型：",
       "options": ["矩形柱 300×300mm", "矩形柱 300×450mm", "矩形柱 450×450mm", "圆柱 D300mm", "其他 (自定义)"],
-      "values": ["300x300", "300x450", "450x450", "D300", "custom"]
+      "values": ["300x300", "300x450", "450x450", "D300", "custom"],
+      "enrich": "family_type:column"
     }},
     {{
       "slot": "level",
       "text": "放置在哪个标高？",
       "options": ["标高 1 (0mm)", "标高 2 (3000mm)", "标高 3 (6000mm)", "其他 (自定义)"],
-      "values": ["Level 1", "Level 2", "Level 3", "custom"]
+      "values": ["Level 1", "Level 2", "Level 3", "custom"],
+      "enrich": "level"
     }},
     {{
       "slot": "positions_array",
       "text": "请输入 2 个柱子的放置坐标（每个柱子一组 XYZ）：\\n柱 1: (x, y, z)\\n柱 2: (x, y, z)\\n格式示例: 1000,0,0; 5000,0,0",
       "options": ["其他 (自定义)"],
-      "values": ["custom"]
+      "values": ["custom"],
+      "enrich": "none"
     }}
   ]
 }}
@@ -418,7 +428,24 @@ For English input with quantity=3:
   "slot": "positions_array",
   "text": "Enter XYZ coordinates for 3 columns:\\nColumn 1: (x,y,z)\\nColumn 2: (x,y,z)\\nColumn 3: (x,y,z)\\nFormat: 1000,0,0; 5000,0,0; 9000,0,0",
   "options": ["Other (custom)"],
-  "values": ["custom"]
+  "values": ["custom"],
+  "enrich": "none"
+}}
+
+Example for "在墙上创建窗户" (window on host wall):
+{{
+  "slot": "host_wall",
+  "text": "请在 Revit 中选择宿主墙体：",
+  "options": ["在 Revit 中选择"],
+  "values": ["pick"],
+  "enrich": "host_pick"
+}},
+{{
+  "slot": "window_type",
+  "text": "请选择窗户类型：",
+  "options": ["固定窗 600×900mm", "推拉窗 1200×1500mm", "其他 (自定义)"],
+  "values": ["600x900", "1200x1500", "custom"],
+  "enrich": "family_type:window"
 }}
 
 ### Rule 9: MULTI-ACTION DECOMPOSITION
@@ -447,7 +474,8 @@ For SINGLE action:
       "slot": "parameter_name",
       "text": "question in user's language",
       "options": ["Option A", "Option B", "其他 (自定义)"],
-      "values": ["value_a", "value_b", "custom"]
+      "values": ["value_a", "value_b", "custom"],
+      "enrich": "none|level|host_pick|family_type:<category>"
     }}
   ],
   "summary": "action description (ONLY when questions is empty)"
