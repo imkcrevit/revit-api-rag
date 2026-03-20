@@ -1,3 +1,12 @@
+## Stage 1: Build React frontend
+FROM node:20-alpine AS frontend-build
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ .
+RUN npm run build
+
+## Stage 2: Python server
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -17,6 +26,9 @@ COPY pipeline/ pipeline/
 COPY server/ server/
 COPY mcp_bridge/ mcp_bridge/
 COPY intent_bridge/ intent_bridge/
+
+# Copy built React frontend
+COPY --from=frontend-build /build/dist/ frontend/dist/
 
 # Copy data (ChromaDB + SQLite)
 # For VM deployment: prefer volume mount (-v ./data:/app/data) instead
