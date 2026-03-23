@@ -99,7 +99,7 @@ def _build_sdk_md(sdk_items: list[dict]) -> str:
     parts = []
     for si in sdk_items:
         proj = si.get("project", "?")
-        content = si.get("content", "")[:400]
+        content = si.get("content", "")[:2000]
         raw_apis = si.get("mentioned_apis", "")
         apis = raw_apis[:200] if isinstance(raw_apis, str) else ", ".join(raw_apis[:5])
         parts.append(f"**{proj}** (APIs: {apis})\n```csharp\n{content}\n```\n")
@@ -268,9 +268,9 @@ def create_api_explorer_tab():
         if syntax:
             detail_parts.append(syntax)
         if params:
-            detail_parts.append(f"\n// Parameters:\n// {params[:500]}")
+            detail_parts.append(f"\n// Parameters:\n// {params}")
         if remark:
-            detail_parts.append(f"\n// Remark:\n// {remark[:300]}")
+            detail_parts.append(f"\n// Remark:\n// {remark}")
 
         detail_text = "\n".join(detail_parts) if detail_parts else f"// {name}"
 

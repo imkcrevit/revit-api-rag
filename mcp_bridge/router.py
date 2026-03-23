@@ -224,7 +224,7 @@ async def api_search(req: ApiSearchRequest):
     for item in results.sdk_items:
         sdk_items.append({
             "project": item.project,
-            "content": item.content[:500],
+            "content": item.content[:3000],
             "mentioned_apis": item.mentioned_apis,
             "distance": round(item.distance, 4),
         })
@@ -245,32 +245,8 @@ async def api_codegen(req: ApiCodeGenRequest):
     config = get_config()
     llm = create_llm_client(config)
 
-    system = f"""\
-You are a Revit 2026 API expert. Generate a short, runnable C# code example
-demonstrating the API member below.
-
-## Execution Context
-The code runs inside:
-```csharp
-public static object Execute(Document document, object[] parameters)
-{{
-    // YOUR CODE HERE
-}}
-```
-Auto-injected usings: System, System.Linq, System.Collections.Generic,
-Autodesk.Revit.DB, Autodesk.Revit.UI.
-
-## Rules
-- Output ONLY the method body (no class/namespace/using)
-- DO NOT create a Transaction (already wrapped)
-- Use `document` (not `doc` or `uidoc`)
-- Return a meaningful result object
-- Add step comments: `// Step 1: ...`
-- Use Revit internal units (feet)
-
-## API Reference
-{req.api_context}
-"""
+    from server.app.prompts.api_explorer import get_api_codegen_prompt
+    system = get_api_codegen_prompt(req.api_context)
     prompt = f"Generate a code example for: {req.api_name}"
     if req.user_hint:
         prompt += f"\nUser hint: {req.user_hint}"

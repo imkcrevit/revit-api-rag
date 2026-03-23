@@ -46,8 +46,8 @@ export default function ApiExplorerTab() {
   const detailText = selected ? [
     selected.full_id ? `// ${selected.full_id}` : '',
     selected.syntax || '',
-    selected.parameters ? `\n// Parameters:\n// ${selected.parameters.slice(0, 500)}` : '',
-    selected.remark ? `\n// Remark:\n// ${selected.remark.slice(0, 300)}` : '',
+    selected.parameters ? `\n// Parameters:\n// ${selected.parameters}` : '',
+    selected.remark ? `\n// Remark:\n// ${selected.remark}` : '',
   ].filter(Boolean).join('\n') : ''
 
   const generate = async () => {
@@ -168,7 +168,7 @@ export default function ApiExplorerTab() {
                 fontFamily: 'var(--mono)',
                 fontSize: 12,
                 overflowX: 'auto',
-              }}>{si.content.slice(0, 400)}</pre>
+              }}>{si.content}</pre>
             </div>
           ))}
         </Accordion>

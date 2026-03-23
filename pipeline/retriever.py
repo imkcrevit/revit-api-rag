@@ -150,15 +150,20 @@ Revit API class names, method names, properties, enums, and English technical ke
 
 Rules:
 1. Translate non-English terms to their EXACT Revit API equivalents
-2. Be EXHAUSTIVE — include parent classes, related interfaces, relevant enums
-3. Include the full namespace path (e.g. Autodesk.Revit.DB.Wall)
-4. Include method signatures, property names, and BuiltInParameter/BuiltInCategory enums
-5. Think about what a developer would search for when implementing this feature
-6. Output ONLY a JSON object, no explanation
+2. PRIORITY: Entity nouns (Wall, Room, Floor) are the PRIMARY search targets. \
+   Action verbs (Create, Delete, Move) are SECONDARY qualifiers.
+   For "i want get wall created api" → the KEY entity is "Wall", action is "Create" → Wall.Create
+3. Strip natural-language filler words (want, get, need, please, how to, etc.) — focus on API entities
+4. Be EXHAUSTIVE — include parent classes, related interfaces, relevant enums
+5. Include the full namespace path (e.g. Autodesk.Revit.DB.Wall)
+6. Include method signatures, property names, and BuiltInParameter/BuiltInCategory enums
+7. Think about what a developer would search for when implementing this feature
+8. Output ONLY a JSON object, no explanation
 
 Examples:
 - "结构柱" → {{"keywords": "structural column FamilyInstance BuiltInCategory.OST_StructuralColumns NewFamilyInstance StructuralType", "api_terms": ["FamilyInstance", "FamilySymbol", "NewFamilyInstance", "StructuralType", "BuiltInCategory.OST_StructuralColumns", "Level", "XYZ"]}}
 - "创建墙体" → {{"keywords": "create wall Wall.Create WallType Level Line CurveLoop", "api_terms": ["Wall", "Wall.Create", "WallType", "WallUtils", "CurtainGrid", "Line.CreateBound", "Level"]}}
+- "i want get wall created api" → {{"keywords": "Wall Wall.Create WallType Level Line", "api_terms": ["Wall", "Wall.Create", "WallType", "WallUtils", "Line.CreateBound", "Level", "FilteredElementCollector"]}}
 - "获取房间面积" → {{"keywords": "room area Room get_Area SpatialElement BoundarySegment", "api_terms": ["Room", "SpatialElement", "Area", "Room.Area", "Room.get_BoundarySegments", "SpatialElementBoundaryOptions"]}}
 - "修改墙类型" → {{"keywords": "change wall type WallType ChangeTypeId Element.ChangeTypeId GetTypeId", "api_terms": ["Element.ChangeTypeId", "Element.GetTypeId", "WallType", "FilteredElementCollector", "Wall"]}}
 - "Part" → {{"keywords": "Part PartUtils PartMaker CreateParts DivideParts PartType", "api_terms": ["Part", "PartUtils", "PartMaker", "PartUtils.CreateParts", "PartUtils.AreElementsValidForCreateParts"]}}
@@ -421,6 +426,110 @@ User query: {query}
         return items
 
     # ------------------------------------------------------------------
+    # Keyword normalization
+    # ------------------------------------------------------------------
+
+    # Common stop words that add noise to Revit API keyword search
+    _STOP_WORDS = frozenset({
+        "i", "me", "my", "we", "our", "you", "your", "he", "she", "it",
+        "the", "a", "an", "is", "am", "are", "was", "were", "be", "been",
+        "do", "does", "did", "have", "has", "had", "will", "would", "can",
+        "could", "should", "shall", "may", "might", "must",
+        "want", "need", "like", "know", "think", "use", "using", "used",
+        "get", "got", "getting", "let", "make", "making",
+        "to", "of", "in", "for", "on", "at", "by", "with", "from",
+        "about", "into", "through", "after", "before", "between",
+        "and", "or", "but", "not", "no", "if", "then", "so", "than",
+        "how", "what", "which", "who", "where", "when", "why",
+        "all", "any", "some", "this", "that", "these", "those",
+        "api", "apis", "revit", "method", "function", "class",
+        "please", "help", "show", "find", "look", "looking", "search",
+    })
+
+    # Verb → base form mapping for common Revit-relevant verbs
+    _VERB_STEMS = {
+        "creates": "create", "created": "create", "creating": "create",
+        "deletes": "delete", "deleted": "delete", "deleting": "delete",
+        "moves": "move", "moved": "move", "moving": "move",
+        "copies": "copy", "copied": "copy", "copying": "copy",
+        "modifies": "modify", "modified": "modify", "modifying": "modify",
+        "changes": "change", "changed": "change", "changing": "change",
+        "sets": "set", "setting": "set",
+        "gets": "get", "getting": "get",  # "get" itself is a stop word but stem kept for compounds
+        "adds": "add", "added": "add", "adding": "add",
+        "removes": "remove", "removed": "remove", "removing": "remove",
+        "updates": "update", "updated": "update", "updating": "update",
+        "opens": "open", "opened": "open", "opening": "open",
+        "closes": "close", "closed": "close", "closing": "close",
+        "selects": "select", "selected": "select", "selecting": "select",
+        "filters": "filter", "filtered": "filter", "filtering": "filter",
+        "places": "place", "placed": "place", "placing": "place",
+        "splits": "split", "splitting": "split",
+        "joins": "join", "joined": "join", "joining": "join",
+        "exports": "export", "exported": "export", "exporting": "export",
+        "imports": "import", "imported": "import", "importing": "import",
+        "rotates": "rotate", "rotated": "rotate", "rotating": "rotate",
+        "mirrors": "mirror", "mirrored": "mirror", "mirroring": "mirror",
+    }
+
+    # Tokens that are likely Revit entity nouns (boosted in scoring)
+    _ENTITY_NOUNS = frozenset({
+        "wall", "floor", "ceiling", "roof", "door", "window", "room",
+        "column", "beam", "pipe", "duct", "family", "type", "level",
+        "grid", "view", "sheet", "schedule", "parameter", "element",
+        "group", "assembly", "material", "phase", "workset", "link",
+        "rebar", "stair", "railing", "ramp", "curtain", "panel",
+        "mullion", "opening", "dimension", "tag", "annotation",
+        "detail", "section", "elevation", "plan", "legend",
+        "connector", "fitting", "system", "zone", "space", "area",
+        "part", "instance", "symbol", "category", "filter",
+        "transaction", "collector", "reference", "curve", "line",
+        "arc", "point", "solid", "face", "edge", "geometry",
+    })
+
+    def _normalize_search_tokens(self, query: str) -> list[tuple[str, float]]:
+        """Extract and weight search tokens from a natural-language query.
+
+        Returns list of (token, weight) tuples where:
+        - Entity nouns (wall, floor, etc.) get weight 2.0
+        - Stemmed action verbs (create, delete) get weight 1.0
+        - Other surviving tokens get weight 0.5
+        Stop words are removed, verbs are stemmed to base form.
+        """
+        raw_tokens = [t.strip().lower() for t in query.split() if len(t.strip()) >= 2]
+        weighted: list[tuple[str, float]] = []
+        seen = set()
+
+        for token in raw_tokens:
+            # Stem verbs first
+            stemmed = self._VERB_STEMS.get(token, token)
+
+            # Skip stop words (check both original and stemmed)
+            if token in self._STOP_WORDS and stemmed in self._STOP_WORDS:
+                continue
+
+            # If original was a stop word but stem is not (e.g. "gets"→"get" is
+            # stop, but we keep it only if it's also an action verb stem)
+            if stemmed in self._STOP_WORDS and token in self._STOP_WORDS:
+                continue
+
+            if stemmed in seen:
+                continue
+            seen.add(stemmed)
+
+            if stemmed in self._ENTITY_NOUNS:
+                weighted.append((stemmed, 2.0))
+            elif token in self._VERB_STEMS:
+                # It was a verb form → stemmed action verb
+                weighted.append((stemmed, 1.0))
+            else:
+                weighted.append((stemmed, 0.5))
+
+        # Sort by weight descending so most important tokens come first
+        weighted.sort(key=lambda x: x[1], reverse=True)
+        return weighted
+
+    # ------------------------------------------------------------------
     # Keyword search (SQLite direct)
     # ------------------------------------------------------------------
 
@@ -431,10 +540,14 @@ User query: {query}
         1. Narrow SQL: rows where ALL tokens match in name/full_id (precise)
         2. Broad SQL: rows where ANY token matches (recall), lower priority
         Python scoring ranks by match quality, penalizes long compound names.
+        Token weights from _normalize_search_tokens boost entity nouns over verbs.
         """
-        tokens = [t.strip() for t in query.lower().split() if len(t.strip()) >= 2]
-        if not tokens:
+        weighted_tokens = self._normalize_search_tokens(query)
+        if not weighted_tokens:
             return []
+
+        tokens = [t for t, _ in weighted_tokens]
+        token_weights = {t: w for t, w in weighted_tokens}
 
         conn = sqlite3.connect(self._api_db)
         conn.row_factory = sqlite3.Row
@@ -478,7 +591,7 @@ User query: {query}
 
         all_rows = list(narrow_rows) + broad_rows
 
-        # Score each row in Python
+        # Score each row in Python (token weights boost entity nouns)
         scored: list[tuple[float, dict]] = []
         for r in all_rows:
             name_l = (r["name"] or "").lower()
@@ -487,19 +600,20 @@ User query: {query}
             score = 0.0
 
             for token in tokens:
+                tw = token_weights.get(token, 0.5)  # token importance weight
                 # Name match is most valuable
                 if token in name_l:
-                    score += 5.0
+                    score += 5.0 * tw
                     # Bonus: token starts a name segment (Wall in "Wall.Create")
                     name_parts = re.split(r'[.\s(]', name_l)
                     if any(part == token or part.startswith(token) for part in name_parts):
-                        score += 3.0
+                        score += 3.0 * tw
                 # full_id match (less weight since full_id often contains namespace)
                 elif token in fid_l:
-                    score += 1.5
+                    score += 1.5 * tw
                 # summary match
                 if token in summary_l:
-                    score += 0.5
+                    score += 0.5 * tw
 
             if score <= 0:
                 continue
@@ -544,7 +658,8 @@ User query: {query}
                 parameters=r["parameters"] or "",
                 remark=r["remark"] or "",
             ))
-        self._log.info(f"[keyword_search] query={query!r} tokens={tokens} "
+        self._log.info(f"[keyword_search] query={query!r} "
+                       f"tokens={[(t, f'{w:.1f}') for t, w in weighted_tokens]} "
                        f"found={len(items)} "
                        f"top3={[(s[1]['name'][:50], f'{s[0]:.1f}') for s in scored[:3]]}")
         return items
