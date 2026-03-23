@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 128 128">
+<rect width="128" height="128" rx="28" fill="#111827"/>
+<path d="M64 18L108 92H20z" fill="none" stroke="#F5A623" stroke-width="1.2" stroke-linejoin="round" opacity="0.15"/>
+<path d="M64 30L98 86H30z" fill="none" stroke="#F5A623" stroke-width="1.5" stroke-linejoin="round" opacity="0.3"/>
+<path d="M64 42L88 80H40z" fill="none" stroke="#F5A623" stroke-width="1.8" stroke-linejoin="round" opacity="0.5"/>
+<path d="M64 54L78 74H50z" fill="#F5A623" fill-opacity="0.07" stroke="#F5A623" stroke-width="2" stroke-linejoin="round" opacity="0.8"/>
+<circle cx="64" cy="54" r="4.5" fill="#F5A623"/>
+<circle cx="50" cy="74" r="3" fill="#F5A623" opacity="0.45"/>
+<circle cx="78" cy="74" r="3" fill="#F5A623" opacity="0.45"/>
+<line x1="64" y1="54" x2="50" y2="74" stroke="#F5A623" stroke-width="0.8" opacity="0.3"/>
+<line x1="64" y1="54" x2="78" y2="74" stroke="#F5A623" stroke-width="0.8" opacity="0.3"/>
+<line x1="50" y1="74" x2="78" y2="74" stroke="#F5A623" stroke-width="0.6" opacity="0.15"/>
+<line x1="64" y1="54" x2="64" y2="42" stroke="#F5A623" stroke-width="0.8" opacity="0.2" stroke-dasharray="2 2"/>
+<line x1="50" y1="74" x2="40" y2="80" stroke="#F5A623" stroke-width="0.8" opacity="0.15" stroke-dasharray="2 2"/>
+<line x1="78" y1="74" x2="88" y2="80" stroke="#F5A623" stroke-width="0.8" opacity="0.15" stroke-dasharray="2 2"/>
+</svg>
