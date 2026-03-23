@@ -98,9 +98,14 @@ def create_app() -> FastAPI:
     # Mount Gradio at /app (backup — kept for comparison during migration)
     try:
         import gradio as gr
+        from pathlib import Path as _Path
         from server.frontend.gradio_app import create_gradio_app
         gradio_app = create_gradio_app()
-        fastapi_app = gr.mount_gradio_app(fastapi_app, gradio_app, path="/app")
+        _favicon = _Path(__file__).resolve().parent.parent / "images" / "graptolite-icon.svg"
+        fastapi_app = gr.mount_gradio_app(
+            fastapi_app, gradio_app, path="/app",
+            favicon_path=str(_favicon) if _favicon.is_file() else None,
+        )
         print("Gradio frontend mounted at /app")
     except ImportError:
         print("Gradio not installed — /app not available")
