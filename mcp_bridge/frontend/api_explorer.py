@@ -95,14 +95,25 @@ def _build_results_dataframe(api_items: list[dict]) -> list[list]:
 def _build_sdk_md(sdk_items: list[dict]) -> str:
     """Build markdown for SDK examples."""
     if not sdk_items:
-        return "No SDK examples found."
+        return "*None*"
     parts = []
     for si in sdk_items:
         proj = si.get("project", "?")
-        content = si.get("content", "")[:2000]
+        summary = si.get("summary", "")
+        content = si.get("content", "")
         raw_apis = si.get("mentioned_apis", "")
-        apis = raw_apis[:200] if isinstance(raw_apis, str) else ", ".join(raw_apis[:5])
-        parts.append(f"**{proj}** (APIs: {apis})\n```csharp\n{content}\n```\n")
+        apis = raw_apis if isinstance(raw_apis, str) else ", ".join(raw_apis[:10])
+
+        header = f"**{proj}**"
+        if summary:
+            header += f"  \n{summary}"
+        if apis:
+            header += f"  \nClasses: `{apis}`"
+
+        if content:
+            parts.append(f"{header}\n```csharp\n{content}\n```\n")
+        else:
+            parts.append(f"{header}  \n*(Code not available)*\n")
     return "\n".join(parts)
 
 

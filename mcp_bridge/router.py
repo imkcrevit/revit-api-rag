@@ -222,11 +222,22 @@ async def api_search(req: ApiSearchRequest):
 
     sdk_items = []
     for item in results.sdk_items:
+        content = item.content or ""
+        # Detect incomplete code: if it lacks a closing brace or ends mid-line,
+        # it was likely stored truncated — mark it so frontends can decide.
+        is_complete = (
+            not content
+            or content.rstrip().endswith("}")
+            or content.rstrip().endswith(";")
+            or content.rstrip().endswith("*/")
+        )
         sdk_items.append({
             "project": item.project,
-            "content": item.content[:3000],
+            "summary": item.summary,
+            "content": content if is_complete else "",
             "mentioned_apis": item.mentioned_apis,
             "distance": round(item.distance, 4),
+            "is_complete": is_complete,
         })
 
     return {

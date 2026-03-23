@@ -90,9 +90,11 @@ export interface ApiSearchResult {
 
 export interface SdkSearchResult {
   project: string
+  summary: string
   content: string
   mentioned_apis: string | string[]
   distance: number
+  is_complete: boolean
 }
 
 export interface ChatMessage {

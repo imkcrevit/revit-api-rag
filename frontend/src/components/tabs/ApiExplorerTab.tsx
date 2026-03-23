@@ -156,23 +156,47 @@ export default function ApiExplorerTab() {
       )}
 
       {/* SDK examples */}
-      {sdkItems.length > 0 && (
-        <Accordion title={`SDK Code Examples (${sdkItems.length})`}>
-          {sdkItems.map((si, i) => (
-            <div key={i} className="mb-3">
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 500, color: 'var(--dark)' }}>{si.project}</p>
-              <pre style={{
-                background: 'var(--bg2)',
-                padding: 8,
-                borderRadius: 2,
-                fontFamily: 'var(--mono)',
-                fontSize: 12,
-                overflowX: 'auto',
-              }}>{si.content}</pre>
-            </div>
-          ))}
-        </Accordion>
-      )}
+      <Accordion title={`SDK Code Examples (${sdkItems.length})`}>
+        {sdkItems.length === 0 ? (
+          <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--mid)' }}>None</p>
+        ) : (
+          sdkItems.map((si, i) => {
+            const apis = Array.isArray(si.mentioned_apis)
+              ? si.mentioned_apis.join(', ')
+              : si.mentioned_apis || ''
+            return (
+              <div key={i} className="mb-3" style={{ borderBottom: '1px solid var(--line)', paddingBottom: 8 }}>
+                <p style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: 'var(--dark)' }}>
+                  {si.project}
+                </p>
+                {si.summary && (
+                  <p style={{ fontSize: 12, color: 'var(--mid)', margin: '2px 0 4px' }}>{si.summary}</p>
+                )}
+                {apis && (
+                  <p style={{ fontSize: 11, color: 'var(--mid)' }}>
+                    <span style={{ fontWeight: 500 }}>Classes: </span>{apis}
+                  </p>
+                )}
+                {si.content ? (
+                  <pre style={{
+                    background: 'var(--bg2)',
+                    padding: 8,
+                    borderRadius: 2,
+                    fontFamily: 'var(--mono)',
+                    fontSize: 12,
+                    overflowX: 'auto',
+                    marginTop: 4,
+                  }}>{si.content}</pre>
+                ) : (
+                  <p style={{ fontSize: 11, color: 'var(--mid)', fontStyle: 'italic', marginTop: 4 }}>
+                    (Code not available)
+                  </p>
+                )}
+              </div>
+            )
+          })
+        )}
+      </Accordion>
 
       {/* Selected detail */}
       {selected && (
