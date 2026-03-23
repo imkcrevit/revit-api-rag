@@ -235,3 +235,8 @@ frontend/dist/
 
 # Homepage (separate repo)
 h/
+
+# Local-only files
+*.code-workspace
+.claude/settings.local.json
+images/
