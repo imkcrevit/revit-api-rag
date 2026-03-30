@@ -82,7 +82,7 @@ def _get_session_store() -> IntentSessionStore:
 def _get_orchestrator() -> ConversationOrchestrator:
     llm = LLMAdapter()
     registry = get_schema_registry()
-    return ConversationOrchestrator(llm=llm, registry=registry)
+    return ConversationOrchestrator(llm=llm, registry=registry, use_skills=True)
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +90,11 @@ def _get_orchestrator() -> ConversationOrchestrator:
 # ---------------------------------------------------------------------------
 
 @intent_router.post("/parse")
-async def parse_intent(req: ParseRequest):
+async def parse_intent(req: ParseRequest, skills: bool = True):
     orchestrator = _get_orchestrator()
+    # Allow per-request skill toggle for A/B testing
+    original = orchestrator._use_skills
+    orchestrator._use_skills = skills
     session = SessionState()
     try:
         response = await orchestrator.process_turn(req.user_input, session)
@@ -99,6 +102,8 @@ async def parse_intent(req: ParseRequest):
     except RuntimeError as e:
         logger.error("Parse failed: %s", e)
         raise HTTPException(status_code=504, detail=f"LLM call failed: {e}")
+    finally:
+        orchestrator._use_skills = original
 
 
 @intent_router.post("/session")
@@ -205,6 +210,14 @@ async def list_schemas():
                 "mapped_commands": schema.get("mapped_commands", []),
             })
     return {"intents": intents}
+
+
+@intent_router.get("/skills")
+async def list_skills():
+    """List all loaded skills for debugging."""
+    from intent_bridge.skill_loader import get_skill_loader
+    loader = get_skill_loader()
+    return {"skills": loader.list_skills(), "total": len(loader.list_skills())}
 
 
 @intent_router.get("/execution-map")

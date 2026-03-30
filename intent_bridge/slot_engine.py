@@ -26,6 +26,7 @@ from typing import Any
 import yaml
 
 from intent_bridge.llm_adapter import LLMAdapter
+from intent_bridge.skill_loader import get_skill_loader
 from intent_bridge.models import (
     ActionStep,
     IntentState,
@@ -506,6 +507,32 @@ IMPORTANT: "summary" should ONLY appear when ALL questions are empty.
 
 
 # ===================================================================
+# LLM Prompt V2 — Skill-enhanced, modular prompt
+# ===================================================================
+
+_ANALYZE_PROMPT_V2 = """You are a Revit API Agent. Analyze user requests using the retrieved API documentation below.
+
+## Core Rules:
+
+{base_skill_rules}
+
+{rag_context}
+
+## Known intents (for classification):
+{intent_list}
+
+If the user's request doesn't match any known intent above, use intent="custom" with the
+api_method derived from the API documentation. Do NOT reject unknown operations.
+
+## Active Skills (MUST FOLLOW these intent-specific rules):
+{skill_context}
+
+## User input:
+"{user_input}"
+"""
+
+
+# ===================================================================
 # ConversationOrchestrator
 # ===================================================================
 
@@ -521,9 +548,11 @@ class ConversationOrchestrator:
         self,
         llm: LLMAdapter | None = None,
         registry: SchemaRegistry | None = None,
+        use_skills: bool = True,
     ):
         self._llm = llm or LLMAdapter()
         self._registry = registry or get_schema_registry()
+        self._use_skills = use_skills
 
     async def process_turn(
         self, user_input: str, session: SessionState,
@@ -536,25 +565,59 @@ class ConversationOrchestrator:
         lang = _detect_language(user_input)
         start = time.time()
 
-        # Step 1: Dynamic search term extraction (replaces hardcoded _INTENT_API_PATTERNS)
+        # Step 1: Extract search terms (sync, fast)
         search_terms = _extract_search_terms(user_input, self._registry)
         logger.info("Dynamic search terms: %s", search_terms)
 
+        # Step 2: RAG lookup + skill matching in PARALLEL
         loop = asyncio.get_event_loop()
-        api_docs = await loop.run_in_executor(
+        rag_future = loop.run_in_executor(
             None, _query_api_by_method, search_terms, 8,
         )
-        rag_context = _format_api_context(api_docs)
 
+        if self._use_skills:
+            loader = get_skill_loader()
+            skill_future = loop.run_in_executor(
+                None, loader.match_skills, user_input, search_terms,
+            )
+            api_docs, matched_skills = await asyncio.gather(rag_future, skill_future)
+        else:
+            api_docs = await rag_future
+            matched_skills = []
+
+        rag_context = _format_api_context(api_docs)
         rag_duration = (time.time() - start) * 1000
         logger.info("API doc lookup: %.0fms, %d docs found", rag_duration, len(api_docs))
 
-        # Step 2: Build prompt with real API documentation
-        prompt = _ANALYZE_PROMPT.format(
-            intent_list=self._registry.get_intent_summary(),
-            rag_context=rag_context,
-            user_input=user_input,
-        )
+        # Step 3: Build prompt
+        if self._use_skills and matched_skills:
+            skill_context = loader.render_skill_prompt(matched_skills)
+            base_rules = loader.get_base_rules()
+
+            prompt = _ANALYZE_PROMPT_V2.format(
+                base_skill_rules=base_rules,
+                intent_list=self._registry.get_intent_summary(),
+                rag_context=rag_context,
+                skill_context=skill_context,
+                user_input=user_input,
+            )
+            logger.info("Using skill-enhanced prompt (matched %d skills)", len(matched_skills))
+        elif self._use_skills:
+            base_rules = loader.get_base_rules()
+            prompt = _ANALYZE_PROMPT_V2.format(
+                base_skill_rules=base_rules,
+                intent_list=self._registry.get_intent_summary(),
+                rag_context=rag_context,
+                skill_context="(No intent-specific skill matched — use Core Rules and API docs above.)",
+                user_input=user_input,
+            )
+            logger.info("Using skill-enhanced prompt (no skills matched)")
+        else:
+            prompt = _ANALYZE_PROMPT.format(
+                intent_list=self._registry.get_intent_summary(),
+                rag_context=rag_context,
+                user_input=user_input,
+            )
 
         raw = await self._llm.complete_async(prompt, temperature=0.1)
         result = LLMAdapter.extract_json(raw)
