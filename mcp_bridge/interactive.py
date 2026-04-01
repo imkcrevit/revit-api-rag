@@ -109,6 +109,15 @@ If you are unsure which category fits, use OST_GenericModel.
   creation target's category. The code generator will handle multi-step logic.
 - For queries mentioning multiple distinct element types to create, pick the
   categories for ALL of them in revit_categories.
+
+## Anti-hallucination rules
+
+- ONLY use BuiltInCategory names from the list above. Do NOT invent category names.
+- If unsure which category fits, use OST_GenericModel — do NOT fabricate an OST_ name.
+- The interaction_type must be one of exactly: "direct", "select_family", "select_both".
+  Do NOT create new interaction types.
+- NEVER assume need_host=true unless the element is physically hosted (windows on walls,
+  doors on walls). Columns, beams, furniture are NOT hosted even if placed near walls.
 """
 
 

@@ -57,19 +57,26 @@ revit-api-rag/
 │   ├── router.py          # FastAPI 路由（SSE 流式生成、健康检查等）
 │   ├── code_generator.py  # RAG 上下文组装 + LLM 代码生成
 │   ├── interactive.py     # LLM 意图分类 + Revit 数据查询
+│   ├── atom_registry.py   # Revit 查询/交互原语注册表（20 个原语）
 │   ├── revit_client.py    # TCP JSON-RPC 2.0 客户端
 │   ├── client_pool.py     # 连接池（单例 + 自动重连）
 │   ├── sandbox.py         # C# 代码安全审查
-│   ├── tool_store.py      # Solidified Tool 持久化
+│   ├── tool_store.py      # Solidified Tool 持久化（健康检查 + 自动降级）
 │   └── frontend/          # Gradio Web UI
 │       └── app.py         # 多步交互界面（Thinking + Pipeline + 代码执行）
 ├── intent_bridge/         # Intent Bridge Agent — 意图解析 + 参数收集
 │   ├── slot_engine.py     # 核心引擎（动态 RAG + LLM Agent + 问答队列）
+│   ├── skill_loader.py    # Skill 加载器（三层匹配 + 热重载）
 │   ├── router.py          # FastAPI 路由（会话管理、意图解析）
 │   ├── llm_adapter.py     # LLM 适配器（primary/fallback + 重试）
 │   ├── models.py          # Pydantic 数据模型
 │   └── schemas/
-│       └── intent_registry.yaml  # 轻量 intent 注册表（~65 行）
+│       ├── intent_registry.yaml  # 轻量 intent 注册表（~65 行）
+│       └── skills/               # 模块化 Skill 系统
+│           ├── _base.md          # 全局规则（反幻觉、参数来源声明）
+│           ├── patterns/         # 操作模式（8 个 Skill）
+│           ├── workflows/        # 工作流蓝图（净高计算、数据导出）
+│           └── standards/        # 企业规范
 ├── revit_plugin/          # Revit 2026 插件（C# / .NET 8）
 │   ├── plugin/            # RevitMCPPlugin — TCP Socket 服务
 │   └── commandset/        # RevitMCPCommandSet — 23 个预置命令
@@ -244,6 +251,35 @@ python -m server.main
 ---
 
 ## 更新日志
+
+### 2026.04 — V0.4 Skill System + Progressive RAG + Anti-Hallucination
+
+**[完整更新日志 →](./docs/changelog-v0.4.md)**
+
+**模块化 Skill 系统**
+- 三层 Skill 架构：`patterns/`（操作模式）+ `workflows/`（工作流蓝图）+ `standards/`（企业规范）
+- 新增 2 个工作流蓝图：净高计算（5 阶段）、数据导出（4 阶段）— 参考蓝图而非固定流程
+- Skill 匹配优先级：workflow > action pattern > object pattern > standard
+- `_base.md` 新增反幻觉规则、参数来源声明、自检清单
+
+**渐进式 RAG 扩展**
+- RAG 质量评分（`_score_rag_quality`）：方法级文档比例 + 搜索词覆盖率 + 噪声比例
+- 首次查询不佳时自动扩展搜索范围（最多 3 轮），逐步放宽搜索条件
+- 上下文感知搜索词提取：区分"创建墙"（元素创建）vs "创建视图着色"（非元素创建）
+- SQL ORDER BY 优化：Query/Geometry API 优先，Creation/Array API 降级
+
+**多层反幻觉防线**
+- 合理化倾向识别（5 种 LLM 借口模式）+ 忠实报告（5 项禁止行为）
+- RAG Grounding Rules + API Grounding Rules — 强制 LLM 仅使用文档记载的 API
+- 参数来源声明协议（Parameter Source Protocol）— query/interactive/ask_user/default/compute
+
+**Atom Registry（Revit 查询原语注册表）**
+- 20 个标准化 Revit 查询/交互原语（14 Query + 6 Interactive）
+- Tool 参数通过 `source: query:levels` 声明数据来源，禁止 LLM 编造
+
+**Tool 健康检查**
+- `health_check()` + `failure_count` + 30 天过期检测 → 不健康 Tool 自动降级为 RAG 代码生成
+- Tool 元数据增强：`applies_when`、`not_for`、`preconditions`
 
 ### 2026.03 — V0.3 Intent Bridge Agent 重构
 

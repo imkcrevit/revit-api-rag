@@ -82,6 +82,9 @@ You have access to the following capabilities:
 
 7. **run_tool** — Execute a previously solidified tool by name, filling in parameter values.
 
+8. **get_tool_choices** — Query Revit for dynamic parameter values (levels, family types, etc.).
+   MUST be called BEFORE run_tool for parameters with `source: query:*`.
+
 ## Recommended Workflow
 
 1. **Search** — Use `search_revit_api` to find relevant API classes and methods.
@@ -89,7 +92,33 @@ You have access to the following capabilities:
 3. **Generate** — Use `generate_code` to create C# code for the user's request.
 4. **Execute** — Use `execute_code` to run the code in Revit and verify it works.
 5. **Solidify** — If execution succeeds, use `solidify_tool` to save it for reuse.
-6. **Reuse** — Next time, use `list_tools` + `run_tool` to execute saved tools directly.
+6. **Reuse** — Next time, use `get_tool_choices` → `run_tool` to execute saved tools.
+
+## Parameter Source Protocol (CRITICAL — prevents silent failures)
+
+Every solidified tool parameter has a `source` field declaring where its value comes from.
+You MUST respect these sources:
+
+- **`source: query:levels`** — Call `get_tool_choices` first. NEVER guess level names.
+- **`source: query:*_types`** — Call `get_tool_choices` first. NEVER assume type names.
+- **`source: interactive:pick_object`** — User must select in Revit. NEVER fabricate IDs.
+- **`source: ask_user`** — You MUST ask the user. Do not guess or assume.
+- **`source: default`** — Use the declared default value.
+
+### Recognize Your Own Rationalizations
+You will feel the urge to skip querying and just fill in a value. Resist it:
+- "Level 1 is standard" — the project may use "1F", "B1", or custom names. **Query.**
+- "Generic - 200mm is common" — it may not be loaded in this project. **Query.**
+- "I'll use (0,0,0)" — the user never said that. **Ask.**
+- "This parameter is probably optional" — if the API requires it, it's not. **Ask.**
+
+## Execution Verification (FAITHFUL REPORTING)
+
+After `execute_code` or `run_tool`:
+- Report faithfully. If it failed, say so with the actual error message.
+- Do NOT claim success when the response shows an error.
+- Do NOT paraphrase errors — include the actual error text.
+- If a tool fails 2+ times, fall back to `generate_code` with fresh RAG — the tool is stale.
 
 ## Resources
 
@@ -275,7 +304,7 @@ async def get_tool_choices(name: str) -> str:
 @mcp.tool()
 async def run_tool(name: str, params: str = "{}") -> str:
     """Execute a solidified tool by name with given parameters.
-    IMPORTANT: Call get_tool_choices first for parameters with dynamic choices.
+    IMPORTANT: Call get_tool_choices first for parameters with source: query:*.
     params: JSON object of parameter values, e.g. {"level_name": "L1", "height": 3000}"""
     import json as _json
     try:
@@ -283,23 +312,45 @@ async def run_tool(name: str, params: str = "{}") -> str:
     except _json.JSONDecodeError:
         return json.dumps({"success": False, "error": f"Invalid params JSON: {params}"})
 
+    # Health check — warn if tool is stale or failing
+    health = _tool_store.health_check(name)
+    if health["status"] == "not_found":
+        return json.dumps({"success": False, "error": f"Tool '{name}' not found."})
+    if health["recommendation"] == "fallback_to_rag":
+        return json.dumps({
+            "success": False,
+            "error": f"Tool '{name}' is unhealthy: {'; '.join(health['issues'])}. "
+                     f"Use generate_code instead for fresh RAG-based code generation.",
+            "health": health,
+        }, ensure_ascii=False, indent=2)
+
     code = _tool_store.render_code(name, param_dict)
     if code is None:
-        return json.dumps({"success": False, "error": f"Tool '{name}' not found."})
+        valid, errors, _ = _tool_store.validate_params(name, param_dict)
+        return json.dumps({
+            "success": False,
+            "error": f"Parameter validation failed: {'; '.join(errors)}",
+        }, ensure_ascii=False, indent=2)
 
     # Execute via client pool
     try:
         client = await RevitClientPool.get_client()
         resp = await client.send_code(code)
-        if resp.success:
-            _tool_store.record_usage(name)
-        return json.dumps({
+        _tool_store.record_usage(name, success=resp.success)
+        result = {
             "success": resp.success,
             "tool": name,
             "result": resp.result,
             "error": resp.error,
-        }, ensure_ascii=False, indent=2)
+        }
+        if not resp.success:
+            result["hint"] = (
+                "If this tool fails repeatedly, use generate_code with fresh RAG "
+                "context instead — the tool definition may be outdated."
+            )
+        return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as e:
+        _tool_store.record_usage(name, success=False)
         return json.dumps({"success": False, "error": str(e)})
 
 

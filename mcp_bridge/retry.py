@@ -36,7 +36,11 @@ Please output ONLY the corrected method body. No class, no namespace, no usings.
 
 RETRY_SYSTEM = (
     "You are a Revit API expert. Fix the compile error in the C# code. "
-    "Output ONLY the corrected method body — no class, no namespace, no usings."
+    "Output ONLY the corrected method body — no class, no namespace, no usings. "
+    "IMPORTANT: Diagnose the root cause before fixing. Do NOT blindly retry "
+    "the same approach — read the error message carefully and address the specific issue. "
+    "If the error references a class or method that doesn't exist in Revit 2026 API, "
+    "find the correct alternative rather than guessing a similar name."
 )
 
 

@@ -69,6 +69,7 @@ def _get_localized(sdef: dict, key: str, lang: str) -> str:
 # ===================================================================
 
 _ZH_TO_API_KEYWORDS: dict[str, list[str]] = {
+    # -- 创建类 --
     "墙": ["Wall.Create", "WallType"],
     "楼板": ["Floor.Create", "FloorType"],
     "地板": ["Floor.Create", "FloorType"],
@@ -76,19 +77,45 @@ _ZH_TO_API_KEYWORDS: dict[str, list[str]] = {
     "窗": ["NewFamilyInstance", "Window"],
     "窗户": ["NewFamilyInstance", "Window"],
     "房间": ["NewRoom", "Room.Create"],
-    "删除": ["Document.Delete"],
-    "修改": ["ElementTransformUtils", "Move", "Rotate"],
-    "移动": ["ElementTransformUtils.Move"],
-    "旋转": ["ElementTransformUtils.Rotate"],
-    "查询": ["FilteredElementCollector", "get_Parameter"],
     "柱": ["NewFamilyInstance", "Column"],
-    "梁": ["NewFamilyInstance", "Beam"],
+    "梁": ["NewFamilyInstance", "Beam", "FamilyInstance"],
     "屋顶": ["RoofBase", "FootPrintRoof"],
     "楼梯": ["Stairs", "StairsRun"],
     "栏杆": ["Railing"],
     "坡道": ["Ramp"],
     "幕墙": ["CurtainWall", "Wall.Create"],
     "族": ["FamilyInstance", "FamilySymbol"],
+    # -- 修改类 --
+    "删除": ["Document.Delete"],
+    "修改": ["ElementTransformUtils", "Move", "Rotate"],
+    "移动": ["ElementTransformUtils.Move"],
+    "旋转": ["ElementTransformUtils.Rotate"],
+    # -- 查询类 --
+    "查询": ["FilteredElementCollector", "get_Parameter"],
+    "获得": ["FilteredElementCollector", "get_Parameter"],
+    "获取": ["FilteredElementCollector", "get_Parameter"],
+    "搜索": ["FilteredElementCollector"],
+    "筛选": ["FilteredElementCollector"],
+    "统计": ["FilteredElementCollector", "get_Parameter"],
+    "列出": ["FilteredElementCollector"],
+    # -- 几何与计算类 --
+    "净高": ["BoundingBox", "get_BoundingBox", "ReferenceIntersector"],
+    "距离": ["Line.CreateBound", "XYZ.DistanceTo"],
+    "碰撞": ["ReferenceIntersector", "ElementIntersectsElementFilter"],
+    "相交": ["ReferenceIntersector", "ElementIntersectsElementFilter"],
+    "包围盒": ["BoundingBox", "get_BoundingBox"],
+    "坐标": ["XYZ", "Transform"],
+    "几何": ["GeometryElement", "Solid", "Face"],
+    # -- 链接模型类 --
+    "链接": ["RevitLinkInstance", "RevitLinkType", "GetLinkDocument"],
+    "链接模型": ["RevitLinkInstance", "RevitLinkType", "GetLinkDocument"],
+    "外部参照": ["RevitLinkInstance"],
+    # -- 视图类 --
+    "当前视图": ["ActiveView", "FilteredElementCollector"],
+    "视图": ["View", "ViewPlan", "View3D"],
+    # -- 参数类 --
+    "参数": ["get_Parameter", "BuiltInParameter"],
+    "属性": ["get_Parameter", "BuiltInParameter"],
 }
 
 
@@ -167,8 +194,8 @@ def _get_api_db_path() -> str:
 def _query_api_by_method(method_patterns: list[str], limit: int = 5) -> list[dict]:
     """
     Query SQLite for Revit API docs matching specific method patterns.
-    Targets exact method names (e.g. 'Wall.Create', 'NewFamilyInstance')
-    and filters out noise (BuiltInFailures, etc.).
+    Targets method names, class names, and property names.
+    Filters out noise (BuiltInFailures, etc.).
     """
     db_path = _get_api_db_path()
     if not os.path.exists(db_path):
@@ -183,30 +210,46 @@ def _query_api_by_method(method_patterns: list[str], limit: int = 5) -> list[dic
         conditions = []
         params = []
         for pattern in method_patterns:
-            conditions.append("full_id LIKE ?")
-            params.append(f"%{pattern}%")
+            # Search both full_id and name for broader coverage
+            conditions.append("(full_id LIKE ? OR name LIKE ?)")
+            params.extend([f"%{pattern}%", f"%{pattern}%"])
 
         if not conditions:
             conn.close()
             return []
 
         where = " OR ".join(conditions)
+        # Relaxed filter: allow docs without syntax/parameters (class-level docs,
+        # properties, enums are useful for query/geometry operations)
         query = f"""
             SELECT full_id, name, summary, syntax, parameters, remark
             FROM revit_api
             WHERE ({where})
-              AND syntax IS NOT NULL AND syntax != ''
-              AND parameters IS NOT NULL AND parameters != ''
               AND full_id NOT LIKE '%Failures%'
               AND full_id NOT LIKE '%Exception%'
               AND full_id NOT LIKE '%UnitTypeId%'
+              AND full_id NOT LIKE '%Obsolete%'
             ORDER BY
               CASE
-                WHEN full_id LIKE '%Create(%' OR full_id LIKE '%NewFamily%' THEN 0
-                WHEN full_id LIKE '%.Create%' OR full_id LIKE '%.New%' THEN 1
+                -- Prioritize items with syntax+parameters (method-level docs)
+                WHEN syntax IS NOT NULL AND syntax != ''
+                     AND parameters IS NOT NULL AND parameters != '' THEN 0
+                -- Then class/property docs with summaries
+                WHEN summary IS NOT NULL AND summary != '' THEN 1
                 ELSE 2
               END,
-              length(parameters) DESC
+              -- Within each tier, boost query/geometry APIs, demote creation/array
+              CASE
+                WHEN full_id LIKE '%Collector%' OR full_id LIKE '%Filter%' THEN 0
+                WHEN full_id LIKE '%BoundingBox%' OR full_id LIKE '%Intersect%' THEN 0
+                WHEN full_id LIKE '%LinkInstance%' OR full_id LIKE '%Transform%' THEN 0
+                WHEN full_id LIKE '%Parameter%' OR full_id LIKE '%Override%' THEN 0
+                WHEN full_id LIKE '%Geometry%' OR full_id LIKE '%Solid%' THEN 1
+                WHEN full_id LIKE '%.Create%' OR full_id LIKE '%.New%' THEN 2
+                WHEN full_id LIKE '%Array%' THEN 3
+                ELSE 2
+              END,
+              length(COALESCE(parameters,'')) DESC
             LIMIT ?
         """
         params.append(limit)
@@ -231,13 +274,47 @@ def _query_api_by_method(method_patterns: list[str], limit: int = 5) -> list[dic
 def _extract_search_terms(user_input: str, registry: SchemaRegistry) -> list[str]:
     """
     Dynamically extract API search terms from user input.
+
+    Context-aware: detects whether the user intent is query/analysis vs creation,
+    and prioritizes search terms accordingly.
+
     Strategy:
-    1. Match registry keywords against input
-    2. Map Chinese terms via _ZH_TO_API_KEYWORDS
-    3. Extract English technical terms via regex
-    4. Fallback: use raw input words
+    1. Detect action context (query/create/modify/delete)
+    2. Match registry keywords against input
+    3. Map Chinese terms via _ZH_TO_API_KEYWORDS (filtered by context)
+    4. Extract English technical terms via regex
+    5. Fallback: use raw input words
     """
+    # --- Step 0: Detect action context ---
+    _QUERY_VERBS = {"获得", "获取", "查询", "查找", "搜索", "筛选", "列出", "统计",
+                    "显示", "计算", "检测", "分析", "导出"}
+    _CREATE_VERBS = {"创建", "新建", "添加", "放置", "画", "建"}
+    # Element nouns that confirm true element creation context
+    # "创建墙" = true creation, "创建视图着色" / "创建报表" = non-element creation
+    _ELEMENT_NOUNS = {"墙", "柱", "梁", "板", "楼板", "门", "窗", "窗户", "屋顶",
+                      "楼梯", "栏杆", "坡道", "幕墙", "房间", "族", "管道", "风管",
+                      "桥架", "线管", "构件", "模型"}
+    # Creation API patterns to deprioritize in query context
+    _CREATION_API_PATTERNS = {
+        "Wall.Create", "Floor.Create", "NewFamilyInstance", "NewRoom",
+        "Room.Create", "RoofBase", "FootPrintRoof", "Stairs", "StairsRun",
+        "Railing", "Ramp", "CurtainWall",
+    }
+
+    is_query_context = any(v in user_input for v in _QUERY_VERBS)
+    # True element creation: "创建" must be followed by an element noun within 3 chars
+    # e.g., "创建墙" → True, "创建视图着色" → False
+    is_create_context = False
+    for verb in _CREATE_VERBS:
+        idx = user_input.find(verb)
+        if idx >= 0:
+            after = user_input[idx + len(verb):idx + len(verb) + 3]
+            if any(noun in after for noun in _ELEMENT_NOUNS):
+                is_create_context = True
+                break
+
     terms: list[str] = []
+    deprioritized: list[str] = []  # terms to add only if we don't have enough
 
     # 1. Registry keyword matching
     for intent_name in registry.get_all_intent_names():
@@ -245,10 +322,17 @@ def _extract_search_terms(user_input: str, registry: SchemaRegistry) -> list[str
             if kw.lower() in user_input.lower():
                 terms.append(kw)
 
-    # 2. Chinese → API keyword mapping
+    # 2. Chinese → API keyword mapping (context-filtered)
     for zh_term, api_terms in _ZH_TO_API_KEYWORDS.items():
         if zh_term in user_input:
-            terms.extend(api_terms)
+            for api_term in api_terms:
+                # In query context, deprioritize creation APIs from noun matches
+                # (e.g., "梁" matches both "NewFamilyInstance" and "Beam" —
+                #  in query context we want "Beam" but not "NewFamilyInstance")
+                if is_query_context and not is_create_context and api_term in _CREATION_API_PATTERNS:
+                    deprioritized.append(api_term)
+                else:
+                    terms.append(api_term)
 
     # 3. English technical terms (PascalCase, camelCase, dotted names)
     tech_terms = re.findall(r'[A-Z][a-z]+(?:[A-Z][a-z]+)+', user_input)  # PascalCase
@@ -263,13 +347,76 @@ def _extract_search_terms(user_input: str, registry: SchemaRegistry) -> list[str
             seen.add(t)
             unique.append(t)
 
+    # Add deprioritized terms only if we have few primary terms
+    if len(unique) < 3:
+        for t in deprioritized:
+            if t not in seen:
+                seen.add(t)
+                unique.append(t)
+
     # 4. Fallback: if nothing matched, use the raw input as search
     if not unique:
-        # Extract meaningful words (skip very short ones)
         words = re.findall(r'[a-zA-Z]{3,}', user_input)
         unique = words[:3] if words else [user_input[:50]]
 
     return unique
+
+
+def _score_rag_quality(
+    api_docs: list[dict], search_terms: list[str],
+) -> tuple[float, list[str]]:
+    """
+    Score RAG result relevance (0.0–1.0). Returns (score, reasons).
+
+    Checks:
+    - How many docs have syntax/parameters (method-level, not just class stubs)
+    - How many search terms actually appear in returned doc names
+    - Whether results are dominated by irrelevant patterns (Array, Failure, etc.)
+    """
+    if not api_docs:
+        return 0.0, ["no_results"]
+
+    reasons: list[str] = []
+    n = len(api_docs)
+
+    # 1. Docs with actual method signatures (syntax + parameters)
+    method_docs = sum(
+        1 for d in api_docs
+        if d.get("syntax") and d.get("parameters")
+    )
+    method_ratio = method_docs / n
+
+    # 2. Term coverage: how many search terms appear in at least one doc name
+    terms_lower = [t.lower() for t in search_terms if len(t) > 2]
+    if terms_lower:
+        covered = sum(
+            1 for t in terms_lower
+            if any(t in (d.get("name", "") or "").lower() for d in api_docs)
+        )
+        coverage = covered / len(terms_lower)
+    else:
+        coverage = 0.5  # neutral if no meaningful terms
+
+    # 3. Noise ratio: docs matching irrelevant patterns
+    _NOISE_PATTERNS = {"Array", "Failure", "Exception", "Obsolete", "UnitType",
+                       "RadialArray", "LinearArray", "RebarContainer"}
+    noise_count = sum(
+        1 for d in api_docs
+        if any(p in (d.get("name", "") or "") for p in _NOISE_PATTERNS)
+    )
+    noise_ratio = noise_count / n
+
+    # Composite score
+    score = (method_ratio * 0.3) + (coverage * 0.5) + ((1 - noise_ratio) * 0.2)
+
+    if method_ratio < 0.3:
+        reasons.append("few_method_docs")
+    if coverage < 0.3:
+        reasons.append("low_term_coverage")
+    if noise_ratio > 0.3:
+        reasons.append("high_noise")
+
+    return round(score, 2), reasons
 
 
 def _format_api_context(api_docs: list[dict]) -> str:
@@ -527,6 +674,25 @@ api_method derived from the API documentation. Do NOT reject unknown operations.
 ## Active Skills (MUST FOLLOW these intent-specific rules):
 {skill_context}
 
+## RAG Grounding Rules (CRITICAL — anti-hallucination):
+
+1. ONLY use API methods that appear in the "Retrieved API Documentation" above.
+   If no relevant API is found, set intent="custom" and describe the gap — do NOT invent methods.
+
+2. When citing an API method, the method signature MUST match the documentation exactly.
+   Do not merge parameters from different methods. Do not add parameters that don't exist.
+
+3. If the documentation shows a method requires parameters A, B, C — you must account for
+   ALL of them (in slots or questions). Do not silently omit parameters.
+
+4. Report faithfully: if the API documentation does not cover the user's request,
+   say so. Do NOT fabricate an api_method or slots to appear complete.
+   "I don't have documentation for this" is better than a wrong answer.
+
+5. NEVER fill a slot value by inventing a "reasonable" value. Every slot value must be
+   directly extractable from the user's exact input text. If you cannot point to the
+   specific word or number in the user's input that provides this value, it goes in questions.
+
 ## User input:
 "{user_input}"
 """
@@ -570,6 +736,7 @@ class ConversationOrchestrator:
         logger.info("Dynamic search terms: %s", search_terms)
 
         # Step 2: RAG lookup + skill matching in PARALLEL
+        # Progressive RAG: up to 3 rounds, expanding scope if quality is low
         loop = asyncio.get_event_loop()
         rag_future = loop.run_in_executor(
             None, _query_api_by_method, search_terms, 8,
@@ -585,9 +752,73 @@ class ConversationOrchestrator:
             api_docs = await rag_future
             matched_skills = []
 
+        # --- Progressive expansion: evaluate quality, retry with broader scope ---
+        rag_round = 1
+        max_rounds = 3
+        quality_threshold = 0.4
+        rag_score, rag_reasons = _score_rag_quality(api_docs, search_terms)
+        logger.info("RAG round %d: score=%.2f, reasons=%s, docs=%d",
+                     rag_round, rag_score, rag_reasons, len(api_docs))
+
+        while rag_score < quality_threshold and rag_round < max_rounds:
+            rag_round += 1
+            # Expansion strategy per round:
+            if rag_round == 2:
+                # Round 2: increase limit, add broader class-level terms
+                expanded_terms = list(search_terms)
+                # Add class-level fallbacks for common patterns
+                _CLASS_FALLBACKS = {
+                    "FilteredElementCollector": "Collector",
+                    "RevitLinkInstance": "LinkInstance",
+                    "BoundingBox": "BoundingBoxXYZ",
+                    "get_Parameter": "Parameter",
+                    "OverrideGraphicSettings": "OverrideGraphicSettings",
+                    "ReferenceIntersector": "ReferenceIntersector",
+                }
+                for term in search_terms:
+                    fb = _CLASS_FALLBACKS.get(term)
+                    if fb and fb not in expanded_terms:
+                        expanded_terms.append(fb)
+                api_docs_new = await loop.run_in_executor(
+                    None, _query_api_by_method, expanded_terms, 12,
+                )
+            else:
+                # Round 3: most aggressive — use raw Chinese nouns as English search
+                broadest = list(search_terms)
+                # Extract all Chinese nouns and map to broad API terms
+                for zh, apis in _ZH_TO_API_KEYWORDS.items():
+                    if zh in user_input:
+                        broadest.extend(apis)
+                broadest = list(dict.fromkeys(broadest))  # dedupe, preserve order
+                api_docs_new = await loop.run_in_executor(
+                    None, _query_api_by_method, broadest, 15,
+                )
+
+            # Merge: keep existing good docs, add new non-duplicate ones
+            existing_names = {d.get("name") for d in api_docs}
+            for doc in api_docs_new:
+                if doc.get("name") not in existing_names:
+                    api_docs.append(doc)
+                    existing_names.add(doc.get("name"))
+
+            rag_score, rag_reasons = _score_rag_quality(api_docs, search_terms)
+            logger.info("RAG round %d: score=%.2f, reasons=%s, docs=%d",
+                         rag_round, rag_score, rag_reasons, len(api_docs))
+
+        # Filter out noise docs before sending to LLM (keep top relevance)
+        _NOISE_PATTERNS = {"RadialArray", "LinearArray", "RebarContainer",
+                           "ArrayElement", "BaseArray"}
+        api_docs = [
+            d for d in api_docs
+            if not any(p in (d.get("name", "") or "") for p in _NOISE_PATTERNS)
+        ]
+        # Cap at 10 docs to avoid prompt bloat
+        api_docs = api_docs[:10]
+
         rag_context = _format_api_context(api_docs)
         rag_duration = (time.time() - start) * 1000
-        logger.info("API doc lookup: %.0fms, %d docs found", rag_duration, len(api_docs))
+        logger.info("API doc lookup: %.0fms, %d docs found (after %d rounds)",
+                     rag_duration, len(api_docs), rag_round)
 
         # Step 3: Build prompt
         if self._use_skills and matched_skills:

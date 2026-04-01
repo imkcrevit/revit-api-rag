@@ -83,6 +83,22 @@ System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB, Autodesk.Rev
     - List which Revit API classes/methods you will use for each step
     - Note any potential pitfalls or design decisions
     Then write the code in a ```csharp block.
+
+## API Grounding Rules (CRITICAL — anti-hallucination):
+1. ONLY use classes, methods, and properties that appear in the API documentation below
+   or in the SDK code examples. If a method is not documented, do NOT use it.
+2. Report outcomes faithfully: if you cannot generate correct code for the request because
+   the API documentation is insufficient, say so explicitly rather than inventing API calls.
+   Never fabricate class names, method signatures, or property names.
+3. Before using any API member, verify against the documentation that:
+   - The class exists in the documented namespace
+   - The method signature matches (parameter types, count, return type)
+   - Required enum values are valid members of their enum type
+4. NEVER assume a parameter value when the user has not provided it.
+   Use placeholders `{{{{param_name}}}}` for ALL user-supplied values.
+   Guessing coordinates, ElementIds, or type names will cause silent failures.
+5. If the retrieved documentation shows deprecated or version-specific APIs,
+   prefer the Revit {revit_version} compatible version.
 {selections_context}
 ## Retrieved API Documentation
 {api_context}

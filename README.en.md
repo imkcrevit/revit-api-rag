@@ -53,16 +53,30 @@ revit-api-rag/
 │   │   └── embed.py       # SQLite → ChromaDB
 │   ├── retriever.py       # Two-layer retriever
 │   └── llm_client.py      # LLM client (OpenRouter)
-├── mcp_bridge/            # Intent Bridge — Revit interaction bridge layer
+├── mcp_bridge/            # Revit interaction bridge layer
 │   ├── router.py          # FastAPI routes (SSE streaming, health check, etc.)
 │   ├── code_generator.py  # RAG context assembly + LLM code generation
 │   ├── interactive.py     # LLM intent classification + Revit data queries
+│   ├── atom_registry.py   # Revit query/interaction atom registry (20 primitives)
 │   ├── revit_client.py    # TCP JSON-RPC 2.0 client
 │   ├── client_pool.py     # Connection pool (singleton + auto-reconnect)
 │   ├── sandbox.py         # C# code security review
-│   ├── tool_store.py      # Solidified Tool persistence
+│   ├── tool_store.py      # Solidified Tool persistence (health check + auto-degradation)
 │   └── frontend/          # Gradio Web UI
 │       └── app.py         # Multi-step interaction interface (Thinking + Pipeline + Code Execution)
+├── intent_bridge/         # Intent Bridge Agent — intent parsing + parameter collection
+│   ├── slot_engine.py     # Core engine (dynamic RAG + LLM Agent + question queue)
+│   ├── skill_loader.py    # Skill loader (3-layer matching + hot reload)
+│   ├── router.py          # FastAPI routes (session management, intent parsing)
+│   ├── llm_adapter.py     # LLM adapter (primary/fallback + retry)
+│   ├── models.py          # Pydantic data models
+│   └── schemas/
+│       ├── intent_registry.yaml  # Lightweight intent registry (~65 lines)
+│       └── skills/               # Modular Skill system
+│           ├── _base.md          # Global rules (anti-hallucination, parameter source protocol)
+│           ├── patterns/         # Operation modes (8 skills)
+│           ├── workflows/        # Workflow blueprints (clearance calc, data export)
+│           └── standards/        # Enterprise standards
 ├── revit_plugin/          # Revit 2026 plugin (C# / .NET 8)
 │   ├── plugin/            # RevitMCPPlugin — TCP Socket service
 │   └── commandset/        # RevitMCPCommandSet — 23 preset commands
@@ -237,6 +251,58 @@ python -m server.main
 ---
 
 ## Changelog
+
+### 2026.04 — V0.4 Skill System + Progressive RAG + Anti-Hallucination
+
+**[Full changelog →](./docs/changelog-v0.4.md#english-version)**
+
+**Modular Skill System**
+- Three-layer Skill architecture: `patterns/` (operation modes) + `workflows/` (workflow blueprints) + `standards/` (enterprise standards)
+- 2 new workflow blueprints: clearance calculation (5 phases), data export (4 phases) — reference blueprints, not rigid templates
+- Skill matching priority: workflow > action pattern > object pattern > standard
+- `_base.md` enhanced with anti-hallucination rules, parameter source protocol, self-check checklist
+
+**Progressive RAG Expansion**
+- RAG quality scoring (`_score_rag_quality`): method-level doc ratio + search term coverage + noise ratio
+- Auto-expands search scope when initial results are unsatisfactory (up to 3 rounds)
+- Context-aware search term extraction: distinguishes "create wall" (element creation) vs "create view coloring" (non-element action)
+- SQL ORDER BY optimization: Query/Geometry APIs prioritized, Creation/Array APIs demoted
+
+**Multi-Layer Anti-Hallucination Defense**
+- Rationalizations recognition (5 LLM excuse patterns) + faithful reporting (5 forbidden behaviors)
+- RAG Grounding Rules + API Grounding Rules — forces LLM to use only documented APIs
+- Parameter Source Protocol — query/interactive/ask_user/default/compute
+
+**Atom Registry**
+- 20 standardized Revit query/interaction primitives (14 Query + 6 Interactive)
+- Tool parameters declare data source via `source: query:levels`, preventing LLM fabrication
+
+**Tool Health Check & Auto-Degradation**
+- `health_check()` + `failure_count` + 30-day staleness detection → unhealthy tools auto-degrade to RAG code generation
+- Tool metadata enrichment: `applies_when`, `not_for`, `preconditions`
+
+### 2026.03 — V0.3 Intent Bridge Agent Refactor
+
+**Intent Bridge Architecture Refactor**
+- Deleted 974-line `intent_slots.yaml` hardcoded slot definitions, replaced with ~65-line `intent_registry.yaml` lightweight registry
+- Each intent retains only classification info (display_name, keywords, mapped_commands), parameters inferred dynamically by RAG + LLM
+- Added `custom` intent: auto-degrades to RAG matching when no known intent matches, no longer rejects unknown operations
+
+**Dynamic RAG Search**
+- Added `_extract_search_terms()` dynamic search term extraction, replacing hardcoded `_INTENT_API_PATTERNS`
+- Three extraction strategies: registry keyword matching, Chinese-English term mapping (~20 entries), regex technical term extraction
+- Unknown operations (e.g., "create a ramp") can now find relevant API docs via RAG
+
+**Agent-Style Prompt Rewrite**
+- Removed all intent-specific hardcoded rules, replaced with generic Agent instructions
+- Forces LLM to infer parameters from RAG API docs, prohibits silent defaults for coordinates/types/levels
+- Quantity detection: `quantity > 1` automatically requires array input for position parameters
+- Explicit "forbidden behaviors" list prevents LLM from acting autonomously
+
+**Execution Matching Layer**
+- structured_output adds `execution` field: includes `strategy` and `mapped_commands`
+- Each intent links to Solidified Tool command names for future intent → Revit command translation
+- New `/execution-map` API endpoint: returns all intent → command mappings
 
 ### 2026.03 — V0.2 Intent Bridge + Revit Interaction
 

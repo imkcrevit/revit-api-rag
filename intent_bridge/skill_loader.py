@@ -1,12 +1,19 @@
 """
 Skill Loader — Loads, matches, and renders Markdown skill files for LLM prompts.
 
-Skills are Markdown files organized in two layers:
-  - patterns/  — Operation mode skills (line_based, point_based, hosted, etc.)
-  - standards/ — Enterprise/team custom standards (MEP routing, fire zones, etc.)
+Skills are Markdown files organized in three layers:
+  - patterns/   — Operation mode skills (line_based, point_based, hosted, query, etc.)
+  - workflows/  — Composite multi-step workflow blueprints (clearance calc, data export, etc.)
+  - standards/  — Enterprise/team custom standards (MEP routing, fire zones, etc.)
+
+Matching priority:
+  1. Workflow skills (if matched) take precedence over pattern skills — they represent
+     complex operations that need multi-step orchestration, not single API calls.
+  2. Pattern skills — one best match (mutually exclusive).
+  3. Standard skills — all matches stacked.
 
 The loader:
-1. Loads all .md files from both directories (with mtime-based hot reload)
+1. Loads all .md files from all directories (with mtime-based hot reload)
 2. Extracts keywords from the "触发关键词" / "trigger keywords" section
 3. Matches relevant skills based on user input
 4. Returns raw Markdown content for direct prompt injection (no rendering needed)
@@ -32,7 +39,7 @@ class _SkillEntry:
         self.path = path
         self.content = content
         self.mtime = mtime
-        self.layer = layer  # "pattern" or "standard"
+        self.layer = layer  # "pattern", "workflow", or "standard"
         self.keywords_zh: list[str] = []
         self.keywords_en: list[str] = []
         self._extract_keywords()
@@ -107,17 +114,22 @@ class SkillLoader:
         if os.path.isdir(patterns_dir):
             self._load_dir(patterns_dir, "pattern")
 
+        # Load workflow skills (composite multi-step blueprints)
+        workflows_dir = os.path.join(self._dir, "workflows")
+        if os.path.isdir(workflows_dir):
+            self._load_dir(workflows_dir, "workflow")
+
         # Load standard skills
         standards_dir = os.path.join(self._dir, "standards")
         if os.path.isdir(standards_dir):
             self._load_dir(standards_dir, "standard")
 
+        n_patterns = sum(1 for s in self._skills.values() if s.layer == "pattern")
+        n_workflows = sum(1 for s in self._skills.values() if s.layer == "workflow")
+        n_standards = sum(1 for s in self._skills.values() if s.layer == "standard")
         logger.info(
-            "Loaded %d skills (%d patterns + %d standards) from %s",
-            len(self._skills),
-            sum(1 for s in self._skills.values() if s.layer == "pattern"),
-            sum(1 for s in self._skills.values() if s.layer == "standard"),
-            self._dir,
+            "Loaded %d skills (%d patterns + %d workflows + %d standards) from %s",
+            len(self._skills), n_patterns, n_workflows, n_standards, self._dir,
         )
 
     def _load_dir(self, dirpath: str, layer: str) -> None:
@@ -161,8 +173,8 @@ class SkillLoader:
                     self._base_content = f.read()
                 self._mtimes["_base.md"] = mtime
 
-        # Reload patterns and standards
-        for subdir, layer in [("patterns", "pattern"), ("standards", "standard")]:
+        # Reload patterns, workflows, and standards
+        for subdir, layer in [("patterns", "pattern"), ("workflows", "workflow"), ("standards", "standard")]:
             dirpath = os.path.join(self._dir, subdir)
             if os.path.isdir(dirpath):
                 self._load_dir(dirpath, layer)
@@ -177,14 +189,17 @@ class SkillLoader:
         """
         Match relevant skills based on user input.
 
-        Returns up to 1 pattern skill + all matching standard skills.
-        Pattern skills are mutually exclusive (pick best match).
-        Standard skills stack (all matching ones are included).
+        Priority: workflow > pattern > standard.
+        - Workflow skills: if any workflow matches, it takes precedence over patterns
+          (complex multi-step operations need the workflow blueprint, not a simple pattern).
+        - Pattern skills: mutually exclusive (pick best match). Only used if no workflow matched.
+        - Standard skills: all matching ones are stacked alongside the primary skill.
         """
         self.reload_if_changed()
 
         input_lower = user_input.lower()
         pattern_scores: list[tuple[str, int, _SkillEntry]] = []
+        workflow_scores: list[tuple[str, int, _SkillEntry]] = []
         matched_standards: list[_SkillEntry] = []
 
         # Action skills (delete, modify, query) get a bonus because the action verb
@@ -196,28 +211,57 @@ class SkillLoader:
 
             for kw in skill.keywords_zh:
                 if kw in user_input:
-                    base = 3 if name in _ACTION_SKILLS else 2
-                    # Action verbs at the start of input get extra weight
-                    if name in _ACTION_SKILLS and user_input.strip().startswith(kw):
+                    if skill.layer == "workflow":
+                        # Workflow keywords get high weight — they represent
+                        # specific complex operations
+                        base = 4
+                    elif name in _ACTION_SKILLS:
+                        base = 3
+                    else:
+                        base = 2
+                    # Verbs at the start of input get extra weight
+                    if user_input.strip().startswith(kw):
                         base += 2
                     score += base
 
             for kw in skill.keywords_en:
                 if kw.lower() in input_lower:
-                    base = 2 if name in _ACTION_SKILLS else 1
-                    if name in _ACTION_SKILLS and input_lower.strip().startswith(kw.lower()):
+                    if skill.layer == "workflow":
+                        base = 3
+                    elif name in _ACTION_SKILLS:
+                        base = 2
+                    else:
+                        base = 1
+                    if input_lower.strip().startswith(kw.lower()):
                         base += 2
                     score += base
 
             if score > 0:
-                if skill.layer == "pattern":
+                if skill.layer == "workflow":
+                    workflow_scores.append((name, score, skill))
+                elif skill.layer == "pattern":
                     pattern_scores.append((name, score, skill))
                 else:
                     matched_standards.append(skill)
 
-        # Best pattern skill
         result: list[_SkillEntry] = []
-        if pattern_scores:
+
+        # Workflow takes priority: if a workflow matched, use it instead of pattern
+        if workflow_scores:
+            workflow_scores.sort(key=lambda x: x[1], reverse=True)
+            best_wf = workflow_scores[0]
+            result.append(best_wf[2])
+            logger.info("Matched workflow skill: %s (score=%d)", best_wf[0], best_wf[1])
+
+            # Also include the best pattern as secondary context (optional)
+            if pattern_scores:
+                pattern_scores.sort(key=lambda x: x[1], reverse=True)
+                best_pat = pattern_scores[0]
+                # Only add pattern if it doesn't conflict with workflow
+                result.append(best_pat[2])
+                logger.info("  + pattern context: %s (score=%d)", best_pat[0], best_pat[1])
+        elif pattern_scores:
+            # No workflow matched → use best pattern
             pattern_scores.sort(key=lambda x: x[1], reverse=True)
             best = pattern_scores[0]
             result.append(best[2])
