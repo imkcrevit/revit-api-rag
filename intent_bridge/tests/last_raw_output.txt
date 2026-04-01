@@ -1,0 +1,77 @@
+```json
+{
+  "intent": "composite",
+  "action_plan": [
+    {
+      "step": 1,
+      "intent": "custom",
+      "api_method": "FilteredElementCollector.OfCategory(BuiltInCategory.OST_StructuralFraming).OwnedByView(activeViewId)",
+      "questions": [],
+      "summary": "获取当前视图中所有的结构梁元素 / Get all structural framing elements in the current view."
+    },
+    {
+      "step": 2,
+      "intent": "custom",
+      "api_method": "RevitLinkInstance.GetLinkDocument()",
+      "questions": [
+        {
+          "slot": "link_instance",
+          "text": "请在 Revit 中选择包含目标楼板的链接模型实例 / Please select the Revit link instance containing the target floors",
+          "options": ["点选链接模型 / Pick link instance", "其他 (自定义) / Other (custom)"],
+          "values": ["picked", "custom"],
+          "enrich": "host_pick"
+        }
+      ]
+    },
+    {
+      "step": 3,
+      "intent": "custom",
+      "api_method": "FilteredElementCollector(linkDoc).OfCategory(BuiltInCategory.OST_Floors)",
+      "questions": [
+        {
+          "slot": "target_level_name",
+          "text": "请输入链接模型中用于计算净高的楼板所属标高名称 / Please enter the level name of the floors in the link model for clearance calculation",
+          "options": ["标高 1 (占位)", "其他 (自定义) / Other (custom)"],
+          "values": ["Level 1", "custom"],
+          "enrich": "level"
+        }
+      ]
+    },
+    {
+      "step": 4,
+      "intent": "modify_element",
+      "api_method": "Element.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS).Set(value)",
+      "questions": [
+        {
+          "slot": "confirm_write",
+          "text": "是否确认将计算出的净高值写入梁的“注释”参数中？ / Confirm writing the calculated clearance value to the 'Comments' parameter of the beams?",
+          "options": ["确认 / Confirm", "取消 / Cancel", "其他 (自定义) / Other (custom)"],
+          "values": ["true", "false", "custom"],
+          "enrich": "none"
+        }
+      ]
+    },
+    {
+      "step": 5,
+      "intent": "custom",
+      "api_method": "View.SetElementOverrides(elementId, overrideGraphicSettings)",
+      "questions": [
+        {
+          "slot": "color_scheme",
+          "text": "请选择净高不合规时的着色颜色 / Please select the highlight color for non-compliant clearance",
+          "options": ["红色 / Red", "黄色 / Yellow", "其他 (自定义) / Other (custom)"],
+          "values": ["255,0,0", "255,255,0", "custom"],
+          "enrich": "none"
+        },
+        {
+          "slot": "threshold",
+          "text": "请输入净高合规的阈值 (mm) / Please enter the clearance compliance threshold (mm)",
+          "options": ["2400", "2600", "其他 (自定义) / Other (custom)"],
+          "values": ["2400", "2600", "custom"],
+          "enrich": "none"
+        }
+      ]
+    }
+  ]
+}
+```
