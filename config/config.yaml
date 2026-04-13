@@ -107,6 +107,12 @@ intent_bridge:
     level: "INFO"
     log_llm_calls: true
 
+# --- PromptBridge (设计师提示词优化) ---
+prompt_bridge:
+  model: "google/gemma-3-27b-it:free"
+  temperature: 0.7
+  max_tokens: 4096
+
 # --- SDK 解析配置 ---
 sdk:
   stage1_provider: "gemini_flash"   # ReadMe 解析用 (cheap + fast)

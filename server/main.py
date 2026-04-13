@@ -32,6 +32,11 @@ try:
 except ImportError:
     bridge_router = None
 
+try:
+    from prompt_bridge.router import prompt_bridge_router
+except ImportError:
+    prompt_bridge_router = None
+
 
 def create_app() -> FastAPI:
     config = get_config()
@@ -58,6 +63,10 @@ def create_app() -> FastAPI:
     # MCP Bridge routes (code generation + execution + tool solidification)
     if bridge_router is not None:
         fastapi_app.include_router(bridge_router)
+
+    # PromptBridge routes (designer prompt optimization)
+    if prompt_bridge_router is not None:
+        fastapi_app.include_router(prompt_bridge_router)
 
     # Health check
     @fastapi_app.get("/health")

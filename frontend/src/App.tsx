@@ -7,8 +7,9 @@ import Accordion from './components/shared/Accordion'
 import CodeGenTab from './components/tabs/CodeGenTab'
 import ApiExplorerTab from './components/tabs/ApiExplorerTab'
 import BridgeTab from './components/tabs/BridgeTab'
+import PromptBridgeTab from './components/tabs/PromptBridgeTab'
 
-const TABS = ['Code Generation', 'API Explorer', 'MCP Bridge'] as const
+const TABS = ['Code Generation', 'API Explorer', 'MCP Bridge', 'PromptBridge'] as const
 
 export default function App() {
   const [activeTab, setActiveTab] = useState(2) // Default to MCP Bridge
@@ -91,6 +92,7 @@ export default function App() {
         {activeTab === 0 && <CodeGenTab />}
         {activeTab === 1 && <ApiExplorerTab />}
         {activeTab === 2 && <BridgeTab />}
+        {activeTab === 3 && <PromptBridgeTab />}
       </div>
     </div>
   )
