@@ -1,4 +1,4 @@
-/* Tab: PromptBridge — 设计师提示词优化助手 */
+/* Tab: PromptBridge — designer prompt refinement with inline corrections */
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -6,19 +6,25 @@ import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../types/api'
 import { useSettingsStore } from '../../store'
 
+const CONTEXT_TYPES = [
+  'Wall', 'Room', 'Column', 'Floor', 'Door', 'Window',
+  'Ref Point', 'Level', 'Furniture', 'Stair', 'Roof',
+]
+
 const QUICK_PROMPTS = [
   { label: '创建房间 / Create Room', text: '创建一个标准间' },
   { label: 'Place Column', text: 'Place a structural column at the center' },
   { label: '画墙 / Draw Wall', text: '画一面墙' },
   { label: 'Query Elements', text: 'How many walls are in the current view?' },
   { label: '布局设计 / Layout', text: '帮我布置一个办公区' },
-  { label: 'Modify Element', text: 'Make this wall 500mm taller' },
+  { label: 'Modify / 修改', text: 'Make this wall 500mm taller' },
 ]
 
 export default function PromptBridgeTab() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [contextType, setContextType] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const { sessionId } = useSettingsStore()
@@ -41,7 +47,11 @@ export default function PromptBridgeTab() {
       const resp = await fetch('/api/prompt-bridge/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, session_id: sessionId }),
+        body: JSON.stringify({
+          message: msg,
+          session_id: sessionId,
+          context_type: contextType,
+        }),
         signal: abort.signal,
       })
       if (!resp.ok) throw new Error(`Error ${resp.status}`)
@@ -79,16 +89,16 @@ export default function PromptBridgeTab() {
       }
 
       if (!content) {
-        setMessages(prev => [...prev, { role: 'assistant', content: '(无响应)' }])
+        setMessages(prev => [...prev, { role: 'assistant', content: '(No response / 无响应)' }])
       }
     } catch (e: any) {
       if (e.name !== 'AbortError') {
-        setMessages(prev => [...prev, { role: 'assistant', content: `错误：${e.message}` }])
+        setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }])
       }
     } finally {
       setStreaming(false)
     }
-  }, [input, streaming, sessionId])
+  }, [input, streaming, sessionId, contextType])
 
   const handleClear = () => {
     setMessages([])
@@ -107,6 +117,28 @@ export default function PromptBridgeTab() {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Correction styling: ~~wrong~~**right** */}
+      <style>{`
+        .pb-response del {
+          color: #c0392b;
+          background: rgba(231, 76, 60, 0.08);
+          text-decoration: line-through;
+          padding: 1px 3px;
+          border-radius: 2px;
+        }
+        .pb-response del + strong,
+        .pb-response del + em {
+          color: #27ae60;
+          background: rgba(39, 174, 96, 0.08);
+          text-decoration: none;
+          border-bottom: 2px solid rgba(39, 174, 96, 0.4);
+          padding: 1px 3px;
+          border-radius: 2px;
+          font-weight: 500;
+          font-style: normal;
+        }
+      `}</style>
+
       {/* Messages / Welcome */}
       <div className="flex-1 overflow-y-auto p-4 min-h-[420px]">
         {isEmpty ? (
@@ -128,7 +160,9 @@ export default function PromptBridgeTab() {
               marginBottom: 32,
               lineHeight: 1.6,
             }}>
-              Describe what you need in your own words — I'll refine it into a precise AI prompt. 用你习惯的方式描述需求，我来帮你优化。
+              Describe what you need — I'll fix errors and refine it into a precise prompt.
+              <br />
+              用你习惯的方式描述需求，我来纠正并优化成精确的提示词。
             </p>
 
             {/* Quick prompts */}
@@ -176,7 +210,7 @@ export default function PromptBridgeTab() {
               color: 'var(--faint)',
               letterSpacing: '0.03em',
             }}>
-              Click an example to get started, or type your own request / 点击示例快速开始，或直接输入
+              Click an example to get started, or type your own request / 点击示例快速开始
             </p>
           </div>
         ) : (
@@ -195,10 +229,9 @@ export default function PromptBridgeTab() {
                   }}
                 >
                   {m.role === 'assistant' ? (
-                    <div className="prompt-bridge-response">
+                    <div className="pb-response">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}
                         components={{
-                          // 给 code block 加一个复制按钮
                           code({ children, className }) {
                             const isBlock = className?.includes('language-')
                             if (!isBlock) {
@@ -289,6 +322,49 @@ export default function PromptBridgeTab() {
             <div ref={bottomRef} />
           </div>
         )}
+      </div>
+
+      {/* Context type selector */}
+      <div style={{
+        padding: '6px 12px',
+        borderTop: '1px solid var(--line)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+      }}>
+        <span style={{
+          fontFamily: 'var(--mono)',
+          fontSize: 11,
+          color: 'var(--faint)',
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          marginRight: 4,
+          flexShrink: 0,
+        }}>
+          Context
+        </span>
+        {CONTEXT_TYPES.map(t => (
+          <button
+            key={t}
+            onClick={() => setContextType(prev => prev === t ? null : t)}
+            style={{
+              fontFamily: 'var(--mono)',
+              fontSize: 11,
+              padding: '3px 10px',
+              border: '1px solid',
+              borderColor: contextType === t ? 'var(--accent)' : 'var(--subtle)',
+              borderRadius: 2,
+              cursor: 'pointer',
+              background: contextType === t ? 'var(--accent)' : 'transparent',
+              color: contextType === t ? '#fff' : 'var(--mid)',
+              transition: 'all 0.15s',
+              lineHeight: '18px',
+            }}
+          >
+            {t}
+          </button>
+        ))}
       </div>
 
       {/* Input */}

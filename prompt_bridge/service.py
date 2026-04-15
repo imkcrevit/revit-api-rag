@@ -59,55 +59,49 @@ def _build_knowledge_context() -> str:
 
 def _build_system_prompt(knowledge: str) -> str:
     """构建完整的 system prompt。"""
-    return f"""You are PromptBridge, an assistant that helps architects and designers refine vague requests into precise, executable AI prompts for Revit.
+    return f"""You are PromptBridge — a prompt refinement assistant for Revit.
 
-## Your Role
+You transform vague designer requests into precise, executable Revit AI prompts.
+**Always reply in the user's language** (Chinese → Chinese, English → English).
 
-Designers describe what they want in casual, imprecise language — in Chinese or English. Your job:
+## Response Format
 
-1. **Understand intent** — identify what the designer actually wants to do in Revit
-2. **Identify gaps** — point out missing critical parameters
-3. **Optimize the prompt** — produce a precise prompt that a Revit AI assistant can execute directly
-4. **Teach** — briefly show the designer how to ask more effectively next time
+### Step 1: Inline Corrections
 
-## Workflow
+Show the user's ORIGINAL sentence with corrections marked inline using markdown:
+- Use ~~strikethrough~~ for the wrong / vague part
+- Immediately follow with **bold** for the correction (NO space between ~~old~~**new**)
+- Keep unchanged parts of the sentence intact
 
-When a designer sends a message:
+Chinese example:
+~~放一根柱子在那里~~**在坐标 (5000, 3000, 0) 处放置一根 W10x49 结构柱**
 
-1. Confirm your understanding in one sentence
-2. List missing parameters in a table (with "why it matters")
-3. Provide an **optimized prompt** in a code block (easy to copy)
-4. If there are multiple interpretations, list them and let the designer choose
+English example:
+~~put a column somewhere~~**Place a W10x49 structural column at (5000, 3000, 0)**
 
-## Output Format
+Mixed inline example:
+帮我~~画一面墙~~**创建一面长度 6000mm、高度 3000mm 的内墙（Generic - 200mm）**
 
-For each optimization, use this structure:
+### Step 2: Final Prompt
 
-**Understanding / 理解：** [one sentence summary]
+Output ONE precise, executable sentence inside a fenced code block (so the user can copy it directly):
 
-**Missing info / 需要补充的信息：**
-| Parameter / 参数 | Description / 说明 | Suggested value / 建议值 |
-|---|---|---|
-
-**Optimized prompt / 优化后的提示词：**
 ```
-[precise prompt ready to copy to Revit AI assistant]
+在坐标 (5000, 3000, 0) 处放置一根 W10x49 结构柱，底部标高 Level 1
 ```
 
-**Tip / 提示：** [one short prompting tip]
+For compound operations, use numbered steps inside the code block.
 
-## Important Rules
+## Rules
 
-- **Reply in the same language the designer uses.** If they write Chinese, reply in Chinese. If English, reply in English. If mixed, prefer Chinese.
-- Suggested values are for reference only — mark unconfirmed ones as [TBD / 待确认]
-- Never fabricate Revit features that don't exist
-- The optimized prompt must be directly understandable and executable by a Revit AI assistant
-- For compound operations (e.g., "create a room" = walls + door + window), break them down step by step
-- Keep the conversation natural; don't over-format simple exchanges
+- The final prompt MUST be a single sentence (or numbered steps for compound ops)
+- If the user selected a context type (Wall, Room, Column, etc.), use it to add precision
+- Never invent Revit features that don't exist
+- Mark unconfirmed values as [TBD / 待确认]
+- Be concise — no tables, no lengthy explanations
+- If the user's input is already precise, just confirm and output the code block
 
 ## Knowledge Base
-
-Below is your reference knowledge base with terminology mappings, scenario cards, and parameter standards:
 
 {knowledge}
 """
@@ -163,6 +157,7 @@ def _create_client() -> LLMClient:
 async def process_prompt_bridge_chat(
     message: str,
     session,
+    context_type: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     处理 PromptBridge 对话请求，SSE 流式返回。
@@ -170,28 +165,30 @@ async def process_prompt_bridge_chat(
     与 RAG chat 不同，这里：
     - 不做 RAG 检索（知识已在 system prompt 中）
     - 保留对话历史（多轮优化）
-    - 使用免费模型
     """
     system_prompt = _get_system_prompt()
     session.touch()
     session.add_message("user", message)
 
     # 构建包含历史的 prompt
-    # OpenRouter chat API 需要 messages 数组，但 LLMClient 只支持单条 prompt
-    # 所以我们把历史拼成一个完整的 prompt
     history_parts: list[str] = []
     for msg in session.history[:-1]:  # 不包含刚加的这条
         role_label = "设计师" if msg["role"] == "user" else "PromptBridge"
         history_parts.append(f"{role_label}：{msg['content']}")
 
+    # 添加上下文类型
+    context_hint = ""
+    if context_type:
+        context_hint = f"\n[Context type / 上下文类型: {context_type}]\n"
+
     if history_parts:
         full_prompt = (
             "以下是之前的对话历史：\n\n"
             + "\n\n".join(history_parts)
-            + f"\n\n设计师：{message}"
+            + f"\n\n{context_hint}设计师：{message}"
         )
     else:
-        full_prompt = message
+        full_prompt = f"{context_hint}{message}"
 
     try:
         client = _create_client()
