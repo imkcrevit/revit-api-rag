@@ -19,7 +19,6 @@ prompt_bridge_router = APIRouter(prefix="/api/prompt-bridge")
 class PromptBridgeChatRequest(BaseModel):
     message: str
     session_id: str | None = None
-    context_type: str | None = None
 
 
 class PromptBridgeClearRequest(BaseModel):
@@ -32,7 +31,7 @@ async def prompt_bridge_chat(req: PromptBridgeChatRequest):
     session = store.get_or_create(req.session_id)
 
     return StreamingResponse(
-        process_prompt_bridge_chat(req.message, session, req.context_type),
+        process_prompt_bridge_chat(req.message, session),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

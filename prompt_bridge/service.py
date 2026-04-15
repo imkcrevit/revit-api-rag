@@ -1,7 +1,7 @@
 """
 PromptBridge 服务 — 加载知识库 Markdown，构建 system prompt，流式对话
 
-使用 OpenRouter 免费模型，帮助设计师将模糊需求转化为精确的 AI 提示词。
+帮助设计师将模糊需求转化为精确的 AI 提示词。
 """
 from __future__ import annotations
 
@@ -68,38 +68,58 @@ You transform vague designer requests into precise, executable Revit AI prompts.
 
 ### Step 1: Inline Corrections
 
-Show the user's ORIGINAL sentence with corrections marked inline using markdown:
+Show the user's ORIGINAL sentence with corrections marked inline:
 - Use ~~strikethrough~~ for the wrong / vague part
 - Immediately follow with **bold** for the correction (NO space between ~~old~~**new**)
 - Keep unchanged parts of the sentence intact
 
-Chinese example:
-~~放一根柱子在那里~~**在坐标 (5000, 3000, 0) 处放置一根 W10x49 结构柱**
+Example: 帮我~~画一面墙~~**创建一面长度 6000mm、高度 3000mm 的内墙（Generic - 200mm）**
 
-English example:
-~~put a column somewhere~~**Place a W10x49 structural column at (5000, 3000, 0)**
+### Step 2: Output Prompts
 
-Mixed inline example:
-帮我~~画一面墙~~**创建一面长度 6000mm、高度 3000mm 的内墙（Generic - 200mm）**
+**Case A — Clear request (no ambiguity):**
+Output ONE precise prompt using a single `[OPTION]` block:
 
-### Step 2: Final Prompt
-
-Output ONE precise, executable sentence inside a fenced code block (so the user can copy it directly):
-
-```
+[OPTION: 放置结构柱 / Place Column]
 在坐标 (5000, 3000, 0) 处放置一根 W10x49 结构柱，底部标高 Level 1
-```
 
-For compound operations, use numbered steps inside the code block.
+**Case B — Ambiguous request (multiple interpretations):**
+Output 2-4 possible prompts, each as a separate `[OPTION]` block:
 
-## Rules
+[OPTION: 内墙 / Interior Wall]
+创建一面 Generic-200mm 内墙，长 6000mm，高 3000mm，起点 (0,0,0)，沿 X 轴方向
 
-- The final prompt MUST be a single sentence (or numbered steps for compound ops)
-- If the user selected a context type (Wall, Room, Column, etc.), use it to add precision
+[OPTION: 外墙 / Exterior Wall]
+创建一面 Basic Wall-300mm 外墙，长 8000mm，高 3600mm，起点 (0,0,0)，沿 X 轴方向
+
+[OPTION: 幕墙 / Curtain Wall]
+创建一面幕墙，长 10000mm，高 4000mm，起点 (0,0,0)
+
+**Case C — Need clarification (missing critical info):**
+Ask the user to choose by outputting `[CHOICE]` blocks. The user will click one to answer:
+
+需要确认墙体类型：
+
+[CHOICE: 内墙 / Interior Wall]
+适用于室内分隔，常见厚度 100-200mm
+
+[CHOICE: 外墙 / Exterior Wall]
+建筑外围护，常见厚度 200-400mm
+
+[CHOICE: 幕墙 / Curtain Wall]
+玻璃幕墙系统，用于立面
+
+## CRITICAL FORMAT RULES
+
+- `[OPTION: title]` and `[CHOICE: title]` MUST each start on its own line
+- The content after `[OPTION: ...]` or `[CHOICE: ...]` is on the NEXT line(s)
+- Each block is separated by a blank line
+- OPTION content = a single executable prompt sentence (or numbered steps)
+- CHOICE content = a brief description to help the user decide
+- Do NOT use fenced code blocks (```). Use [OPTION] and [CHOICE] markers instead
 - Never invent Revit features that don't exist
 - Mark unconfirmed values as [TBD / 待确认]
 - Be concise — no tables, no lengthy explanations
-- If the user's input is already precise, just confirm and output the code block
 
 ## Knowledge Base
 
@@ -157,7 +177,6 @@ def _create_client() -> LLMClient:
 async def process_prompt_bridge_chat(
     message: str,
     session,
-    context_type: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     处理 PromptBridge 对话请求，SSE 流式返回。
@@ -176,19 +195,14 @@ async def process_prompt_bridge_chat(
         role_label = "设计师" if msg["role"] == "user" else "PromptBridge"
         history_parts.append(f"{role_label}：{msg['content']}")
 
-    # 添加上下文类型
-    context_hint = ""
-    if context_type:
-        context_hint = f"\n[Context type / 上下文类型: {context_type}]\n"
-
     if history_parts:
         full_prompt = (
             "以下是之前的对话历史：\n\n"
             + "\n\n".join(history_parts)
-            + f"\n\n{context_hint}设计师：{message}"
+            + f"\n\n设计师：{message}"
         )
     else:
-        full_prompt = f"{context_hint}{message}"
+        full_prompt = message
 
     try:
         client = _create_client()

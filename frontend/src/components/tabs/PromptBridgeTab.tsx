@@ -1,4 +1,4 @@
-/* Tab: PromptBridge — designer prompt refinement with inline corrections */
+/* Tab: PromptBridge — designer prompt refinement with inline corrections + option cards */
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -6,11 +6,7 @@ import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../types/api'
 import { useSettingsStore } from '../../store'
 
-const CONTEXT_TYPES = [
-  'Wall', 'Room', 'Column', 'Floor', 'Door', 'Window',
-  'Ref Point', 'Level', 'Furniture', 'Stair', 'Roof',
-]
-
+/* ── Quick prompts shown on welcome screen ── */
 const QUICK_PROMPTS = [
   { label: '创建房间 / Create Room', text: '创建一个标准间' },
   { label: 'Place Column', text: 'Place a structural column at the center' },
@@ -20,11 +16,66 @@ const QUICK_PROMPTS = [
   { label: 'Modify / 修改', text: 'Make this wall 500mm taller' },
 ]
 
+/* ── Parse [OPTION: title] and [CHOICE: title] blocks from LLM output ── */
+interface ParsedBlock { title: string; content: string }
+
+function parseBlocks(text: string, tag: 'OPTION' | 'CHOICE'): {
+  before: string; blocks: ParsedBlock[]; after: string
+} | null {
+  const regex = new RegExp(
+    `\\[${tag}:\\s*(.+?)\\]\\s*\\n([\\s\\S]*?)(?=\\n\\[${tag}:|\\n\\[(?:OPTION|CHOICE):|$)`,
+    'g',
+  )
+  const matches = [...text.matchAll(regex)]
+  if (matches.length === 0) return null
+
+  const firstIdx = matches[0].index!
+  const before = text.slice(0, firstIdx).trim()
+  const lastMatch = matches[matches.length - 1]
+  const lastEnd = lastMatch.index! + lastMatch[0].length
+  const after = text.slice(lastEnd).trim()
+
+  return {
+    before,
+    blocks: matches.map(m => ({ title: m[1].trim(), content: m[2].trim() })),
+    after,
+  }
+}
+
+/* ── Card styles ── */
+const cardBase: React.CSSProperties = {
+  fontFamily: 'var(--mono)',
+  fontSize: 12,
+  padding: '14px 14px 10px',
+  background: 'var(--bg)',
+  border: '1px solid var(--subtle)',
+  borderRadius: 2,
+  textAlign: 'left',
+  transition: 'all 0.2s',
+  color: 'var(--dark)',
+  position: 'relative',
+  cursor: 'default',
+}
+
+const copyBtnStyle: React.CSSProperties = {
+  fontFamily: 'var(--mono)',
+  fontSize: 10,
+  padding: '3px 10px',
+  background: 'var(--accent)',
+  border: 'none',
+  borderRadius: 2,
+  cursor: 'pointer',
+  color: '#fff',
+  letterSpacing: '0.05em',
+  textTransform: 'uppercase',
+}
+
+/* ── Main component ── */
 export default function PromptBridgeTab() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
-  const [contextType, setContextType] = useState<string | null>(null)
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const { sessionId } = useSettingsStore()
@@ -47,11 +98,7 @@ export default function PromptBridgeTab() {
       const resp = await fetch('/api/prompt-bridge/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: msg,
-          session_id: sessionId,
-          context_type: contextType,
-        }),
+        body: JSON.stringify({ message: msg, session_id: sessionId }),
         signal: abort.signal,
       })
       if (!resp.ok) throw new Error(`Error ${resp.status}`)
@@ -98,7 +145,7 @@ export default function PromptBridgeTab() {
     } finally {
       setStreaming(false)
     }
-  }, [input, streaming, sessionId, contextType])
+  }, [input, streaming, sessionId])
 
   const handleClear = () => {
     setMessages([])
@@ -109,8 +156,138 @@ export default function PromptBridgeTab() {
     }).catch(() => {})
   }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text).catch(() => {})
+  const copyToClipboard = (text: string, idx?: number) => {
+    navigator.clipboard.writeText(text).then(() => {
+      if (idx !== undefined) {
+        setCopiedIdx(idx)
+        setTimeout(() => setCopiedIdx(null), 1500)
+      }
+    }).catch(() => {})
+  }
+
+  /* ── Render a markdown section (corrections text etc.) ── */
+  const renderMarkdown = (text: string) => (
+    <ReactMarkdown remarkPlugins={[remarkGfm]}
+      components={{
+        code({ children, className }) {
+          const isBlock = className?.includes('language-')
+          if (!isBlock) {
+            return <code style={{
+              fontFamily: 'var(--mono)', fontSize: 12,
+              background: 'var(--bg3)', padding: '1px 4px', borderRadius: 2,
+            }}>{children}</code>
+          }
+          const text = String(children).replace(/\n$/, '')
+          return (
+            <div style={{ position: 'relative', margin: '8px 0' }}>
+              <pre style={{
+                fontFamily: 'var(--mono)', fontSize: 12, background: 'var(--bg3)',
+                border: '1px solid var(--line)', borderRadius: 2,
+                padding: '12px 14px', overflowX: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.6,
+              }}><code>{text}</code></pre>
+              <button onClick={() => copyToClipboard(text)}
+                style={{ ...copyBtnStyle, position: 'absolute', top: 6, right: 6 }}>Copy</button>
+            </div>
+          )
+        },
+      }}
+    >{text}</ReactMarkdown>
+  )
+
+  /* ── Render OPTION cards (copyable prompt cards) ── */
+  const renderOptionCards = (blocks: ParsedBlock[]) => (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: blocks.length === 1 ? '1fr' : 'repeat(auto-fill, minmax(260px, 1fr))',
+      gap: 10, margin: '12px 0',
+    }}>
+      {blocks.map((b, i) => (
+        <div key={i} style={{
+          ...cardBase,
+          borderColor: copiedIdx === i ? 'var(--accent)' : 'var(--subtle)',
+        }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)' }}
+          onMouseLeave={e => { if (copiedIdx !== i) e.currentTarget.style.borderColor = 'var(--subtle)' }}
+        >
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, color: 'var(--dark)' }}>
+            {b.title}
+          </div>
+          <div style={{
+            fontSize: 12, color: 'var(--mid)', lineHeight: 1.6,
+            marginBottom: 10, whiteSpace: 'pre-wrap',
+          }}>
+            {b.content}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button onClick={() => copyToClipboard(b.content, i)} style={copyBtnStyle}>
+              {copiedIdx === i ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+
+  /* ── Render CHOICE cards (clickable disambiguation cards) ── */
+  const renderChoiceCards = (blocks: ParsedBlock[]) => (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+      gap: 10, margin: '12px 0',
+    }}>
+      {blocks.map((b, i) => (
+        <button key={i} onClick={() => send(b.title)} disabled={streaming}
+          style={{
+            ...cardBase,
+            cursor: 'pointer',
+            display: 'block',
+            width: '100%',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.borderColor = 'var(--accent)'
+            e.currentTarget.style.color = 'var(--accent)'
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.borderColor = 'var(--subtle)'
+            e.currentTarget.style.color = 'var(--dark)'
+          }}
+        >
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>{b.title}</div>
+          <div style={{ fontSize: 11, color: 'var(--faint)', lineHeight: 1.5 }}>{b.content}</div>
+        </button>
+      ))}
+    </div>
+  )
+
+  /* ── Render a full assistant message with parsed blocks ── */
+  const renderAssistantMessage = (content: string) => {
+    const options = parseBlocks(content, 'OPTION')
+    const choices = parseBlocks(content, 'CHOICE')
+
+    // Has OPTION blocks
+    if (options) {
+      return (
+        <>
+          {options.before && renderMarkdown(options.before)}
+          {renderOptionCards(options.blocks)}
+          {options.after && renderMarkdown(options.after)}
+        </>
+      )
+    }
+
+    // Has CHOICE blocks (disambiguation)
+    if (choices) {
+      return (
+        <>
+          {choices.before && renderMarkdown(choices.before)}
+          {renderChoiceCards(choices.blocks)}
+          {choices.after && renderMarkdown(choices.after)}
+        </>
+      )
+    }
+
+    // Fallback: plain markdown
+    return renderMarkdown(content)
   }
 
   const isEmpty = messages.length === 0
@@ -142,7 +319,7 @@ export default function PromptBridgeTab() {
       {/* Messages / Welcome */}
       <div className="flex-1 overflow-y-auto p-4 min-h-[420px]">
         {isEmpty ? (
-          <div style={{ maxWidth: 600, margin: '60px auto', textAlign: 'center' }}>
+          <div style={{ maxWidth: 640, margin: '60px auto', textAlign: 'center' }}>
             <h2 style={{
               fontFamily: 'var(--display)',
               fontSize: 20,
@@ -160,9 +337,9 @@ export default function PromptBridgeTab() {
               marginBottom: 32,
               lineHeight: 1.6,
             }}>
-              Describe what you need — I'll fix errors and refine it into a precise prompt.
+              Powered by Skill & RAG — chat with AI more effectively
               <br />
-              用你习惯的方式描述需求，我来纠正并优化成精确的提示词。
+              基于 Skill、RAG，让你和 AI 聊天更加顺畅
             </p>
 
             {/* Quick prompts */}
@@ -218,7 +395,7 @@ export default function PromptBridgeTab() {
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div
-                  className="max-w-[85%] px-4 py-2 group relative"
+                  className={`max-w-[85%] px-4 py-2 group relative ${m.role === 'assistant' ? 'pb-response' : ''}`}
                   style={{
                     borderRadius: 2,
                     fontFamily: m.role === 'user' ? 'var(--mono)' : 'var(--serif)',
@@ -228,143 +405,13 @@ export default function PromptBridgeTab() {
                     border: m.role === 'user' ? 'none' : '1px solid var(--line)',
                   }}
                 >
-                  {m.role === 'assistant' ? (
-                    <div className="pb-response">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}
-                        components={{
-                          code({ children, className }) {
-                            const isBlock = className?.includes('language-')
-                            if (!isBlock) {
-                              return <code style={{
-                                fontFamily: 'var(--mono)',
-                                fontSize: 12,
-                                background: 'var(--bg3)',
-                                padding: '1px 4px',
-                                borderRadius: 2,
-                              }}>{children}</code>
-                            }
-                            const text = String(children).replace(/\n$/, '')
-                            return (
-                              <div style={{ position: 'relative', margin: '8px 0' }}>
-                                <pre style={{
-                                  fontFamily: 'var(--mono)',
-                                  fontSize: 12,
-                                  background: 'var(--bg3)',
-                                  border: '1px solid var(--line)',
-                                  borderRadius: 2,
-                                  padding: '12px 14px',
-                                  overflowX: 'auto',
-                                  whiteSpace: 'pre-wrap',
-                                  lineHeight: 1.6,
-                                }}>
-                                  <code>{text}</code>
-                                </pre>
-                                <button
-                                  onClick={() => copyToClipboard(text)}
-                                  style={{
-                                    position: 'absolute',
-                                    top: 6,
-                                    right: 6,
-                                    fontFamily: 'var(--mono)',
-                                    fontSize: 10,
-                                    padding: '3px 8px',
-                                    background: 'var(--bg)',
-                                    border: '1px solid var(--subtle)',
-                                    borderRadius: 2,
-                                    cursor: 'pointer',
-                                    color: 'var(--mid)',
-                                    letterSpacing: '0.05em',
-                                    textTransform: 'uppercase',
-                                  }}
-                                >
-                                  Copy
-                                </button>
-                              </div>
-                            )
-                          },
-                          table({ children }) {
-                            return (
-                              <div style={{ overflowX: 'auto', margin: '8px 0' }}>
-                                <table style={{
-                                  fontFamily: 'var(--mono)',
-                                  fontSize: 12,
-                                  borderCollapse: 'collapse',
-                                  width: '100%',
-                                }}>
-                                  {children}
-                                </table>
-                              </div>
-                            )
-                          },
-                          th({ children }) {
-                            return <th style={{
-                              padding: '6px 10px',
-                              borderBottom: '2px solid var(--line)',
-                              textAlign: 'left',
-                              fontWeight: 600,
-                              color: 'var(--dark)',
-                            }}>{children}</th>
-                          },
-                          td({ children }) {
-                            return <td style={{
-                              padding: '6px 10px',
-                              borderBottom: '1px solid var(--line)',
-                              color: 'var(--mid)',
-                            }}>{children}</td>
-                          },
-                        }}
-                      >{m.content}</ReactMarkdown>
-                    </div>
-                  ) : m.content}
+                  {m.role === 'assistant' ? renderAssistantMessage(m.content) : m.content}
                 </div>
               </div>
             ))}
             <div ref={bottomRef} />
           </div>
         )}
-      </div>
-
-      {/* Context type selector */}
-      <div style={{
-        padding: '6px 12px',
-        borderTop: '1px solid var(--line)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        flexWrap: 'wrap',
-      }}>
-        <span style={{
-          fontFamily: 'var(--mono)',
-          fontSize: 11,
-          color: 'var(--faint)',
-          letterSpacing: '0.05em',
-          textTransform: 'uppercase',
-          marginRight: 4,
-          flexShrink: 0,
-        }}>
-          Context
-        </span>
-        {CONTEXT_TYPES.map(t => (
-          <button
-            key={t}
-            onClick={() => setContextType(prev => prev === t ? null : t)}
-            style={{
-              fontFamily: 'var(--mono)',
-              fontSize: 11,
-              padding: '3px 10px',
-              border: '1px solid',
-              borderColor: contextType === t ? 'var(--accent)' : 'var(--subtle)',
-              borderRadius: 2,
-              cursor: 'pointer',
-              background: contextType === t ? 'var(--accent)' : 'transparent',
-              color: contextType === t ? '#fff' : 'var(--mid)',
-              transition: 'all 0.15s',
-              lineHeight: '18px',
-            }}
-          >
-            {t}
-          </button>
-        ))}
       </div>
 
       {/* Input */}
