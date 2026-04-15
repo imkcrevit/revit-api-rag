@@ -7,12 +7,12 @@ import type { ChatMessage } from '../../types/api'
 import { useSettingsStore } from '../../store'
 
 const QUICK_PROMPTS = [
-  { label: '创建房间', text: '创建一个标准间' },
-  { label: '放置构件', text: '放一根柱子' },
-  { label: '画墙', text: '画一面墙' },
-  { label: '查询元素', text: '有多少面墙' },
-  { label: '布局设计', text: '帮我布置一个办公区' },
-  { label: '修改元素', text: '把这面墙改高一点' },
+  { label: '创建房间 / Create Room', text: '创建一个标准间' },
+  { label: 'Place Column', text: 'Place a structural column at the center' },
+  { label: '画墙 / Draw Wall', text: '画一面墙' },
+  { label: 'Query Elements', text: 'How many walls are in the current view?' },
+  { label: '布局设计 / Layout', text: '帮我布置一个办公区' },
+  { label: 'Modify Element', text: 'Make this wall 500mm taller' },
 ]
 
 export default function PromptBridgeTab() {
@@ -128,7 +128,7 @@ export default function PromptBridgeTab() {
               marginBottom: 32,
               lineHeight: 1.6,
             }}>
-              用你习惯的方式描述需求，我来帮你优化成 AI 能精确执行的提示词。
+              Describe what you need in your own words — I'll refine it into a precise AI prompt. 用你习惯的方式描述需求，我来帮你优化。
             </p>
 
             {/* Quick prompts */}
@@ -176,7 +176,7 @@ export default function PromptBridgeTab() {
               color: 'var(--faint)',
               letterSpacing: '0.03em',
             }}>
-              点击上面的示例快速开始，或直接输入你的需求
+              Click an example to get started, or type your own request / 点击示例快速开始，或直接输入
             </p>
           </div>
         ) : (
@@ -296,7 +296,7 @@ export default function PromptBridgeTab() {
         <input
           type="text"
           className="input-field flex-1"
-          placeholder="描述你想在 Revit 中做什么..."
+          placeholder="Describe what you want to do in Revit... / 描述你想在 Revit 中做什么..."
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
