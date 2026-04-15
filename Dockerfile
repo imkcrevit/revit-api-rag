@@ -26,6 +26,7 @@ COPY pipeline/ pipeline/
 COPY server/ server/
 COPY mcp_bridge/ mcp_bridge/
 COPY intent_bridge/ intent_bridge/
+COPY prompt_bridge/ prompt_bridge/
 
 # Copy built React frontend
 COPY --from=frontend-build /build/dist/ frontend/dist/
