@@ -1,7 +1,11 @@
 ﻿using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using revit_mcp_plugin.Configuration;
+using revit_mcp_plugin.Utils;
+using Newtonsoft.Json;
 using System;
+using System.IO;
 
 namespace revit_mcp_plugin.Core
 {
@@ -12,29 +16,92 @@ namespace revit_mcp_plugin.Core
         {
             try
             {
-                // 获取socket服务
-                // Obtain socket service.
-                SocketService service = SocketService.Instance;
+                ServiceSettings settings = LoadSettings();
+                bool useWebSocket = string.Equals(settings.Mode, "websocket",
+                    StringComparison.OrdinalIgnoreCase);
 
-                if (service.IsRunning)
+                if (useWebSocket)
                 {
-                    service.Stop();
-                    TaskDialog.Show("revitMCP", "Close Server");
+                    return HandleWebSocket(commandData, settings);
                 }
                 else
                 {
-                    service.Initialize(commandData.Application);
-                    service.Start();
-                    TaskDialog.Show("revitMCP", "Open Server");
+                    return HandleTcp(commandData);
                 }
-
-                return Result.Succeeded;
             }
             catch (Exception ex)
             {
                 message = ex.Message;
                 return Result.Failed;
             }
+        }
+
+        private Result HandleTcp(ExternalCommandData commandData)
+        {
+            // Stop WebSocket if it was running (mode switch)
+            if (WebSocketService.Instance.IsRunning)
+                WebSocketService.Instance.Stop();
+
+            SocketService service = SocketService.Instance;
+
+            if (service.IsRunning)
+            {
+                service.Stop();
+                TaskDialog.Show("revitMCP", "TCP Server Closed");
+            }
+            else
+            {
+                service.Initialize(commandData.Application);
+                service.Start();
+                TaskDialog.Show("revitMCP", $"TCP Server Started (port {service.Port})");
+            }
+
+            return Result.Succeeded;
+        }
+
+        private Result HandleWebSocket(ExternalCommandData commandData, ServiceSettings settings)
+        {
+            // Stop TCP if it was running (mode switch)
+            if (SocketService.Instance.IsRunning)
+                SocketService.Instance.Stop();
+
+            WebSocketService service = WebSocketService.Instance;
+
+            if (service.IsRunning)
+            {
+                service.Stop();
+                TaskDialog.Show("revitMCP", "WebSocket Disconnected");
+            }
+            else
+            {
+                service.Initialize(commandData.Application);
+                service.Start(settings.WsUrl, settings.SlotId);
+                TaskDialog.Show("revitMCP",
+                    $"WebSocket Connected\nServer: {settings.WsUrl}\nSlot: {settings.SlotId}");
+            }
+
+            return Result.Succeeded;
+        }
+
+        private ServiceSettings LoadSettings()
+        {
+            try
+            {
+                string configPath = PathManager.GetCommandRegistryFilePath();
+                if (File.Exists(configPath))
+                {
+                    string json = File.ReadAllText(configPath);
+                    var config = JsonConvert.DeserializeObject<FrameworkConfig>(json);
+                    if (config?.Settings != null)
+                        return config.Settings;
+                }
+            }
+            catch
+            {
+                // Fall through to defaults
+            }
+
+            return new ServiceSettings();
         }
     }
 }

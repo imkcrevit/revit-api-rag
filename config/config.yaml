@@ -113,6 +113,18 @@ prompt_bridge:
   temperature: 0.7
   max_tokens: 4096
 
+# --- 管理员密码（用于日志查看等管理功能） ---
+admin:
+  password: "revit2026admin"
+
+# --- TextStudio (多语言翻译 & 文本优化) ---
+text_studio:
+  model: "deepseek/deepseek-chat-v3-0324"
+  temperature: 0.7
+  max_tokens: 4096
+  daily_limit_usd: 1.0   # 每日费用上限（美元），超过后自动中断服务
+  experimental: true      # true = 实验模式（需手动点击进入），false = 正式上线
+
 # --- SDK 解析配置 ---
 sdk:
   stage1_provider: "gemini_flash"   # ReadMe 解析用 (cheap + fast)
@@ -126,6 +138,7 @@ mcp_bridge:
   revit_port: 18080
   command_timeout: 60
   connect_timeout: 5
+  max_slots: 5   # WebSocket 多用户槽位数（e2-small 建议 ≤5）
 
 # --- 服务配置 ---
 server:

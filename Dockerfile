@@ -27,14 +27,16 @@ COPY server/ server/
 COPY mcp_bridge/ mcp_bridge/
 COPY intent_bridge/ intent_bridge/
 COPY prompt_bridge/ prompt_bridge/
+COPY text_studio/ text_studio/
 
 # Copy built React frontend
 COPY --from=frontend-build /build/dist/ frontend/dist/
 
-# Copy data (ChromaDB + SQLite)
+# Copy data (ChromaDB + SQLite + Skills)
 # For VM deployment: prefer volume mount (-v ./data:/app/data) instead
 COPY data/sqlite/ data/sqlite/
 COPY data/chromadb/ data/chromadb/
+COPY data/skills/ data/skills/
 
 # Environment
 ENV PYTHONUNBUFFERED=1

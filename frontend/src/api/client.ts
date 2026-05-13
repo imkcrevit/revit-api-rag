@@ -2,13 +2,18 @@
 
 const BASE = ''  // relative — uses Vite proxy or same-origin
 
+function _slotHeader(): Record<string, string> {
+  const slot = sessionStorage.getItem('mcp_slot')
+  return slot ? { 'X-Slot-Id': slot } : {}
+}
+
 export async function apiFetch<T = unknown>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
   const resp = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: { 'Content-Type': 'application/json', ..._slotHeader(), ...init?.headers },
   })
   if (!resp.ok) {
     const text = await resp.text().catch(() => '')
@@ -38,7 +43,7 @@ export async function* sseStream(
 ): AsyncGenerator<SSEEvent> {
   const resp = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ..._slotHeader() },
     body: JSON.stringify(body),
     signal,
   })

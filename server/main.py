@@ -20,6 +20,8 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.app.api.routes import router
+from server.app.api.log_routes import log_router
+from server.app.api.skill_routes import skill_router
 from server.app.deps import get_config
 
 try:
@@ -36,6 +38,11 @@ try:
     from prompt_bridge.router import prompt_bridge_router
 except ImportError:
     prompt_bridge_router = None
+
+try:
+    from text_studio.router import text_studio_router
+except ImportError:
+    text_studio_router = None
 
 
 def create_app() -> FastAPI:
@@ -55,6 +62,8 @@ def create_app() -> FastAPI:
 
     # API routes
     fastapi_app.include_router(router)
+    fastapi_app.include_router(log_router)
+    fastapi_app.include_router(skill_router)
 
     # Intent Bridge routes
     if intent_router is not None:
@@ -67,6 +76,10 @@ def create_app() -> FastAPI:
     # PromptBridge routes (designer prompt optimization)
     if prompt_bridge_router is not None:
         fastapi_app.include_router(prompt_bridge_router)
+
+    # TextStudio routes (personal text polishing & translation)
+    if text_studio_router is not None:
+        fastapi_app.include_router(text_studio_router)
 
     # Health check
     @fastapi_app.get("/health")

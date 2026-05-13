@@ -35,9 +35,14 @@ namespace revit_mcp_plugin.Core
             try
             {
                 if (SocketService.Instance.IsRunning)
-                {
                     SocketService.Instance.Stop();
-                }
+            }
+            catch { }
+
+            try
+            {
+                if (WebSocketService.Instance.IsRunning)
+                    WebSocketService.Instance.Stop();
             }
             catch { }
 

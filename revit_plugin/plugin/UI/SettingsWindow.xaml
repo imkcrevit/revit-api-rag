@@ -14,12 +14,14 @@
 
         <!-- 左侧导航 -->
         <Border Grid.Column="0" Background="#f5f5f5" BorderBrush="#e0e0e0" BorderThickness="0,0,1,0">
-            <ListBox x:Name="NavListBox" BorderThickness="0" Background="Transparent" 
+            <ListBox x:Name="NavListBox" BorderThickness="0" Background="Transparent"
                      SelectionChanged="NavListBox_SelectionChanged">
                 <ListBoxItem x:Name="CommandSetItem" IsSelected="True" Padding="10,8">
                     <TextBlock Text="CommandSet" FontSize="14"/>
                 </ListBoxItem>
-                <!-- 将来可以在此添加更多导航选项 -->
+                <ListBoxItem x:Name="ConnectionItem" Padding="10,8">
+                    <TextBlock Text="Connection" FontSize="14"/>
+                </ListBoxItem>
             </ListBox>
         </Border>
 

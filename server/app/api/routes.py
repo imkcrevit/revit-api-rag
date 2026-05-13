@@ -16,17 +16,25 @@ from server.app.models import ChatRequest, SearchRequest, SettingsUpdate, Config
 from server.app.deps import get_session_store, get_config
 from server.app.rag.service import process_chat, process_search
 from server.app.text2revit.service import process_t2r_chat
+from server.app.log_store import get_client_ip, log_and_stream
 
 router = APIRouter(prefix="/api")
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, request: Request):
     store = get_session_store()
     session = store.get_or_create(req.session_id)
 
     return StreamingResponse(
-        process_chat(req.message, session, show_full=req.show_full),
+        log_and_stream(
+            process_chat(req.message, session, show_full=req.show_full),
+            module="code_gen",
+            session_id=session.session_id,
+            client_ip=get_client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+            user_input=req.message,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -36,13 +44,20 @@ async def chat(req: ChatRequest):
 
 
 @router.post("/t2r/chat")
-async def t2r_chat(req: ChatRequest):
+async def t2r_chat(req: ChatRequest, request: Request):
     """Legacy Text2Revit endpoint. Use /api/v1/intent/* instead."""
     store = get_session_store()
     session = store.get_or_create(req.session_id)
 
     return StreamingResponse(
-        process_t2r_chat(req.message, session),
+        log_and_stream(
+            process_t2r_chat(req.message, session),
+            module="text2revit",
+            session_id=session.session_id,
+            client_ip=get_client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+            user_input=req.message,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

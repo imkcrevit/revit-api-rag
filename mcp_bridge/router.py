@@ -2,13 +2,19 @@
 FastAPI routes for MCP Bridge — alternative to MCP protocol for web UI access.
 
 Prefix: /api/v1/bridge
+
+Supports two Revit connection modes:
+- TCP: direct socket to localhost (local dev / SSH tunnel)
+- WebSocket: Revit plugin connects to server (multi-user remote)
+  Frontend sends X-Slot-Id header to route to the correct Revit instance.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import time
-from fastapi import APIRouter, HTTPException
+from contextvars import ContextVar
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -16,7 +22,20 @@ from mcp_bridge.tool_store import ToolStore
 from mcp_bridge.interactive import IntentClassifier, RevitQueryExecutor
 from mcp_bridge import sandbox
 
-bridge_router = APIRouter(prefix="/api/v1/bridge", tags=["mcp-bridge"])
+# ── Slot context — set per-request by router dependency ──────────────────
+_request_slot_id: ContextVar[str | None] = ContextVar("slot_id", default=None)
+
+
+async def _set_slot_ctx(request: Request):
+    """Extract X-Slot-Id from request header and store in ContextVar."""
+    _request_slot_id.set(request.headers.get("x-slot-id"))
+
+
+bridge_router = APIRouter(
+    prefix="/api/v1/bridge",
+    tags=["mcp-bridge"],
+    dependencies=[Depends(_set_slot_ctx)],
+)
 _tool_store = ToolStore()
 _classifier = IntentClassifier()
 
@@ -34,7 +53,21 @@ def _get_bridge_config() -> dict:
 
 
 async def _get_revit_client():
-    """Get pooled Revit client using config."""
+    """Get Revit client — WebSocket slot if available, else TCP fallback."""
+    slot_id = _request_slot_id.get(None)
+
+    # Try WebSocket slot first
+    if slot_id:
+        from mcp_bridge.ws_relay import get_slot_manager, WebSocketRevitClient
+        mgr = get_slot_manager()
+        conn = mgr.get_connection(slot_id)
+        if conn:
+            cfg = _get_bridge_config()
+            return WebSocketRevitClient(
+                mgr, slot_id, timeout=cfg.get("command_timeout", 60),
+            )
+
+    # Fallback to TCP (local dev / SSH tunnel)
     from mcp_bridge.client_pool import RevitClientPool
     cfg = _get_bridge_config()
     return await RevitClientPool.get_client(
@@ -275,37 +308,53 @@ async def api_codegen(req: ApiCodeGenRequest):
 # -- Code Generation Routes ---------------------------------------------------
 
 @bridge_router.post("/generate")
-async def generate_code(req: GenerateRequest):
+async def generate_code(req: GenerateRequest, request: Request):
     """RAG + LLM -> generate C# code for Revit execution."""
     from server.app.deps import get_retriever, get_config
     from pipeline.llm_client import create_llm_client
     from mcp_bridge.code_generator import CodeGenerator
+    from server.app.log_store import get_log_store, get_client_ip
 
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
     gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
 
+    t0 = time.time()
     code, meta = gen.generate(req.query, req.api_top_k, req.code_top_k)
 
     # Security review
     safe, warnings = sandbox.review(code)
 
+    # Log interaction
+    get_log_store().log(
+        module="mcp_bridge",
+        client_ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent", ""),
+        user_input=req.query,
+        assistant_output=code,
+        duration_ms=int((time.time() - t0) * 1000),
+        status="ok" if safe else "warning",
+    )
+
     return {"code": code, "rag_context": meta, "safe": safe, "warnings": warnings}
 
 
 @bridge_router.post("/generate-stream")
-async def generate_code_stream(req: GenerateWithSelectionsRequest):
+async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Request):
     """RAG + LLM -> stream C# code generation via SSE. Supports optional selections."""
     from server.app.deps import get_retriever, get_config
     from pipeline.llm_client import create_llm_client
     from mcp_bridge.code_generator import CodeGenerator
+    from server.app.log_store import get_log_store, get_client_ip
 
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
     gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
     selections = req.selections if req.selections else None
+    _req_ip = get_client_ip(request)
+    _req_ua = request.headers.get("user-agent", "")
 
     async def event_stream():
         def _p(msg: str):
@@ -388,6 +437,16 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest):
             "warnings": warnings,
         }
         yield f"event: done\ndata: {json.dumps(done_data)}\n\n"
+
+        # Log the interaction
+        get_log_store().log(
+            module="mcp_bridge_stream",
+            client_ip=_req_ip,
+            user_agent=_req_ua,
+            user_input=req.query,
+            assistant_output=code,
+            status="ok" if safe else "warning",
+        )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -1060,16 +1119,70 @@ async def revit_health():
             "revit_connected": resp.success,
             "latency_ms": latency,
             "detail": resp.result if resp.success else resp.error,
-            "bridge_version": "v0.2",
+            "bridge_version": "v0.3",
             "protocol": "JSON-RPC 2.0 / TCP",
             "endpoint": f"{host}:{port}",
             "timestamp": now_str,
+            "mode": "tcp",
         }
     except Exception as e:
+        # Check if any WebSocket slots are connected
+        from mcp_bridge.ws_relay import get_slot_manager
+        slot_status = get_slot_manager().get_status()
         return {
-            "revit_connected": False,
+            "revit_connected": slot_status["connected"] > 0,
             "latency_ms": None,
-            "detail": str(e),
-            "bridge_version": "v0.2",
+            "detail": f"TCP: {e}" if slot_status["connected"] == 0 else f"TCP offline, {slot_status['connected']} WebSocket slot(s) connected",
+            "bridge_version": "v0.3",
             "timestamp": now_str,
+            "mode": "websocket" if slot_status["connected"] > 0 else "disconnected",
+            "ws_slots": slot_status,
         }
+
+
+# -- WebSocket Slot Routes (multi-user Revit connections) ----------------------
+
+@bridge_router.websocket("/ws/{slot_id}")
+async def revit_ws_endpoint(ws: WebSocket, slot_id: str):
+    """WebSocket endpoint for Revit plugin connections.
+
+    Revit plugin connects here as a client, registering on a slot.
+    Server sends JSON-RPC requests, plugin sends JSON-RPC responses.
+    """
+    from mcp_bridge.ws_relay import get_slot_manager
+    import logging
+    _ws_log = logging.getLogger("mcp_bridge.ws")
+
+    mgr = get_slot_manager()
+
+    # Validate slot_id
+    if not slot_id.isdigit() or int(slot_id) < 1 or int(slot_id) > mgr.max_slots:
+        await ws.close(code=4001, reason=f"Invalid slot_id. Use 1-{mgr.max_slots}")
+        return
+
+    await ws.accept()
+
+    if not mgr.register(slot_id, ws):
+        await ws.send_text(json.dumps({"error": f"Slot {slot_id} already occupied"}))
+        await ws.close(code=4002, reason="Slot occupied")
+        return
+
+    _ws_log.info(f"Revit plugin connected on slot {slot_id}")
+    try:
+        while True:
+            data = await ws.receive_text()
+            # All incoming messages are responses from Revit
+            mgr.resolve_response(slot_id, data)
+    except WebSocketDisconnect:
+        _ws_log.info(f"Revit plugin disconnected from slot {slot_id}")
+    except Exception as e:
+        _ws_log.warning(f"Slot {slot_id} WebSocket error: {e}")
+    finally:
+        mgr.unregister(slot_id)
+
+
+@bridge_router.get("/slots")
+async def get_slots():
+    """Return status of all connection slots."""
+    from mcp_bridge.ws_relay import get_slot_manager
+    return get_slot_manager().get_status()

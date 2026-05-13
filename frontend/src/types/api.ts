@@ -8,6 +8,8 @@ export interface RevitHealthResponse {
   protocol?: string
   endpoint?: string
   timestamp: string
+  mode?: string
+  ws_slots?: { max_slots: number; connected: number; slots: Record<string, unknown> }
 }
 
 export interface OrchestratorQuestion {

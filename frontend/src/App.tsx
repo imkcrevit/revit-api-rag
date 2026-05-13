@@ -8,11 +8,16 @@ import CodeGenTab from './components/tabs/CodeGenTab'
 import ApiExplorerTab from './components/tabs/ApiExplorerTab'
 import BridgeTab from './components/tabs/BridgeTab'
 import PromptBridgeTab from './components/tabs/PromptBridgeTab'
+import TextStudioTab from './components/tabs/TextStudioTab'
+import SkillsTab from './components/tabs/SkillsTab'
 
-const TABS = ['Code Generation', 'API Explorer', 'MCP Bridge', 'PromptBridge'] as const
+const TABS = ['Skills', 'Code Generation', 'API Explorer', 'MCP Bridge', 'PromptBridge', 'TextStudio'] as const
+
+/* Experimental badge on specific tabs */
+const EXPERIMENTAL_TABS = new Set(['TextStudio'])
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState(2) // Default to MCP Bridge
+  const [activeTab, setActiveTab] = useState(3) // Default to MCP Bridge
   const { apiKey, setApiKey, model, setModel, showFull, setShowFull, sessionId } = useSettingsStore()
 
   const handleSettingsChange = (key: string, m: string) => {
@@ -83,16 +88,31 @@ export default function App() {
             }}
           >
             {tab}
+            {EXPERIMENTAL_TABS.has(tab) && (
+              <span style={{
+                fontSize: 8,
+                marginLeft: 5,
+                padding: '1px 4px',
+                borderRadius: 2,
+                background: 'rgba(230, 126, 34, 0.12)',
+                color: '#e67e22',
+                fontWeight: 700,
+                letterSpacing: '0.04em',
+                verticalAlign: 'super',
+              }}>EXP</span>
+            )}
           </button>
         ))}
       </div>
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto">
-        {activeTab === 0 && <CodeGenTab />}
-        {activeTab === 1 && <ApiExplorerTab />}
-        {activeTab === 2 && <BridgeTab />}
-        {activeTab === 3 && <PromptBridgeTab />}
+        {activeTab === 0 && <SkillsTab />}
+        {activeTab === 1 && <CodeGenTab />}
+        {activeTab === 2 && <ApiExplorerTab />}
+        {activeTab === 3 && <BridgeTab />}
+        {activeTab === 4 && <PromptBridgeTab />}
+        {activeTab === 5 && <TextStudioTab />}
       </div>
     </div>
   )

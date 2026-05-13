@@ -6,11 +6,12 @@ PromptBridge 路由 — FastAPI endpoints
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
 from server.app.deps import get_session_store
+from server.app.log_store import get_client_ip, log_and_stream
 from prompt_bridge.service import process_prompt_bridge_chat
 
 prompt_bridge_router = APIRouter(prefix="/api/prompt-bridge")
@@ -26,12 +27,19 @@ class PromptBridgeClearRequest(BaseModel):
 
 
 @prompt_bridge_router.post("/chat")
-async def prompt_bridge_chat(req: PromptBridgeChatRequest):
+async def prompt_bridge_chat(req: PromptBridgeChatRequest, request: Request):
     store = get_session_store()
     session = store.get_or_create(req.session_id)
 
     return StreamingResponse(
-        process_prompt_bridge_chat(req.message, session),
+        log_and_stream(
+            process_prompt_bridge_chat(req.message, session),
+            module="prompt_bridge",
+            session_id=session.session_id,
+            client_ip=get_client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+            user_input=req.message,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

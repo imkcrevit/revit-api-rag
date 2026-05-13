@@ -74,10 +74,31 @@ function renderValue(val: unknown): React.ReactNode {
   return <span>{String(val)}</span>
 }
 
+/* ── Slot status type ── */
+interface SlotInfo { status: string; connected_at?: number; requests?: number }
+interface SlotsStatus { max_slots: number; connected: number; slots: Record<string, SlotInfo> }
+
 export default function BridgeTab() {
   // --- Header state ---
   const [revitStatus, setRevitStatus] = useState('Revit Disconnected')
+  const [slotId, setSlotId] = useState<string>(() => sessionStorage.getItem('mcp_slot') || '')
+  const [slotsStatus, setSlotsStatus] = useState<SlotsStatus | null>(null)
   const { unit, setUnit } = useSettingsStore()
+
+  /* Persist slot selection */
+  const selectSlot = (id: string) => {
+    setSlotId(id)
+    if (id) sessionStorage.setItem('mcp_slot', id)
+    else sessionStorage.removeItem('mcp_slot')
+  }
+
+  /* Fetch slot status */
+  const refreshSlots = async () => {
+    try {
+      const resp = await fetch('/api/v1/bridge/slots')
+      if (resp.ok) setSlotsStatus(await resp.json())
+    } catch { /* ignore */ }
+  }
 
   // --- Pipeline state ---
   const [step, setStep] = useState(1)
@@ -465,11 +486,41 @@ export default function BridgeTab() {
           fontSize: 12,
           color: 'var(--mid)',
         }}>{revitStatus}</div>
+
+        {/* Slot selector */}
+        <select
+          value={slotId}
+          onChange={e => selectSlot(e.target.value)}
+          style={{
+            fontFamily: 'var(--mono)', fontSize: 11, padding: '6px 8px',
+            border: '1px solid var(--line)', background: 'var(--bg)',
+            borderRadius: 2, color: 'var(--dark)', cursor: 'pointer', minWidth: 110,
+          }}
+        >
+          <option value="">TCP Direct</option>
+          {Array.from({ length: slotsStatus?.max_slots ?? 5 }, (_, i) => {
+            const sid = String(i + 1)
+            const info = slotsStatus?.slots?.[sid]
+            const connected = info?.status === 'connected'
+            return (
+              <option key={sid} value={sid}>
+                Slot {sid} {connected ? `● (${info?.requests ?? 0} req)` : '○'}
+              </option>
+            )
+          })}
+        </select>
+
         <button onClick={() => {
+          refreshSlots()
           bridgeApi.revitHealth().then(h => {
-            setRevitStatus(h.revit_connected
-              ? `Revit Connected | ${h.latency_ms}ms | ${h.timestamp}`
-              : `Disconnected: ${h.detail}`)
+            if (h.revit_connected) {
+              setRevitStatus(`Connected | ${h.latency_ms ? h.latency_ms + 'ms' : h.mode} | ${h.timestamp}`)
+            } else {
+              const wsInfo = (h as any).ws_slots
+              setRevitStatus(wsInfo?.connected
+                ? `TCP offline, ${wsInfo.connected} WS slot(s) online`
+                : `Disconnected: ${h.detail}`)
+            }
           }).catch(() => setRevitStatus('Revit Disconnected: server unreachable'))
           bridgeApi.getProjectUnits().then(d => {
             if (d.detected && !d.error) { setUnit(d.detected); bridgeApi.setUnit(d.detected).catch(() => {}) }

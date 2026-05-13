@@ -9,16 +9,16 @@ namespace revit_mcp_plugin.UI
     public partial class SettingsWindow : Window
     {
         private CommandSetSettingsPage commandSetPage;
+        private ConnectionSettingsPage connectionPage;
         private bool isInitialized = false;
 
         public SettingsWindow()
         {
             InitializeComponent();
 
-            // 初始化页面
             commandSetPage = new CommandSetSettingsPage();
+            connectionPage = new ConnectionSettingsPage();
 
-            // 加载默认页面
             ContentFrame.Navigate(commandSetPage);
 
             isInitialized = true;
@@ -31,6 +31,10 @@ namespace revit_mcp_plugin.UI
             if (NavListBox.SelectedItem == CommandSetItem)
             {
                 ContentFrame.Navigate(commandSetPage);
+            }
+            else if (NavListBox.SelectedItem == ConnectionItem)
+            {
+                ContentFrame.Navigate(connectionPage);
             }
         }
     }

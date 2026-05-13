@@ -185,7 +185,22 @@ async def process_prompt_bridge_chat(
     - 不做 RAG 检索（知识已在 system prompt 中）
     - 保留对话历史（多轮优化）
     """
-    system_prompt = _get_system_prompt()
+    base_prompt = _get_system_prompt()
+    from server.app.skill_store import get_skill_store
+    skills_ctx = get_skill_store().get_active_prompt("prompt_bridge")
+    if skills_ctx:
+        system_prompt = (
+            base_prompt
+            + "\n\n---\n\n## 项目规范（来自用户 Skills 配置）\n\n"
+            "以下是用户配置的 BIM/项目规范。生成提示词时**必须**遵循这些标准：\n"
+            "- 命名必须符合规范格式\n"
+            "- 参数取值必须在规范允许的范围内\n"
+            "- 如果用户输入违反规范，在纠正中指出并替换为规范写法\n\n"
+            + skills_ctx
+        )
+    else:
+        system_prompt = base_prompt
+
     session.touch()
     session.add_message("user", message)
 
