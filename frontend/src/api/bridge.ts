@@ -44,6 +44,9 @@ export const bridgeApi = {
 
   listTools: () => apiGet<ToolInfo[]>(`${B}/tools`),
 
+  deleteTool: (name: string) =>
+    apiFetch(`${B}/tools/${name}`, { method: 'DELETE' }),
+
   getToolDetail: (name: string) => apiGet<ToolInfo & { code_template: string }>(`${B}/tools/${name}`),
 
   getToolChoices: (name: string) =>

@@ -11,7 +11,7 @@ import PromptBridgeTab from './components/tabs/PromptBridgeTab'
 import TextStudioTab from './components/tabs/TextStudioTab'
 import SkillsTab from './components/tabs/SkillsTab'
 
-const TABS = ['Skills', 'Code Generation', 'API Explorer', 'MCP Bridge', 'PromptBridge', 'TextStudio'] as const
+const TABS = ['Skills & Tools', 'Code Generation', 'API Explorer', 'MCP Bridge', 'PromptBridge', 'TextStudio'] as const
 
 /* Experimental badge on specific tabs */
 const EXPERIMENTAL_TABS = new Set(['TextStudio'])

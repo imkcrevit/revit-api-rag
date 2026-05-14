@@ -318,7 +318,7 @@ async def generate_code(req: GenerateRequest, request: Request):
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
-    gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
+    gen = CodeGenerator(retriever, llm, user_unit=_user_unit, config=config)
 
     t0 = time.time()
     code, meta = gen.generate(req.query, req.api_top_k, req.code_top_k)
@@ -351,7 +351,7 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
-    gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
+    gen = CodeGenerator(retriever, llm, user_unit=_user_unit, config=config)
     selections = req.selections if req.selections else None
     _req_ip = get_client_ip(request)
     _req_ua = request.headers.get("user-agent", "")
@@ -359,6 +359,14 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
     async def event_stream():
         def _p(msg: str):
             return f"event: progress\ndata: {json.dumps(msg)}\n\n"
+
+        # ── Phase 0: Skills Extraction (Gemini Flash) ──
+        yield _p("Skills extraction — scanning BIM standards with Gemini Flash...")
+        skills_ctx = gen._build_skills_context(req.query)
+        if skills_ctx:
+            yield _p(f"Skills extracted — {len(skills_ctx)} chars of relevant BIM standards")
+        else:
+            yield _p("No relevant BIM standards found")
 
         # ── Phase 1: RAG Retrieval ──
         yield _p("Query Rewrite — optimizing search keywords...")
@@ -397,7 +405,7 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
         code_ctx_len = len(ctx.get("code_context", ""))
         yield _p(f"RAG context ready — API: {api_ctx_len} chars, SDK: {code_ctx_len} chars")
 
-        yield _p("Assembling system prompt (rules + context + unit config)...")
+        yield _p("Assembling system prompt (rules + context + unit config + skills)...")
         from mcp_bridge.code_generator import SYSTEM_EXECUTE, CodeGenerator as CG
         selections_ctx = CG._build_selections_context(selections) if selections else ""
         system = SYSTEM_EXECUTE.format(
@@ -406,6 +414,7 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
             code_context=ctx.get("code_context", "(none)"),
             selections_context=selections_ctx,
             unit_context=CG.UNIT_CONTEXTS.get(gen.user_unit, CG.UNIT_CONTEXTS["mm"]),
+            skills_context=skills_ctx,
         )
         yield _p(f"System prompt assembled — {len(system)} chars total")
 
@@ -461,7 +470,7 @@ async def generate_with_selections(req: GenerateWithSelectionsRequest):
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
-    gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
+    gen = CodeGenerator(retriever, llm, user_unit=_user_unit, config=config)
 
     code, meta = gen.generate(
         req.query, req.api_top_k, req.code_top_k, selections=req.selections
@@ -503,7 +512,7 @@ async def generate_and_execute(req: GenerateRequest):
     retriever = get_retriever()
     config = get_config()
     llm = create_llm_client(config)
-    gen = CodeGenerator(retriever, llm, user_unit=_user_unit)
+    gen = CodeGenerator(retriever, llm, user_unit=_user_unit, config=config)
     code, meta = gen.generate(req.query, req.api_top_k, req.code_top_k)
 
     # Security review

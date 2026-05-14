@@ -15,7 +15,7 @@ import logging
 import re
 
 from pipeline.retriever import RAGRetriever
-from pipeline.llm_client import LLMClient
+from pipeline.llm_client import LLMClient, create_llm_client
 
 _log = logging.getLogger("mcp_bridge.code_generator")
 
@@ -100,6 +100,7 @@ System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB, Autodesk.Rev
 5. If the retrieved documentation shows deprecated or version-specific APIs,
    prefer the Revit {revit_version} compatible version.
 {selections_context}
+{skills_context}
 ## Retrieved API Documentation
 {api_context}
 
@@ -119,11 +120,83 @@ class CodeGenerator:
     }
 
     def __init__(self, retriever: RAGRetriever, llm_client: LLMClient,
-                 revit_version: str = "2026", user_unit: str = "mm"):
+                 revit_version: str = "2026", user_unit: str = "mm",
+                 config: dict | None = None):
         self.retriever = retriever
         self.llm = llm_client
         self.revit_version = revit_version
         self.user_unit = user_unit
+        self._config = config
+
+    @staticmethod
+    def _get_all_skills() -> str:
+        """Load all active skills content for code generation modules."""
+        try:
+            from server.app.skill_store import get_skill_store
+            store = get_skill_store()
+            return store.get_active_prompt("mcp_bridge")
+        except Exception:
+            return ""
+
+    def _extract_relevant_skills(self, user_query: str, all_skills: str) -> str:
+        """Use Gemini Flash to extract only the relevant skills for the user query."""
+        if not all_skills.strip():
+            return ""
+        if not self._config:
+            return all_skills
+
+        try:
+            skill_llm = create_llm_client(self._config, provider_override="gemini_flash")
+        except Exception:
+            _log.info("[skills] Gemini Flash not available, using full skills")
+            return all_skills
+
+        system = (
+            "You are a BIM standards extraction agent. Given a user's Revit modeling request "
+            "and a collection of BIM standards documents, extract ONLY the specific rules, "
+            "constraints, tables, and requirements that are DIRECTLY relevant to the user's request.\n\n"
+            "Rules:\n"
+            "- Keep the original Markdown formatting (tables, headers, lists)\n"
+            "- Include dimension constraints, naming rules, area requirements, API usage patterns\n"
+            "- Include the section title for context\n"
+            "- If a table has relevant rows, include only the relevant rows with the header row\n"
+            "- If no rules are relevant, output exactly: NONE\n"
+            "- Do NOT add commentary — output raw rules only"
+        )
+        prompt = f"User request: {user_query}\n\n---\n\nBIM Standards:\n{all_skills}"
+
+        try:
+            result = skill_llm.generate_text(prompt, system_prompt=system)
+            extracted = result.strip()
+            if not extracted or extracted == "NONE":
+                return ""
+            _log.info(f"[skills] Gemini Flash extracted {len(extracted)} chars from {len(all_skills)} chars")
+            return extracted
+        except Exception as e:
+            _log.warning(f"[skills] Gemini Flash extraction failed: {e}, using full skills")
+            return all_skills
+
+    def _build_skills_context(self, user_query: str = "") -> str:
+        """Get relevant BIM standards/skills for the given user query."""
+        all_skills = self._get_all_skills()
+        if not all_skills or not all_skills.strip():
+            return ""
+
+        if user_query and self._config:
+            relevant = self._extract_relevant_skills(user_query, all_skills)
+        else:
+            relevant = all_skills
+
+        if not relevant or not relevant.strip():
+            return ""
+
+        return (
+            "\n## Active BIM Standards & Constraints (MUST follow)\n"
+            "The following standards are active and relevant to this request. "
+            "Your generated code MUST comply with dimension constraints, naming rules, "
+            "area requirements, and API usage patterns defined below.\n\n"
+            + relevant + "\n"
+        )
 
     def generate(self, user_query: str, api_top_k: int = 15,
                  code_top_k: int = 5,
@@ -143,12 +216,14 @@ class CodeGenerator:
         )
         ctx = self.retriever.build_context(results)
 
+        skills_ctx = self._build_skills_context(user_query)
         system = SYSTEM_EXECUTE.format(
             revit_version=self.revit_version,
             api_context=ctx.get("api_context", "(none)"),
             code_context=ctx.get("code_context", "(none)"),
             selections_context=self._build_selections_context(selections),
             unit_context=self.UNIT_CONTEXTS.get(self.user_unit, self.UNIT_CONTEXTS["mm"]),
+            skills_context=skills_ctx,
         )
 
         raw = self.llm.generate_text(user_query, system_prompt=system)
@@ -173,12 +248,14 @@ class CodeGenerator:
         )
         ctx = self.retriever.build_context(results)
 
+        skills_ctx = self._build_skills_context(user_query)
         system = SYSTEM_EXECUTE.format(
             revit_version=self.revit_version,
             api_context=ctx.get("api_context", "(none)"),
             code_context=ctx.get("code_context", "(none)"),
             selections_context=self._build_selections_context(selections),
             unit_context=self.UNIT_CONTEXTS.get(self.user_unit, self.UNIT_CONTEXTS["mm"]),
+            skills_context=skills_ctx,
         )
 
         yield from self.llm.generate_stream(user_query, system_prompt=system)
