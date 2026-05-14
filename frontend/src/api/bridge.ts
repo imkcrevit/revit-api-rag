@@ -1,6 +1,6 @@
 /* MCP Bridge API calls — /api/v1/bridge/* */
 
-import { apiGet, apiPost } from './client'
+import { apiFetch, apiGet, apiPost } from './client'
 import type {
   RevitHealthResponse,
   ClassifyIntentResponse,
