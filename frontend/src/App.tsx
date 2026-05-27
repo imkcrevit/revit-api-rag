@@ -25,19 +25,19 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen" style={{ background: 'var(--bg)' }}>
+    <div className="app-shell flex flex-col h-screen">
       {/* Header */}
-      <div className="px-6 py-4" style={{ borderBottom: '1px solid var(--line)' }}>
-        <h1 className="heading-display text-xl" style={{ letterSpacing: '0.12em' }}>
+      <div className="app-header">
+        <h1 className="app-title">
           Revit API Assistant
         </h1>
-        <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--faint)', letterSpacing: '0.05em', textTransform: 'uppercase', marginTop: 2 }}>
-          Code Generation & Revit Execution
+        <p className="app-kicker">
+          BIM Retrieval · Code Generation · Revit Execution
         </p>
       </div>
 
       {/* Settings */}
-      <div className="px-6 pt-2">
+      <div className="settings-strip">
         <Accordion title="Settings">
           <div className="flex items-center gap-4 flex-wrap">
             <div className="flex-1 min-w-[200px]">
@@ -67,39 +67,16 @@ export default function App() {
       </div>
 
       {/* Tab bar */}
-      <div className="px-6 flex gap-0" style={{ borderBottom: '1px solid var(--line)' }}>
+      <div className="tab-bar">
         {TABS.map((tab, i) => (
           <button
             key={tab}
             onClick={() => setActiveTab(i)}
-            style={{
-              fontFamily: 'var(--mono)',
-              fontSize: 12,
-              fontWeight: 500,
-              letterSpacing: '0.05em',
-              textTransform: 'uppercase',
-              padding: '10px 20px',
-              border: 'none',
-              borderBottom: activeTab === i ? '2px solid var(--accent)' : '2px solid transparent',
-              background: 'transparent',
-              color: activeTab === i ? 'var(--accent)' : 'var(--faint)',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
+            className={`tab-button${activeTab === i ? ' is-active' : ''}`}
           >
             {tab}
             {EXPERIMENTAL_TABS.has(tab) && (
-              <span style={{
-                fontSize: 8,
-                marginLeft: 5,
-                padding: '1px 4px',
-                borderRadius: 2,
-                background: 'rgba(230, 126, 34, 0.12)',
-                color: '#e67e22',
-                fontWeight: 700,
-                letterSpacing: '0.04em',
-                verticalAlign: 'super',
-              }}>EXP</span>
+              <span className="exp-badge">EXP</span>
             )}
           </button>
         ))}
