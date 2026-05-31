@@ -284,17 +284,15 @@ export default function BridgeTab() {
     setStep(3)
   }
 
-  // --- Skip matched tool & generate fresh code (tool data passed as reference) ---
+  // --- Skip matched tool & generate fresh code without saved-tool context ---
   const skipToolAndGenerate = async () => {
-    const savedToolData = matchedToolData
     setMatchedTool('')
+    setMatchedToolData(null)
     setToolLibraryOpen(false)
     setGenerating(true)
     startTimer()
     setThinking('')
-    setPipelineLog([savedToolData
-      ? `Skipping tool "${savedToolData.name || matchedTool}", using as reference for code generation...`
-      : 'Skipping tool match, generating new code...'])
+    setPipelineLog(['Skipping saved tool, generating new code from RAG...'])
 
     try {
       // Step 1: Classify intent
@@ -315,7 +313,7 @@ export default function BridgeTab() {
 
       if (itype === 'direct') {
         setStep(2)
-        await runStream(query, {}, savedToolData)
+        await runStream(query, {})
       } else {
         setStep(2)
         setSelectOpen(true)
@@ -464,7 +462,7 @@ export default function BridgeTab() {
       setSelections(sels)
       setSelectOpen(false)
       setStep(2)
-      await runStream(query, sels, matchedToolData)
+      await runStream(query, sels)
     } catch (e: unknown) {
       setPipelineLog(prev => [...prev, `Error: ${getErrorMessage(e)}`])
     } finally {

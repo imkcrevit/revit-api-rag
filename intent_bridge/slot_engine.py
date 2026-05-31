@@ -567,6 +567,158 @@ def _sanitize_slots_dict(
     return cleaned
 
 
+_ROOM_REQUIRED_QUESTIONS: list[dict[str, Any]] = [
+    {
+        "slot": "boundary_mode",
+        "aliases": {"boundary_status", "room_boundary_mode", "boundary_mode"},
+        "text": (
+            "房间边界如何生成：使用已有闭合边界、创建围护墙，还是创建房间分隔线？ / "
+            "How should the room boundary be created: use an existing closed boundary, create enclosing walls, or create room separation lines?"
+        ),
+        "options": [
+            "使用已有闭合边界 / Use existing closed boundary",
+            "创建围护墙 / Create enclosing walls",
+            "创建房间分隔线 / Create room separation lines",
+            "其他 (自定义) / Other (custom)",
+        ],
+        "values": [
+            "existing_closed_boundary",
+            "create_enclosing_walls",
+            "create_room_separation_lines",
+            "custom",
+        ],
+        "allow_custom": True,
+        "enrich": "none",
+    },
+    {
+        "slot": "level",
+        "aliases": {"level", "base_level", "room_level"},
+        "text": "选择创建房间的标高 / Select the level for the room",
+        "options": [],
+        "values": [],
+        "allow_custom": True,
+        "enrich": "level",
+    },
+    {
+        "slot": "room_point",
+        "aliases": {"point", "room_point", "room_location", "placement_point", "center_point", "location"},
+        "text": "输入房间放置点或起始坐标 / Enter the room placement point or start coordinate",
+        "options": [],
+        "values": [],
+        "allow_custom": True,
+        "enrich": "none",
+    },
+    {
+        "slot": "room_size_or_boundary",
+        "aliases": {"room_size", "room_dimensions", "dimensions", "width_depth", "boundary_points", "room_boundary"},
+        "text": "输入房间尺寸或边界点 / Enter the room size or boundary points",
+        "options": [],
+        "values": [],
+        "allow_custom": True,
+        "enrich": "none",
+    },
+    {
+        "slot": "wall_type_or_thickness",
+        "aliases": {"wall_type", "wall_thickness", "wall_type_or_thickness", "boundary_wall_type"},
+        "text": "选择围护墙类型；如果需要新墙类型，请输入墙厚 / Select the enclosing wall type; if a new wall type is needed, enter wall thickness",
+        "options": [],
+        "values": [],
+        "allow_custom": True,
+        "enrich": "family_type:wall",
+    },
+    {
+        "slot": "wall_height",
+        "aliases": {"wall_height", "room_height", "height", "boundary_wall_height"},
+        "text": "输入围护墙高度 / Enter the enclosing wall height",
+        "options": [],
+        "values": [],
+        "allow_custom": True,
+        "enrich": "none",
+    },
+    {
+        "slot": "room_name",
+        "aliases": {"room_name", "name"},
+        "text": "输入房间名称 / Enter the room name",
+        "options": [],
+        "values": [],
+        "allow_custom": True,
+        "enrich": "none",
+    },
+    {
+        "slot": "room_number",
+        "aliases": {"room_number", "number"},
+        "text": "输入房间编号 / Enter the room number",
+        "options": [],
+        "values": [],
+        "allow_custom": True,
+        "enrich": "none",
+    },
+    {
+        "slot": "place_room_tag",
+        "aliases": {"place_room_tag", "room_tag", "tag_room", "tag"},
+        "text": "是否放置房间标签？ / Should a room tag be placed?",
+        "options": [
+            "放置房间标签 / Place room tag",
+            "不放置房间标签 / Do not place room tag",
+        ],
+        "values": ["true", "false"],
+        "allow_custom": False,
+        "enrich": "none",
+    },
+]
+
+
+def _slot_value_traceable(value: Any, user_input: str) -> bool:
+    if value is None:
+        return False
+    text = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+    return bool(text.strip()) and text.lower() in user_input.lower()
+
+
+def _ensure_create_room_questions(result: dict[str, Any], user_input: str) -> dict[str, Any]:
+    """Create-room workflows need boundary and wall data beyond NewRoom args."""
+    if result.get("intent") != "create_room":
+        return result
+
+    slots = result.get("slots") if isinstance(result.get("slots"), dict) else {}
+    questions = result.get("questions") if isinstance(result.get("questions"), list) else []
+
+    all_room_aliases = {
+        str(alias).lower()
+        for qdef in _ROOM_REQUIRED_QUESTIONS
+        for alias in qdef["aliases"]
+    }
+    slots = {
+        key: value
+        for key, value in slots.items()
+        if (
+            str(key).strip().lower() not in all_room_aliases
+            or _slot_value_traceable(value, user_input)
+        )
+    }
+
+    present = {str(key).strip().lower() for key in slots}
+    present.update(
+        str(q.get("slot", "")).strip().lower()
+        for q in questions
+        if isinstance(q, dict)
+    )
+
+    for qdef in _ROOM_REQUIRED_QUESTIONS:
+        aliases = {str(alias).lower() for alias in qdef["aliases"]}
+        if present & aliases:
+            continue
+        question = {k: v for k, v in qdef.items() if k != "aliases"}
+        sanitized = _sanitize_question_dict(question)
+        if sanitized:
+            questions.append(sanitized)
+            present.add(sanitized["slot"].lower())
+
+    result["questions"] = questions
+    result["slots"] = slots
+    return result
+
+
 # ===================================================================
 # ConversationOrchestrator
 # ===================================================================
@@ -845,6 +997,7 @@ class ConversationOrchestrator:
             user_input,
             question_slots,
         )
+        sanitized = _ensure_create_room_questions(sanitized, user_input)
 
         action_plan = sanitized.get("action_plan")
         if isinstance(action_plan, list):
@@ -867,6 +1020,7 @@ class ConversationOrchestrator:
                     user_input,
                     step_question_slots,
                 )
+                clean_step = _ensure_create_room_questions(clean_step, user_input)
                 clean_steps.append(clean_step)
             sanitized["action_plan"] = clean_steps
 
