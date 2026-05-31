@@ -29,7 +29,13 @@ export default function PipelineLog({ messages = [], tasks = [] }: Props) {
           <div key={task.id} className={`pipeline-task ${task.status}`}>
             <div className="pipeline-task-marker" aria-hidden="true">
               {task.status === 'done' ? '\u2713' :
-                task.status === 'active' ? '\u25B6' :
+                task.status === 'active' ? (
+                  <span className="pipeline-task-working">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                ) :
                   task.status === 'error' ? '!' :
                     task.status === 'skipped' ? '-' : ''}
             </div>

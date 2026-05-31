@@ -261,19 +261,84 @@ button {
   width: 18px;
   height: 18px;
   border: 1px solid var(--line);
-  border-radius: 50%;
+  border-radius: 3px;
   display: grid;
   place-items: center;
   font-family: var(--mono);
   font-size: 10px;
   line-height: 1;
   margin-top: 1px;
+  background: var(--panel);
+  position: relative;
+  overflow: hidden;
 }
 
 .pipeline-task.active .pipeline-task-marker,
 .pipeline-task.done .pipeline-task-marker,
 .pipeline-task.error .pipeline-task-marker {
   border-color: currentColor;
+}
+
+.pipeline-task.done .pipeline-task-marker {
+  background: rgba(196,95,60,0.08);
+}
+
+.pipeline-task.active .pipeline-task-marker::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(196,95,60,0.18), transparent);
+  transform: translateX(-100%);
+  animation: pipeline-working-sweep 1.15s ease-in-out infinite;
+}
+
+.pipeline-task-working {
+  display: grid;
+  grid-template-columns: repeat(3, 2px);
+  gap: 2px;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+}
+
+.pipeline-task-working span {
+  width: 2px;
+  height: 2px;
+  background: currentColor;
+  border-radius: 1px;
+  opacity: 0.34;
+  animation: pipeline-working-dot 0.9s ease-in-out infinite;
+}
+
+.pipeline-task-working span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.pipeline-task-working span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+@keyframes pipeline-working-sweep {
+  0% { transform: translateX(-100%); }
+  55%, 100% { transform: translateX(100%); }
+}
+
+@keyframes pipeline-working-dot {
+  0%, 100% {
+    opacity: 0.34;
+    transform: translateY(0);
+  }
+  45% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-task.active .pipeline-task-marker::before,
+  .pipeline-task-working span {
+    animation: none;
+  }
 }
 
 .pipeline-task-label {
