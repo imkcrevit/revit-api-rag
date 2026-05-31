@@ -211,6 +211,7 @@ class ClassifyRequest(BaseModel):
 class OrchestrateRequest(BaseModel):
     query: str
     session_id: str | None = None
+    skill_context: str | None = None
 
 
 class QueryRevitRequest(BaseModel):
@@ -624,7 +625,12 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
         yield _sse("progress", f"Security review done — {'Safe' if safe else 'WARNING: ' + '; '.join(warnings)}")
         await asyncio.sleep(0)
 
-        yield _sse("progress", "Done — code ready for review")
+        yield _sse(
+            "progress",
+            "Done — code ready for review"
+            if safe
+            else "Done — code needs security fixes before execution",
+        )
         await asyncio.sleep(0)
         done_data = {
             "code": code,
@@ -1073,6 +1079,29 @@ import uuid as _uuid
 _orch_log = _logging.getLogger("mcp_bridge.orchestrate")
 
 
+async def _build_orchestrate_skill_context(_query: str) -> str:
+    """Load runtime-managed active skills before dynamic parameter analysis."""
+    try:
+        from server.app.skill_store import get_skill_store
+
+        def _load() -> str:
+            prompt = get_skill_store().get_active_prompt("intent_bridge")
+            if not prompt.strip():
+                return ""
+            return (
+                "## Runtime Active Skills & BIM Standards\n"
+                "These runtime-managed skills are applied before dynamic parameter "
+                "questions are decoded. Respect them when deciding required slots, "
+                "model-derived choices, and ambiguity.\n\n"
+                f"{prompt}"
+            )
+
+        return await asyncio.to_thread(_load)
+    except Exception as exc:
+        _orch_log.warning("[orchestrate] runtime skill scan failed: %s", exc)
+        return ""
+
+
 @dataclass
 class _OrchSessionEntry:
     """Mutable orchestrator session guarded by one FIFO asyncio lock."""
@@ -1369,7 +1398,12 @@ async def orchestrate(req: OrchestrateRequest):
     else:
         # New session
         llm = LLMAdapter()
-        orch = ConversationOrchestrator(llm=llm)
+        skill_context = (
+            req.skill_context
+            if req.skill_context is not None
+            else await _build_orchestrate_skill_context(req.query)
+        )
+        orch = ConversationOrchestrator(llm=llm, extra_skill_context=skill_context or "")
         session = SessionState()
         sid = str(_uuid.uuid4())[:8]
         entry = _OrchSessionEntry(orch=orch, session=session)
@@ -1454,11 +1488,24 @@ async def orchestrate_stream(req: OrchestrateRequest):
 
     async def event_stream():
         start = time.monotonic()
+        yield _sse("progress", "Skills extraction — scanning BIM standards before dynamic parameters...")
+        skill_context = await _build_orchestrate_skill_context(req.query)
+        if skill_context:
+            yield _sse("progress", f"Skills extracted — {len(skill_context)} chars applied before dynamic parameter analysis")
+        else:
+            yield _sse("progress", "No relevant BIM standards found before dynamic parameter analysis")
+        stream_req = (
+            req.model_copy(update={"skill_context": skill_context})
+            if hasattr(req, "model_copy")
+            else req.copy(update={"skill_context": skill_context})
+        )
+        await asyncio.sleep(0)
+
         yield _sse("progress", "LLM analyzing request...")
         yield _sse("thinking", _orchestrate_thinking_markdown(req.query, elapsed=0.0))
         await asyncio.sleep(0)
 
-        task = asyncio.create_task(orchestrate(req))
+        task = asyncio.create_task(orchestrate(stream_req))
         try:
             while not task.done():
                 await asyncio.sleep(1.5)

@@ -736,10 +736,23 @@ class ConversationOrchestrator:
         llm: LLMAdapter | None = None,
         registry: SchemaRegistry | None = None,
         use_skills: bool = True,
+        extra_skill_context: str = "",
     ):
         self._llm = llm or LLMAdapter()
         self._registry = registry or get_schema_registry()
         self._use_skills = use_skills
+        self._extra_skill_context = extra_skill_context.strip()
+
+    def _with_extra_skill_context(self, skill_context: str) -> str:
+        """Append runtime-managed active skills before the LLM extracts slots."""
+        if not self._extra_skill_context:
+            return skill_context
+        if skill_context.strip():
+            return (
+                f"{skill_context}\n\n---\n\n"
+                f"<!-- Runtime active skills -->\n{self._extra_skill_context}"
+            )
+        return f"<!-- Runtime active skills -->\n{self._extra_skill_context}"
 
     async def process_turn(
         self, user_input: str, session: SessionState,
@@ -843,7 +856,9 @@ class ConversationOrchestrator:
 
         # Step 3: Build prompt
         if self._use_skills and matched_skills:
-            skill_context = loader.render_skill_prompt(matched_skills)
+            skill_context = self._with_extra_skill_context(
+                loader.render_skill_prompt(matched_skills)
+            )
             base_rules = loader.get_base_rules()
 
             prompt = _ANALYZE_PROMPT_V2.format(
@@ -856,11 +871,14 @@ class ConversationOrchestrator:
             logger.info("Using skill-enhanced prompt (matched %d skills)", len(matched_skills))
         elif self._use_skills:
             base_rules = loader.get_base_rules()
+            skill_context = self._with_extra_skill_context(
+                "(No intent-specific skill matched — use Core Rules and API docs above.)"
+            )
             prompt = _ANALYZE_PROMPT_V2.format(
                 base_skill_rules=base_rules,
                 intent_list=self._registry.get_intent_summary(),
                 rag_context=rag_context,
-                skill_context="(No intent-specific skill matched — use Core Rules and API docs above.)",
+                skill_context=skill_context,
                 user_input=user_input,
             )
             logger.info("Using skill-enhanced prompt (no skills matched)")

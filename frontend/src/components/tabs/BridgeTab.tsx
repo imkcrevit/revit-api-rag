@@ -19,9 +19,9 @@ const STEPS = ['Input', 'Select', 'Review Code', 'Execute', 'Solidify']
 const BRIDGE_PIPELINE_TEMPLATE: PipelineTask[] = [
   { id: 'tool', label: 'Check saved tool library', status: 'pending' },
   { id: 'classify', label: 'Classify request intent', status: 'pending' },
+  { id: 'skills', label: 'Scan BIM standards and skills', status: 'pending' },
   { id: 'analyze', label: 'Analyze missing model parameters', status: 'pending' },
   { id: 'select', label: 'Confirm dynamic Revit choices', status: 'pending' },
-  { id: 'skills', label: 'Scan BIM standards and skills', status: 'pending' },
   { id: 'rewrite', label: 'Rewrite query for retrieval', status: 'pending' },
   { id: 'retrieve', label: 'Retrieve API docs and SDK examples', status: 'pending' },
   { id: 'context', label: 'Assemble RAG context', status: 'pending' },
@@ -193,6 +193,7 @@ export default function BridgeTab() {
   const [elapsed, setElapsed] = useState('')
   const [thinking, setThinking] = useState('')
   const [code, setCode] = useState('')
+  const [codeReady, setCodeReady] = useState(false)
   const [securityStatus, setSecurityStatus] = useState('')
   const [ragContext, setRagContext] = useState<Record<string, unknown> | null>(null)
   const [execResult, setExecResult] = useState<{ ok: boolean; data: unknown; error?: string } | null>(null)
@@ -242,7 +243,7 @@ export default function BridgeTab() {
   const reset = () => {
     setStep(1); setPipelineLog([]); setElapsed('')
     setPipelineTasks([])
-    setThinking(''); setCode(''); setSecurityStatus('')
+    setThinking(''); setCode(''); setCodeReady(false); setSecurityStatus('')
     setRagContext(null); setExecResult(null); setSolidifyResult('')
     setSelections({}); setSelectOpen(false); setStatusMsg('')
     setIntentMeta({})
@@ -261,6 +262,7 @@ export default function BridgeTab() {
     setPipelineTasks(prev => {
       const base = prev.length ? prev : createPipelineTasks()
       return base.map(task => {
+        if (task.id === id && task.status === 'done' && status === 'active') return task
         if (task.id === id) return { ...task, status, detail: detail ?? task.detail }
         if (status === 'active' && task.status === 'active') return { ...task, status: 'done' }
         return task
@@ -285,7 +287,9 @@ export default function BridgeTab() {
 
   const updateTaskFromProgress = (message: string) => {
     const msg = cleanStageMessage(message)
-    if (msg.startsWith('Skills extraction')) updatePipelineTask('skills', 'active', explainStage(msg))
+    if (msg.startsWith('LLM analyzing')) updatePipelineTask('analyze', 'active', explainStage(msg))
+    else if (msg.startsWith('LLM analysis complete')) updatePipelineTask('analyze', 'done', msg)
+    else if (msg.startsWith('Skills extraction')) updatePipelineTask('skills', 'active', explainStage(msg))
     else if (msg.startsWith('No relevant') || msg.startsWith('Skills extracted')) updatePipelineTask('skills', 'done', msg)
     else if (msg.startsWith('Query Rewrite —')) updatePipelineTask('rewrite', 'active', explainStage(msg))
     else if (msg.startsWith('Query Rewrite done')) updatePipelineTask('rewrite', 'done', msg)
@@ -300,19 +304,26 @@ export default function BridgeTab() {
     else if (msg.startsWith('Extracting')) {
       updatePipelineTask('generate', 'done', msg)
       updatePipelineTask('review', 'active', explainStage(msg))
-    } else if (msg.startsWith('Security review')) updatePipelineTask('review', msg.startsWith('Security review done') ? 'done' : 'active', msg)
-    else if (msg.startsWith('Done')) updatePipelineTask('review', 'done', msg)
+    } else if (msg.startsWith('Security review')) {
+      updatePipelineTask(
+        'review',
+        msg.startsWith('Security review done') && !msg.includes('WARNING') ? 'done' : msg.includes('WARNING') ? 'error' : 'active',
+        msg,
+      )
+    }
+    else if (msg.startsWith('Done')) {
+      updatePipelineTask('review', msg.includes('ready for review') ? 'done' : 'error', msg)
+    }
   }
 
   const runOrchestrateStream = async (input: string): Promise<OrchestrateResponse> => {
     let result: OrchestrateResponse | null = null
-    updatePipelineTask('analyze', 'active', 'Decode request and prepare dynamic parameter questions.')
 
     for await (const evt of sseStream('/api/v1/bridge/orchestrate-stream', { query: input })) {
       if (evt.event === 'progress') {
         const msg = JSON.parse(evt.data)
-        if (typeof msg === 'string' && msg.includes('complete')) {
-          updatePipelineTask('analyze', 'done', msg)
+        if (typeof msg === 'string') {
+          updateTaskFromProgress(msg)
         }
       } else if (evt.event === 'thinking') {
         const content = JSON.parse(evt.data)
@@ -348,6 +359,12 @@ export default function BridgeTab() {
     let lastYield = 0
     let finalCode = ''
     let finalThinking = ''
+    let streamComplete = false
+    let finalSafe = false
+    let finalWarnings: string[] = []
+
+    setCodeReady(false)
+    setSecurityStatus('')
 
     const abort = new AbortController()
     abortRef.current = abort
@@ -397,8 +414,11 @@ export default function BridgeTab() {
             const done = JSON.parse(evt.data)
             finalCode = done.code || finalCode
             setCode(finalCode)
-            setSecurityStatus(done.safe ? 'Safe' : `Warning: ${done.warnings?.join('; ')}`)
+            finalSafe = Boolean(done.safe)
+            finalWarnings = Array.isArray(done.warnings) ? done.warnings : []
+            setSecurityStatus(finalSafe ? 'Safe' : `Warning: ${finalWarnings.join('; ')}`)
             setRagContext(done.rag_context)
+            streamComplete = true
           } catch { /* skip */ }
         }
       }
@@ -408,6 +428,19 @@ export default function BridgeTab() {
         setPipelineLog([...logs])
         markPipelineError(getErrorMessage(e))
       }
+      setCodeReady(false)
+      return false
+    }
+
+    if (!streamComplete) {
+      const detail = 'Code generation stream ended before final extraction and security review.'
+      const failedLogs = logs.filter(l => !l.startsWith('LLM generating'))
+      failedLogs.push(`Error: ${detail}`)
+      setPipelineLog(failedLogs)
+      markPipelineError(detail)
+      setSecurityStatus('')
+      setCodeReady(false)
+      return false
     }
 
     const el = ((performance.now() - t0) / 1000).toFixed(1)
@@ -417,9 +450,15 @@ export default function BridgeTab() {
     finalLogs.push(`Code extracted & security reviewed`)
     setPipelineLog(finalLogs)
     updatePipelineTask('generate', 'done', `${codeLines} lines generated`)
-    updatePipelineTask('review', 'done', securityStatus || 'Code extracted and reviewed')
+    updatePipelineTask(
+      'review',
+      finalSafe ? 'done' : 'error',
+      finalSafe ? 'Code extracted and reviewed' : `Security warning: ${finalWarnings.join('; ')}`,
+    )
     setThinking(finalThinking ? `**Thinking:**\n\n${finalThinking}` : buildStreamingThinking(finalLogs))
+    setCodeReady(finalSafe && Boolean(finalCode.trim()))
     setStep(3)
+    return finalSafe && Boolean(finalCode.trim())
   }
 
   // --- Skip matched tool & generate fresh code without saved-tool context ---
@@ -431,6 +470,9 @@ export default function BridgeTab() {
     beginPipeline()
     updatePipelineTask('tool', 'skipped', 'Saved tool was skipped; generating fresh code.')
     setThinking('')
+    setCode('')
+    setCodeReady(false)
+    setSecurityStatus('')
     setPipelineLog(['Skipping saved tool, generating new code from RAG...'])
 
     try {
@@ -496,7 +538,7 @@ export default function BridgeTab() {
       const matched = await bridgeApi.matchTool(query)
       if (matched.matched && matched.name) {
         updatePipelineTask('tool', 'done', `Matched saved tool: ${matched.name}`)
-        ;['classify', 'analyze', 'select', 'skills', 'rewrite', 'retrieve', 'context', 'prompt', 'generate', 'review']
+        ;['classify', 'skills', 'analyze', 'select', 'rewrite', 'retrieve', 'context', 'prompt', 'generate', 'review']
           .forEach(id => markTaskSkipped(id, 'Saved tool path does not require this task.'))
         setMatchedTool(matched.name)
         setThinking(
@@ -576,6 +618,9 @@ export default function BridgeTab() {
   // --- Confirm selections & generate ---
   const confirmSelection = async () => {
     setGenerating(true)
+    setCode('')
+    setCodeReady(false)
+    setSecurityStatus('')
     startTimer()
     try {
       updatePipelineTask('select', 'done', 'User selections confirmed for code generation.')
@@ -613,8 +658,10 @@ export default function BridgeTab() {
   }
 
   // --- Execute ---
+  const canExecuteCode = codeReady && securityStatus.startsWith('Safe') && Boolean(code.trim())
+
   const execute = async () => {
-    if (!code.trim()) return
+    if (!canExecuteCode) return
     setExecuting(true)
     setStep(4)
     try {
@@ -848,7 +895,7 @@ export default function BridgeTab() {
       <Accordion title="Step 4: Execute" defaultOpen>
         <button
           onClick={execute}
-          disabled={executing || !code.trim()}
+          disabled={executing || !canExecuteCode}
           className="btn-primary"
         >
           {executing ? 'Executing...' : 'Execute in Revit'}
