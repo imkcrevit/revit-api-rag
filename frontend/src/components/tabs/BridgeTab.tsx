@@ -6,7 +6,8 @@ import { bridgeApi } from '../../api/bridge'
 import { sseStream } from '../../api/client'
 import { extractThinkingAndCode } from '../../utils/sse'
 import { useSettingsStore } from '../../store'
-import type { OrchestratorQuestion, OrchestrateResponse } from '../../types/api'
+import type { ClassifyIntentResponse, OrchestratorQuestion, OrchestrateResponse, ToolParam } from '../../types/api'
+import { getErrorMessage, isAbortError } from '../../utils/errors'
 import StepIndicator from '../shared/StepIndicator'
 import PipelineLog from '../shared/PipelineLog'
 import ThinkingPanel from '../shared/ThinkingPanel'
@@ -74,9 +75,51 @@ function renderValue(val: unknown): React.ReactNode {
   return <span>{String(val)}</span>
 }
 
+function buildThinkingChain(orch: OrchestrateResponse, questions: OrchestratorQuestion[]): string {
+  const lines: string[] = []
+  if (orch.intent && !orch.summary?.startsWith('Error')) {
+    const oi = orch.intent as Record<string, unknown>
+    lines.push(`**Intent**: \`${String(oi.name || '')}\`${oi.display_name ? ` - ${String(oi.display_name)}` : ''}`)
+    if (oi.confidence != null) lines.push(`**Confidence**: ${String(oi.confidence)}`)
+  }
+  if (orch.action_plan?.length) {
+    lines.push(`**Action plan**: ${orch.action_plan.length} step${orch.action_plan.length === 1 ? '' : 's'}`)
+    for (const ap of orch.action_plan) {
+      lines.push(`- Step ${String(ap.step || '')}: **${String(ap.display_name || '')}** ${ap.api_method ? `(\`${String(ap.api_method)}\`)` : ''}`)
+    }
+  }
+  if (questions.length) {
+    lines.push(`**Dynamic parameters**: ${questions.length}`)
+    for (const q of questions) {
+      const source = q._pick_mode || q.enrich === 'host_pick'
+        ? 'Revit pick'
+        : q.enrich || 'manual'
+      lines.push(`- \`${q.slot}\`: ${source}${q.options?.length ? `, ${q.options.length} option(s)` : ''}`)
+    }
+  }
+  if (orch.summary) lines.push(`**Summary**: ${orch.summary}`)
+  return lines.join('\n')
+}
+
 /* ── Slot status type ── */
 interface SlotInfo { status: string; connected_at?: number; requests?: number }
 interface SlotsStatus { max_slots: number; connected: number; slots: Record<string, SlotInfo> }
+interface ToolContext {
+  name?: string
+  display_name?: string
+  description?: string
+  code_template?: string
+  parameters?: ToolParam[]
+}
+
+function extractCategoryList(queries: ClassifyIntentResponse['queries']): string[] {
+  return queries.flatMap(q => {
+    const categories = q.params.categoryList
+    return Array.isArray(categories)
+      ? categories.filter((category): category is string => typeof category === 'string')
+      : []
+  })
+}
 
 export default function BridgeTab() {
   // --- Header state ---
@@ -130,7 +173,7 @@ export default function BridgeTab() {
 
   // --- Tool match state ---
   const [matchedTool, setMatchedTool] = useState('')
-  const [matchedToolData, setMatchedToolData] = useState<Record<string, unknown> | null>(null)
+  const [matchedToolData, setMatchedToolData] = useState<ToolContext | null>(null)
   const [toolLibraryOpen, setToolLibraryOpen] = useState(false)
   const toolLibraryRef = useRef<HTMLDivElement>(null)
 
@@ -167,7 +210,7 @@ export default function BridgeTab() {
   }
 
   // --- SSE Stream helper ---
-  const runStream = async (query: string, sels: Record<string, unknown>, toolContext?: Record<string, unknown> | null) => {
+  const runStream = async (query: string, sels: Record<string, unknown>, toolContext?: ToolContext | null) => {
     const t0 = performance.now()
     const logs: string[] = []
     let fullBuf = ''
@@ -226,9 +269,9 @@ export default function BridgeTab() {
           } catch { /* skip */ }
         }
       }
-    } catch (e: any) {
-      if (e.name !== 'AbortError') {
-        logs.push(`Error: ${e.message}`)
+    } catch (e: unknown) {
+      if (!isAbortError(e)) {
+        logs.push(`Error: ${getErrorMessage(e)}`)
         setPipelineLog([...logs])
       }
     }
@@ -252,7 +295,7 @@ export default function BridgeTab() {
     startTimer()
     setThinking('')
     setPipelineLog([savedToolData
-      ? `Skipping tool "${(savedToolData as any).name}", using as reference for code generation...`
+      ? `Skipping tool "${savedToolData.name || matchedTool}", using as reference for code generation...`
       : 'Skipping tool match, generating new code...'])
 
     try {
@@ -280,31 +323,19 @@ export default function BridgeTab() {
         setSelectOpen(true)
 
         const queries = intent.queries || []
-        const cats = queries.flatMap(q => (q.params as any)?.categoryList || [])
+        const cats = extractCategoryList(queries)
         const famLabel = queries[0]?.label || 'Family Type'
         setIntentMeta({ label: famLabel, categories: cats, interaction_type: itype })
 
-        const thinkParts: string[] = []
-        if (orch.intent && !orch.summary?.startsWith('Error')) {
-          const oi = orch.intent as any
-          thinkParts.push(`**Intent**: \`${oi.name || ''}\`${oi.display_name ? ` -- ${oi.display_name}` : ''} (confidence: ${oi.confidence || 0})`)
-          if (orch.action_plan?.length) {
-            thinkParts.push(`**Composite**: ${orch.action_plan.length} steps`)
-            for (const ap of orch.action_plan) {
-              thinkParts.push(`  - Step ${(ap as any).step}: **${(ap as any).display_name}** (\`${(ap as any).api_method}\`)`)
-            }
-          }
-          if (orch.summary) thinkParts.push(`\n**Summary**: ${orch.summary}`)
-        }
-        setThinking(thinkParts.join('\n'))
+        setThinking(buildThinkingChain(orch, questions))
 
         let sm = `Classification: ${famLabel}`
-        if (cats.length) sm += ` (${cats.map((c: string) => c.replace('OST_', '')).join(', ')})`
+        if (cats.length) sm += ` (${cats.map(c => c.replace('OST_', '')).join(', ')})`
         if (questions.length) sm += `\nLLM analysis: ${questions.length} parameters to confirm`
         setStatusMsg(sm)
       }
-    } catch (e: any) {
-      setPipelineLog(prev => [...prev, `Error: ${e.message}`])
+    } catch (e: unknown) {
+      setPipelineLog(prev => [...prev, `Error: ${getErrorMessage(e)}`])
     } finally {
       stopTimer()
       setGenerating(false)
@@ -384,33 +415,21 @@ export default function BridgeTab() {
 
         // Intent meta for code generation context
         const queries = intent.queries || []
-        const cats = queries.flatMap(q => (q.params as any)?.categoryList || [])
+        const cats = extractCategoryList(queries)
         const famLabel = queries[0]?.label || 'Family Type'
         setIntentMeta({ label: famLabel, categories: cats, interaction_type: itype })
 
         // Build thinking from orchestrator
-        const thinkParts: string[] = []
-        if (orch.intent && !orch.summary?.startsWith('Error')) {
-          const oi = orch.intent as any
-          thinkParts.push(`**Intent**: \`${oi.name || ''}\`${oi.display_name ? ` -- ${oi.display_name}` : ''} (confidence: ${oi.confidence || 0})`)
-          if (orch.action_plan?.length) {
-            thinkParts.push(`**Composite**: ${orch.action_plan.length} steps`)
-            for (const ap of orch.action_plan) {
-              thinkParts.push(`  - Step ${(ap as any).step}: **${(ap as any).display_name}** (\`${(ap as any).api_method}\`)`)
-            }
-          }
-          if (orch.summary) thinkParts.push(`\n**Summary**: ${orch.summary}`)
-        }
-        setThinking(thinkParts.join('\n'))
+        setThinking(buildThinkingChain(orch, questions))
 
         // Status
         let sm = `Classification: ${famLabel}`
-        if (cats.length) sm += ` (${cats.map((c: string) => c.replace('OST_', '')).join(', ')})`
+        if (cats.length) sm += ` (${cats.map(c => c.replace('OST_', '')).join(', ')})`
         if (questions.length) sm += `\nLLM analysis: ${questions.length} parameters to confirm`
         setStatusMsg(sm)
       }
-    } catch (e: any) {
-      setPipelineLog(prev => [...prev, `Error: ${e.message}`])
+    } catch (e: unknown) {
+      setPipelineLog(prev => [...prev, `Error: ${getErrorMessage(e)}`])
     } finally {
       stopTimer()
       setGenerating(false)
@@ -447,8 +466,8 @@ export default function BridgeTab() {
       setSelectOpen(false)
       setStep(2)
       await runStream(query, sels, matchedToolData)
-    } catch (e: any) {
-      setPipelineLog(prev => [...prev, `Error: ${e.message}`])
+    } catch (e: unknown) {
+      setPipelineLog(prev => [...prev, `Error: ${getErrorMessage(e)}`])
     } finally {
       stopTimer()
       setGenerating(false)
@@ -473,8 +492,8 @@ export default function BridgeTab() {
       } else {
         setExecResult({ ok: false, data: null, error: res.error })
       }
-    } catch (e: any) {
-      setExecResult({ ok: false, data: null, error: e.message })
+    } catch (e: unknown) {
+      setExecResult({ ok: false, data: null, error: getErrorMessage(e) })
     } finally {
       setExecuting(false)
     }
@@ -488,17 +507,17 @@ export default function BridgeTab() {
     }
     try {
       const res = await bridgeApi.solidify(toolName, code, toolDesc, query, thinking, selections)
-      setSolidifyResult(`Solidified as '${(res as any).name || toolName}'`)
+      setSolidifyResult(`Solidified as '${res.name || toolName}'`)
       setStep(5)
-    } catch (e: any) {
-      setSolidifyResult(`Error: ${e.message}`)
+    } catch (e: unknown) {
+      setSolidifyResult(`Error: ${getErrorMessage(e)}`)
     }
   }
 
   return (
     <div className="p-4 space-y-4">
       {/* Header */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 bridge-status-row">
         <div className="flex-1 px-3 py-2" style={{
           background: 'var(--bg2)',
           border: '1px solid var(--line)',
@@ -537,7 +556,7 @@ export default function BridgeTab() {
             if (h.revit_connected) {
               setRevitStatus(`Connected | ${h.latency_ms ? h.latency_ms + 'ms' : h.mode} | ${h.timestamp}`)
             } else {
-              const wsInfo = (h as any).ws_slots
+              const wsInfo = h.ws_slots
               setRevitStatus(wsInfo?.connected
                 ? `TCP offline, ${wsInfo.connected} WS slot(s) online`
                 : `Disconnected: ${h.detail}`)
@@ -582,7 +601,7 @@ export default function BridgeTab() {
       </div>
 
       {/* Step 1: Input */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 query-action-row">
         <input
           className="input-field flex-1"
           placeholder="e.g. Create structural column at 100,0,0"
@@ -602,7 +621,7 @@ export default function BridgeTab() {
       {/* Tool Match Banner — shown when a solidified tool matches */}
       {matchedTool && (
         <div className="tool-match-banner">
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start justify-between gap-4 tool-match-content">
             <div className="flex-1">
               <h4 style={{
                 fontFamily: 'var(--mono)',
@@ -618,7 +637,7 @@ export default function BridgeTab() {
                 A solidified tool matches your request. You can configure and run it directly, or skip and generate new code from scratch.
               </p>
             </div>
-            <div className="flex gap-2 shrink-0">
+            <div className="flex gap-2 shrink-0 tool-match-actions">
               <button
                 onClick={() => {
                   setToolLibraryOpen(true)
@@ -642,8 +661,8 @@ export default function BridgeTab() {
         </div>
       )}
 
-      {/* Thinking — always rendered, streams in real-time */}
-      <ThinkingPanel content={thinking} />
+      {/* Thinking chain — React UI only, streams in real time */}
+      <ThinkingPanel content={thinking} title="Think Chain" />
 
       {/* Pipeline log */}
       <PipelineLog messages={pipelineLog} />
@@ -726,7 +745,7 @@ export default function BridgeTab() {
 
       {/* Step 5: Solidify — default collapsed */}
       <Accordion title="Step 5: Save as Reusable Tool">
-        <div className="flex gap-2 mb-2">
+        <div className="flex gap-2 mb-2 inline-form-row">
           <input className="input-field flex-1" placeholder="Tool name (e.g. create_wall)"
             value={toolName} onChange={e => setToolName(e.target.value)} />
           <input className="input-field flex-1" placeholder="Description"

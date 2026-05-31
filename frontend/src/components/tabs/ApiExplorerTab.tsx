@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { bridgeApi } from '../../api/bridge'
 import type { ApiSearchResult, SdkSearchResult } from '../../types/api'
 import Accordion from '../shared/Accordion'
+import { getErrorMessage } from '../../utils/errors'
 
 export default function ApiExplorerTab() {
   const [query, setQuery] = useState('')
@@ -34,8 +35,8 @@ export default function ApiExplorerTab() {
       let s = `Found ${items.length} API docs, ${sdk.length} SDK examples (${elapsed}s)`
       if (result.rewritten_query !== query) s += `\nRewritten: ${result.rewritten_query}`
       setStatus(s)
-    } catch (e: any) {
-      setStatus(`Error: ${e.message}`)
+    } catch (e: unknown) {
+      setStatus(`Error: ${getErrorMessage(e)}`)
     } finally {
       setSearching(false)
     }
@@ -60,8 +61,8 @@ export default function ApiExplorerTab() {
         hint,
       )
       setGeneratedCode(result.code || '// No code generated')
-    } catch (e: any) {
-      setGeneratedCode(`// Error: ${e.message}`)
+    } catch (e: unknown) {
+      setGeneratedCode(`// Error: ${getErrorMessage(e)}`)
     } finally {
       setGenerating(false)
     }
@@ -77,7 +78,7 @@ export default function ApiExplorerTab() {
       </p>
 
       {/* Search */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 query-action-row">
         <input
           className="input-field flex-1"
           placeholder="Type API keyword: Part, Wall.Create, ..."
@@ -121,7 +122,7 @@ export default function ApiExplorerTab() {
 
       {/* Results table */}
       {apiItems.length > 0 && (
-        <div className="card overflow-hidden">
+        <div className="card table-scroll">
           <table className="w-full" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
             <thead>
               <tr style={{ background: 'var(--bg2)' }}>
@@ -210,7 +211,7 @@ export default function ApiExplorerTab() {
             overflowX: 'auto',
             border: '1px solid var(--line)',
           }}>{detailText}</pre>
-          <div className="flex gap-2">
+          <div className="flex gap-2 query-action-row">
             <input
               className="input-field flex-1"
               placeholder="Hint (optional): e.g. create a wall between two points"

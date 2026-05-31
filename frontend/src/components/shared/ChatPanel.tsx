@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../types/api'
 import { chatStream } from '../../api/settings'
 import { useSettingsStore } from '../../store'
+import { getErrorMessage, isAbortError } from '../../utils/errors'
 
 interface Props {
   endpoint: string
@@ -56,9 +57,9 @@ export default function ChatPanel({ endpoint, placeholder, showFullOption = fals
       if (!lastContent) {
         setMessages(prev => [...prev, { role: 'assistant', content: '(no response)' }])
       }
-    } catch (e: any) {
-      if (e.name !== 'AbortError') {
-        setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }])
+    } catch (e: unknown) {
+      if (!isAbortError(e)) {
+        setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${getErrorMessage(e)}` }])
       }
     } finally {
       setStreaming(false)
@@ -92,7 +93,7 @@ export default function ChatPanel({ endpoint, placeholder, showFullOption = fals
       </div>
 
       {/* Input */}
-      <div className="flex items-center gap-2 p-3" style={{ borderTop: '1px solid var(--line)' }}>
+      <div className="flex items-center gap-2 p-3 chat-input-row" style={{ borderTop: '1px solid var(--line)' }}>
         <input
           type="text"
           className="input-field flex-1"

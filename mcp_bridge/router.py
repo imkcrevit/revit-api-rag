@@ -14,9 +14,11 @@ import asyncio
 import json
 import time
 from contextvars import ContextVar
+from dataclasses import dataclass, field
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from mcp_bridge.tool_store import ToolStore
 from mcp_bridge.interactive import IntentClassifier, RevitQueryExecutor
@@ -88,7 +90,7 @@ class GenerateRequest(BaseModel):
 
 class GenerateWithSelectionsRequest(BaseModel):
     query: str
-    selections: dict = {}
+    selections: dict = Field(default_factory=dict)
     api_top_k: int = 15
     code_top_k: int = 5
     tool_context: dict | None = None
@@ -104,14 +106,14 @@ class SolidifyRequest(BaseModel):
     name: str
     code: str
     description: str = ""
-    parameters: list[dict] = []
-    tags: list[str] = []
+    parameters: list[dict] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     source_query: str = ""
 
 
 class RunToolRequest(BaseModel):
     name: str
-    params: dict = {}
+    params: dict = Field(default_factory=dict)
 
 
 class ClassifyRequest(BaseModel):
@@ -125,7 +127,7 @@ class OrchestrateRequest(BaseModel):
 
 class QueryRevitRequest(BaseModel):
     command: str
-    params: dict = {}
+    params: dict = Field(default_factory=dict)
 
 
 # -- API Explorer Routes -------------------------------------------------------
@@ -134,7 +136,7 @@ class ParameterizeRequest(BaseModel):
     code: str
     source_query: str = ""
     thinking: str = ""          # LLM thinking chain from code generation
-    selections: dict = {}       # user's interactive selections (family_type, level, etc.)
+    selections: dict = Field(default_factory=dict)  # user's interactive selections
 
 
 class UnitSettingRequest(BaseModel):
@@ -843,7 +845,107 @@ import logging as _logging
 import uuid as _uuid
 
 _orch_log = _logging.getLogger("mcp_bridge.orchestrate")
-_orch_sessions: dict[str, tuple] = {}  # session_id → (orchestrator, session_state)
+
+
+@dataclass
+class _OrchSessionEntry:
+    """Mutable orchestrator session guarded by one FIFO asyncio lock."""
+    orch: Any
+    session: Any
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    queue_depth: int = 0
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+
+_orch_sessions: dict[str, _OrchSessionEntry] = {}
+
+
+def _get_orch_queue_timeout() -> float:
+    return float(_get_bridge_config().get("orchestrate_queue_timeout", 20))
+
+
+def _get_orch_turn_timeout() -> float:
+    return float(_get_bridge_config().get("orchestrate_turn_timeout", 90))
+
+
+def _get_orch_session_ttl() -> float:
+    return float(_get_bridge_config().get("orchestrate_session_ttl", 900))
+
+
+def _cleanup_orch_sessions(now: float | None = None) -> None:
+    """Drop stale, idle sessions so abandoned queues cannot linger forever."""
+    ts = now or time.time()
+    ttl = _get_orch_session_ttl()
+    stale = [
+        sid for sid, entry in _orch_sessions.items()
+        if not entry.lock.locked() and ts - entry.updated_at > ttl
+    ]
+    for sid in stale:
+        _orch_sessions.pop(sid, None)
+
+
+async def _acquire_orch_lock(
+    sid: str,
+    entry: _OrchSessionEntry,
+    timeout: float | None = None,
+) -> float:
+    """Queue behind an in-flight session turn and fail fast if the queue stalls."""
+    entry.queue_depth += 1
+    start = time.monotonic()
+    try:
+        await asyncio.wait_for(
+            entry.lock.acquire(),
+            timeout=timeout if timeout is not None else _get_orch_queue_timeout(),
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            409,
+            f"Agent session '{sid}' is busy; queued request timed out.",
+        )
+    finally:
+        entry.queue_depth = max(0, entry.queue_depth - 1)
+    return (time.monotonic() - start) * 1000
+
+
+async def _process_orch_with_rollback(
+    sid: str,
+    entry: _OrchSessionEntry,
+    query: str,
+    *,
+    is_new: bool,
+    timeout: float | None = None,
+):
+    """Run one orchestrator turn with state rollback on error/cancellation."""
+    snapshot = entry.session.model_copy(deep=True)
+    try:
+        resp = await asyncio.wait_for(
+            entry.orch.process_turn(query, entry.session),
+            timeout=timeout if timeout is not None else _get_orch_turn_timeout(),
+        )
+        entry.updated_at = time.time()
+        return resp
+    except asyncio.TimeoutError:
+        if is_new:
+            _orch_sessions.pop(sid, None)
+        else:
+            entry.session = snapshot
+        _orch_log.warning("[orchestrate] sid=%s rolled back after turn timeout", sid)
+        raise HTTPException(504, "Agent turn timed out and session state was rolled back.")
+    except asyncio.CancelledError:
+        if is_new:
+            _orch_sessions.pop(sid, None)
+        else:
+            entry.session = snapshot
+        _orch_log.warning("[orchestrate] sid=%s rolled back after cancellation", sid)
+        raise
+    except Exception as e:
+        if is_new:
+            _orch_sessions.pop(sid, None)
+        else:
+            entry.session = snapshot
+        _orch_log.error("[orchestrate] sid=%s rolled back after failure: %s", sid, e)
+        raise HTTPException(500, str(e))
 
 # ── Enrichment config (loaded from YAML) ──
 def _load_enrichment_config() -> dict:
@@ -928,30 +1030,39 @@ async def _enrich_orch_questions(
     fmt = config.get("family_type_format", "{FamilyName}: {TypeName}")
     executor = RevitQueryExecutor(client)
 
+    valid_categories_by_lower = {
+        str(category).lower(): category
+        for category in category_aliases.values()
+    }
+
     for q in questions:
-        enrich = q.get("enrich", "").strip().lower()
+        raw_enrich = str(q.get("enrich", "")).strip()
+        enrich_key = raw_enrich.lower()
         slot = q.get("slot", "")
         q_text = q.get("text", "").lower()
 
         # ── Fallback: if LLM didn't tag enrich, infer from slot name + question text ──
-        if not enrich or enrich == "none":
-            enrich = _infer_enrich(slot, q_text, category_aliases)
-            if enrich != "none":
-                _orch_log.info(f"[enrich] slot={slot} → inferred enrich='{enrich}' (LLM didn't tag)")
+        if not enrich_key or enrich_key == "none":
+            raw_enrich = _infer_enrich(slot, q_text, category_aliases)
+            enrich_key = raw_enrich.lower()
+            if enrich_key != "none":
+                _orch_log.info(f"[enrich] slot={slot} → inferred enrich='{raw_enrich}' (LLM didn't tag)")
 
-        if enrich == "none":
+        if enrich_key == "none":
             _orch_log.info(f"[enrich] slot={slot} → skipped (no enrichment needed)")
             continue
 
         # ── host_pick: mark for Revit interactive selection ──
-        if enrich == "host_pick":
+        if enrich_key == "host_pick":
             q["_pick_mode"] = True
             q["allow_custom"] = True
+            q["options"] = []
+            q["values"] = []
             _orch_log.info(f"[enrich] slot={slot} → Revit pick mode")
             continue
 
         # ── level: query real Revit levels ──
-        if enrich == "level":
+        if enrich_key == "level":
             try:
                 levels = await executor.get_levels()
                 if levels:
@@ -967,12 +1078,16 @@ async def _enrich_orch_questions(
             continue
 
         # ── family_type:<category>: query real Revit family types ──
-        if enrich.startswith("family_type:"):
-            alias = enrich.split(":", 1)[1].strip()
-            category = category_aliases.get(alias)
+        if enrich_key.startswith("family_type:"):
+            alias = raw_enrich.split(":", 1)[1].strip()
+            alias_key = alias.lower()
+            category = category_aliases.get(alias_key) or category_aliases.get(alias)
             if not category:
                 # Try direct OST_ value
-                category = alias if alias.startswith("OST_") else None
+                if alias.startswith("OST_"):
+                    category = alias
+                else:
+                    category = valid_categories_by_lower.get(alias_key)
             if not category:
                 _orch_log.warning(
                     f"[enrich] slot={slot} unknown category alias '{alias}', "
@@ -1002,7 +1117,7 @@ async def _enrich_orch_questions(
                 _orch_log.warning(f"[enrich] family_types query failed for slot={slot}: {e}")
             continue
 
-        _orch_log.warning(f"[enrich] slot={slot} unknown enrich type: '{enrich}'")
+        _orch_log.warning(f"[enrich] slot={slot} unknown enrich type: '{raw_enrich}'")
 
     return questions
 
@@ -1014,6 +1129,8 @@ async def orchestrate(req: OrchestrateRequest):
     First call: provide query, get back questions for user.
     Follow-up calls: provide session_id + user answer, get next question or completion.
     """
+    _cleanup_orch_sessions()
+
     try:
         from intent_bridge.llm_adapter import LLMAdapter
         from intent_bridge.slot_engine import ConversationOrchestrator
@@ -1021,9 +1138,10 @@ async def orchestrate(req: OrchestrateRequest):
     except ImportError as e:
         raise HTTPException(500, f"Intent Bridge not available: {e}")
 
+    is_new = False
     if req.session_id and req.session_id in _orch_sessions:
         # Continue existing session
-        orch, session = _orch_sessions[req.session_id]
+        entry = _orch_sessions[req.session_id]
         sid = req.session_id
     else:
         # New session
@@ -1031,59 +1149,80 @@ async def orchestrate(req: OrchestrateRequest):
         orch = ConversationOrchestrator(llm=llm)
         session = SessionState()
         sid = str(_uuid.uuid4())[:8]
-        _orch_sessions[sid] = (orch, session)
+        entry = _OrchSessionEntry(orch=orch, session=session)
+        _orch_sessions[sid] = entry
+        is_new = True
 
+    queued_ms = await _acquire_orch_lock(sid, entry)
     try:
-        resp = await orch.process_turn(req.query, session)
-    except Exception as e:
-        _orch_log.error(f"[orchestrate] process_turn failed: {e}")
-        raise HTTPException(500, str(e))
+        if _orch_sessions.get(sid) is not entry:
+            raise HTTPException(
+                409,
+                f"Agent session '{sid}' is no longer active; queued request was discarded.",
+            )
 
-    # Collect ALL questions (current + remaining pending)
-    # NOTE: current_question comes from peek_question() which does NOT pop,
-    # so pending_questions[0] IS current_question — skip it to avoid duplicates.
-    all_questions = []
-    if resp.current_question:
-        all_questions.append(resp.current_question.model_dump())
-        # pending_questions[1:] = remaining (skip [0] which is current_question)
-        for q in session.pending_questions[1:]:
-            all_questions.append(q.model_dump())
-    else:
-        for q in session.pending_questions:
-            all_questions.append(q.model_dump())
+        resp = await _process_orch_with_rollback(
+            sid,
+            entry,
+            req.query,
+            is_new=is_new,
+        )
+        session = entry.session
 
-    # Include action_plan from session for composite intents
-    action_plan_data = []
-    for step in session.action_plan:
-        action_plan_data.append(step.model_dump())
+        # Collect ALL questions (current + remaining pending)
+        # NOTE: current_question comes from peek_question() which does NOT pop,
+        # so pending_questions[0] IS current_question — skip it to avoid duplicates.
+        all_questions = []
+        if resp.current_question:
+            all_questions.append(resp.current_question.model_dump())
+            # pending_questions[1:] = remaining (skip [0] which is current_question)
+            for q in session.pending_questions[1:]:
+                all_questions.append(q.model_dump())
+        else:
+            for q in session.pending_questions:
+                all_questions.append(q.model_dump())
 
-    # ── Enrich questions with real Revit data ──
-    # Replace LLM-fabricated options with actual Revit family types / levels
-    if all_questions:
-        _orch_log.info(f"[orchestrate] enriching {len(all_questions)} questions, "
-                       f"slots: {[q.get('slot') for q in all_questions]}")
-        try:
-            all_questions = await _enrich_orch_questions(all_questions, resp.intent)
-        except Exception as e:
-            _orch_log.warning(f"[orchestrate] enrich failed (non-fatal): {e}")
+        # Include action_plan from session for composite intents
+        action_plan_data = []
+        for step in session.action_plan:
+            action_plan_data.append(step.model_dump())
 
-    result = {
-        "session_id": sid,
-        "status": resp.status.value,
-        "intent": resp.intent,
-        "slots": resp.slots,
-        "questions": all_questions,
-        "action_plan": action_plan_data,
-        "summary": resp.summary,
-    }
-    _orch_log.info(f"[orchestrate] sid={sid} status={resp.status.value} "
-                   f"questions={len(all_questions)} slots={list(resp.slots.keys())}")
+        # ── Enrich questions with real Revit data ──
+        # Replace LLM-fabricated options with actual Revit family types / levels
+        if all_questions:
+            _orch_log.info(f"[orchestrate] enriching {len(all_questions)} questions, "
+                           f"slots: {[q.get('slot') for q in all_questions]}")
+            try:
+                all_questions = await _enrich_orch_questions(all_questions, resp.intent)
+            except Exception as e:
+                _orch_log.warning(f"[orchestrate] enrich failed (non-fatal): {e}")
 
-    # Cleanup completed sessions
-    if resp.status.value in ("complete", "cancelled", "constraint_error"):
-        _orch_sessions.pop(sid, None)
+        result = {
+            "session_id": sid,
+            "status": resp.status.value,
+            "intent": resp.intent,
+            "slots": resp.slots,
+            "questions": all_questions,
+            "action_plan": action_plan_data,
+            "summary": resp.summary,
+            "queue": {
+                "wait_ms": int(queued_ms),
+                "pending": entry.queue_depth,
+                "rollback": "enabled",
+            },
+        }
+        _orch_log.info(f"[orchestrate] sid={sid} status={resp.status.value} "
+                       f"questions={len(all_questions)} slots={list(resp.slots.keys())} "
+                       f"queued_ms={queued_ms:.0f}")
 
-    return result
+        # Cleanup completed sessions
+        if resp.status.value in ("complete", "cancelled", "constraint_error"):
+            _orch_sessions.pop(sid, None)
+
+        return result
+    finally:
+        if entry.lock.locked():
+            entry.lock.release()
 
 
 @bridge_router.post("/query-revit")

@@ -1,10 +1,14 @@
 /* Settings & Chat API calls */
 
-import { apiPost } from './client'
+import { apiFetch } from './client'
 
 export const settingsApi = {
-  update: (api_key: string, model: string, _session_id: string) =>
-    apiPost('/api/settings', { api_key, model: model || null }),
+  update: (api_key: string, model: string, session_id: string) =>
+    apiFetch('/api/settings', {
+      method: 'POST',
+      headers: { 'X-Session-Id': session_id },
+      body: JSON.stringify({ api_key, model: model || null }),
+    }),
 }
 
 /* Chat SSE stream for Tab A / Tab B */

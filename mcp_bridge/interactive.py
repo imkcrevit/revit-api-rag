@@ -21,6 +21,7 @@ import re
 from enum import Enum
 
 from mcp_bridge.revit_client import RevitClient, RevitResponse
+from prompts import load_prompt
 
 _log = logging.getLogger("mcp_bridge.interactive")
 
@@ -52,73 +53,24 @@ _OST_REFERENCE = {
 
 # Hosted element categories — need a host element (wall, floor, etc.)
 _HOSTED_CATEGORIES = {"OST_Windows", "OST_Doors"}
+_ALLOWED_CATEGORIES = set(_OST_REFERENCE)
 
 # LLM system prompt for intent classification
-_CLASSIFY_SYSTEM = """\
-You are a Revit intent classifier. Analyze the user query and determine
-what interaction workflow is needed.
+_CLASSIFY_SYSTEM = load_prompt("mcp_bridge.classify_intent.md")
 
-Respond with ONLY valid JSON (no markdown, no explanation):
-{
-  "interaction_type": "direct|select_family|select_both",
-  "revit_categories": ["OST_xxx", ...],
-  "label": "human-readable label for the family type selection",
-  "need_level": true/false,
-  "need_host": true/false,
-  "select_prompt": "Chinese prompt for host selection, or null"
-}
 
-## interaction_type
-
-- "direct": purely informational, deletion, property modification (NOT type/family
-  change). No family selection needed.
-- "select_family": user wants to CREATE an element, or CHANGE an element's
-  TYPE/FAMILY. Requires querying Revit for available family types.
-- "select_both": user wants to CREATE a HOSTED element (e.g., window on wall,
-  door on wall). Needs host element selection + family type selection.
-
-## revit_categories
-
-The Revit BuiltInCategory OST names to query for available family types.
-You may return one or more categories.
-
-Common categories for reference (you are not limited to these):
-  OST_Walls, OST_StructuralColumns, OST_Columns, OST_StructuralFraming,
-  OST_Floors, OST_Windows, OST_Doors, OST_Ceilings, OST_Roofs,
-  OST_StairsRailing, OST_Stairs, OST_Furniture, OST_FurnitureSystems,
-  OST_PlumbingFixtures, OST_LightingFixtures,
-  OST_MechanicalEquipment, OST_ElectricalEquipment,
-  OST_GenericModel, OST_CurtainWallPanels, OST_Casework,
-  OST_SpecialityEquipment, OST_Entourage, OST_Planting
-
-If you are unsure which category fits, use OST_GenericModel.
-
-## Other fields
-
-- label: a short Chinese label describing what the user is selecting,
-  e.g. "结构柱族类型", "家具族类型", "墙族类型"
-- need_level: true only for element creation that requires a level
-- need_host: true only for hosted elements
-- select_prompt: Chinese prompt for host selection (null if not needed)
-
-## Key rules
-
-- ANY query involving creation/placement of a physical element → "select_family"
-  or "select_both". NEVER classify creation as "direct".
-- For complex multi-part queries (e.g., "创建房间并放置家具"), use the PRIMARY
-  creation target's category. The code generator will handle multi-step logic.
-- For queries mentioning multiple distinct element types to create, pick the
-  categories for ALL of them in revit_categories.
-
-## Anti-hallucination rules
-
-- ONLY use BuiltInCategory names from the list above. Do NOT invent category names.
-- If unsure which category fits, use OST_GenericModel — do NOT fabricate an OST_ name.
-- The interaction_type must be one of exactly: "direct", "select_family", "select_both".
-  Do NOT create new interaction types.
-- NEVER assume need_host=true unless the element is physically hosted (windows on walls,
-  doors on walls). Columns, beams, furniture are NOT hosted even if placed near walls.
-"""
+def _sanitize_categories(raw_categories) -> list[str]:
+    """Keep only known BuiltInCategory names from classifier output."""
+    if not isinstance(raw_categories, list):
+        return []
+    cleaned: list[str] = []
+    for cat in raw_categories:
+        if not isinstance(cat, str):
+            continue
+        value = cat.strip()
+        if value in _ALLOWED_CATEGORIES and value not in cleaned:
+            cleaned.append(value)
+    return cleaned
 
 
 class IntentClassifier:
@@ -128,11 +80,20 @@ class IntentClassifier:
 
     # Chinese number words → digits
     _CN_NUMS = {
-        "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
+        "一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
         "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
     }
+    _EN_NUMS = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    }
     _QUANTITY_PATTERN = re.compile(
-        r'([两二三四五六七八九十]|\d+)\s*[个根面道堵条块]'
+        r'([一两二三四五六七八九十]|\d+)\s*[个根面道堵条块扇片组套]'
+    )
+    _EN_QUANTITY_PATTERN = re.compile(
+        r'\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+'
+        r'(walls?|columns?|beams?|floors?|doors?|windows?|rooms?|elements?|items?)\b',
+        re.IGNORECASE,
     )
 
     # Patterns for extracting coordinates from queries
@@ -205,17 +166,22 @@ class IntentClassifier:
         cleaned = re.sub(r'\n?```\s*$', '', cleaned)
 
         data = json.loads(cleaned)
-        itype = data.get("interaction_type", "direct")
-        need_level = data.get("need_level", False)
-        need_host = data.get("need_host", False)
+        itype = str(data.get("interaction_type", "direct")).strip()
+        if itype not in {
+            InteractionType.DIRECT.value,
+            InteractionType.SELECT_FAMILY.value,
+            InteractionType.SELECT_BOTH.value,
+        }:
+            itype = InteractionType.DIRECT.value
+        need_level = bool(data.get("need_level", False))
+        need_host = bool(data.get("need_host", False))
         select_prompt = data.get("select_prompt")
-        categories = data.get("revit_categories", [])
+        categories = _sanitize_categories(data.get("revit_categories", []))
         label = data.get("label", "族类型")
 
         # --- backward compat: if LLM returned old element_type format ---
         if not categories and data.get("element_type"):
             et = data["element_type"]
-            ost = _OST_REFERENCE and f"OST_{et}" not in _OST_REFERENCE
             # Try common mapping
             _compat = {
                 "wall": "OST_Walls", "structural_column": "OST_StructuralColumns",
@@ -229,6 +195,7 @@ class IntentClassifier:
                 categories = [_compat[et]]
             elif et != "other":
                 categories = ["OST_GenericModel"]
+            categories = _sanitize_categories(categories)
 
         if itype == "direct":
             return {
@@ -360,10 +327,14 @@ class IntentClassifier:
         """
         m = self._QUANTITY_PATTERN.search(query)
         if not m:
+            m = self._EN_QUANTITY_PATTERN.search(query)
+        if not m:
             return 1
-        raw = m.group(1)
+        raw = m.group(1).lower()
         if raw in self._CN_NUMS:
             return self._CN_NUMS[raw]
+        if raw in self._EN_NUMS:
+            return self._EN_NUMS[raw]
         try:
             return max(1, int(raw))
         except ValueError:

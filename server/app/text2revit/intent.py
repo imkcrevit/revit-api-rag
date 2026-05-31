@@ -14,6 +14,7 @@ import sqlite3
 from typing import Any
 
 from pipeline.llm_client import LLMClient
+from prompts import load_prompt
 from server.app.text2revit.actions import (
     ACTIONS, RevitAction, ParamDef, get_action, get_actions_summary,
 )
@@ -23,31 +24,8 @@ from server.app.text2revit.actions import (
 # Intent recognition prompt
 # ---------------------------------------------------------------------------
 
-_INTENT_PROMPT = """\
-You are a Revit design assistant. Analyze the user's message and determine which Revit operation they want to perform.
-
-## Supported operations:
-{actions_summary}
-
-## Rules:
-1. Return a JSON object with "intent" (one of the supported intents, or "UNKNOWN") and "extracted_params" (any parameters you can extract from the message).
-2. For point coordinates, normalize to [x, y, z] arrays.
-3. For numeric values, convert to numbers.
-4. If the user's intent is unclear or not supported, set intent to "UNKNOWN".
-5. Output ONLY valid JSON, no explanation.
-
-## Examples:
-User: "创建一面从(0,0,0)到(10,0,0)的墙，高3米"
-Output: {{"intent": "CREATE_WALL", "extracted_params": {{"start_point": [0,0,0], "end_point": [10,0,0], "height": 3.0}}}}
-
-User: "放一根柱子在(5,5,0)"
-Output: {{"intent": "CREATE_COLUMN", "extracted_params": {{"location": [5,5,0]}}}}
-
-User: "帮我画个圆"
-Output: {{"intent": "UNKNOWN", "extracted_params": {{}}}}
-
-User message: {message}
-"""
+_INTENT_PROMPT = load_prompt("server.text2revit_intent.md")
+_INTENT_SYSTEM = load_prompt("server.text2revit_intent_system.md")
 
 # ---------------------------------------------------------------------------
 # Parameter guidance prompt
@@ -60,7 +38,7 @@ _GUIDE_TEMPLATE_ZH = """\
 {missing_list}
 
 {optional_hint}\
-请提供上述信息，或输入 "默认" 使用默认值。"""
+请提供上述信息。"""
 
 _GUIDE_TEMPLATE_EN = """\
 Sure, I'll help you {description_en}.
@@ -69,7 +47,7 @@ I still need the following information:
 {missing_list}
 
 {optional_hint}\
-Please provide the above, or type "defaults" to use default values."""
+Please provide the above."""
 
 
 class IntentRecognizer:
@@ -90,7 +68,7 @@ class IntentRecognizer:
         )
         raw = self._llm.generate_text(
             prompt,
-            system_prompt="You are a Revit intent classifier. Output JSON only.",
+            system_prompt=_INTENT_SYSTEM,
         )
         # Parse JSON
         raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)

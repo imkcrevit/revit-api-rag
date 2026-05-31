@@ -1,5 +1,8 @@
 """
-入口 — FastAPI + React(/) + Gradio(/app) 同进程，单端口 7860
+入口 — FastAPI + React(/) 单端口 7860
+
+Gradio is optional and disabled by default. Set ENABLE_GRADIO=1 only for
+legacy comparison.
 
 Usage:
     python -m server.main
@@ -7,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import uvicorn
 from fastapi import FastAPI
 
@@ -117,20 +121,28 @@ def create_app() -> FastAPI:
     else:
         print(f"React frontend not found at {react_dist} — / not available")
 
-    # Mount Gradio at /app (backup — kept for comparison during migration)
-    try:
-        import gradio as gr
-        from pathlib import Path as _Path
-        from server.frontend.gradio_app import create_gradio_app
-        gradio_app = create_gradio_app()
-        _favicon = _Path(__file__).resolve().parent.parent / "images" / "graptolite-icon.svg"
-        fastapi_app = gr.mount_gradio_app(
-            fastapi_app, gradio_app, path="/app",
-            favicon_path=str(_favicon) if _favicon.is_file() else None,
-        )
-        print("Gradio frontend mounted at /app")
-    except ImportError:
-        print("Gradio not installed — /app not available")
+    # Gradio is intentionally disabled by default. The React UI is the primary,
+    # flexible frontend for dynamic parameters and thinking-chain display.
+    enable_gradio = (
+        os.getenv("ENABLE_GRADIO", "").lower() in {"1", "true", "yes"}
+        or bool(server_cfg.get("enable_gradio", False))
+    )
+    if enable_gradio:
+        try:
+            import gradio as gr
+            from pathlib import Path as _Path
+            from server.frontend.gradio_app import create_gradio_app
+            gradio_app = create_gradio_app()
+            _favicon = _Path(__file__).resolve().parent.parent / "images" / "graptolite-icon.svg"
+            fastapi_app = gr.mount_gradio_app(
+                fastapi_app, gradio_app, path="/app",
+                favicon_path=str(_favicon) if _favicon.is_file() else None,
+            )
+            print("Gradio frontend mounted at /app")
+        except ImportError:
+            print("Gradio not installed — /app not available")
+    else:
+        print("Gradio disabled — React frontend is primary")
 
     return fastapi_app
 

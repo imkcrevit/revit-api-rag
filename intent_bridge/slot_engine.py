@@ -25,6 +25,7 @@ from typing import Any
 
 import yaml
 
+from prompts import load_prompt
 from intent_bridge.llm_adapter import LLMAdapter
 from intent_bridge.skill_loader import get_skill_loader
 from intent_bridge.models import (
@@ -450,252 +451,120 @@ def _format_api_context(api_docs: list[dict]) -> str:
 # LLM Prompt — Agent-style, RAG-enhanced, ONE call
 # ===================================================================
 
-_ANALYZE_PROMPT = """You are a Revit API Agent. Analyze user requests using the retrieved API documentation below.
-
-## LANGUAGE RULE (HIGHEST PRIORITY):
-ALL question text and descriptions MUST be bilingual (Chinese + English), regardless of input language.
-Format: "中文说明 / English description"
-Example question text: "请选择墙体类型 / Select wall type:"
-Example option labels: Keep Revit family names as-is (e.g. "Generic - 200mm"), add Chinese prefix if helpful (e.g. "常规 - 200mm")
-Last option should be: "其他 (自定义) / Other (custom)"
-
-{rag_context}
-
-## Known intents (for classification):
-{intent_list}
-
-If the user's request doesn't match any known intent above, use intent="custom" with the
-api_method derived from the API documentation. Do NOT reject unknown operations.
-
-## Core Rules:
-
-### Rule 1: NEVER silently default ANY parameter (HIGHEST PRIORITY AFTER LANGUAGE)
-You are NOT connected to a live Revit session. You CANNOT look up types, levels, or positions.
-For EVERY parameter in the API method signature, you MUST either:
-  a) Extract its EXACT value from the user's input text (put in "slots"), OR
-  b) Create a question for the user (put in "questions")
-
-FORBIDDEN behaviors (these are ERRORS):
-- Picking a default type/family (e.g., "use the first available column type") — ASK the user
-- Inventing coordinates (e.g., "(0,0,0)" and "(10,0,0)") — ASK the user
-- Assuming a level (e.g., "use the first level") — ASK the user
-- Picking StructuralType silently — ASK the user if ambiguous
-- Saying "I'll find it in the document" — you CANNOT, the user must provide it
-
-If the user says "创建两个结构柱", you must ask about ALL of:
-- Column type/family (with options)
-- Level (with options)
-- XYZ coordinates for EACH column (since quantity=2, ask for 2 positions)
-- StructuralType if not obvious
-
-### Rule 2: Parameter values must be Revit-executable types
-- ElementId parameters -> user must provide an actual ElementId (integer)
-- XYZ/coordinate parameters -> numeric coordinates (e.g., "1000,500,0")
-- Enum parameters -> valid enum member name
-- Type parameters -> FamilySymbol name or type name
-- Level parameters -> level name string (e.g., "Level 1", "F1", "标高 1")
-
-### Rule 3: Host element / ElementId parameters
-For parameters requiring Element or ElementId (e.g., host wall for door/window):
-- Explain that an ElementId is required
-- Chinese: "请输入宿主墙体的 ElementId（在 Revit 中选择墙体可查看其 Id）"
-- English: "Enter the host wall ElementId (select the wall in Revit to see its Id)"
-
-### Rule 4: Type/family parameters are ALWAYS mandatory
-Wall type, column type, window type, door type, floor type, beam type etc. are NEVER optional.
-Always ask about them with concrete options showing dimensions and properties.
-You MUST NOT silently pick "the first available" or "default" type.
-
-### Rule 5: Position/coordinate parameters are ALWAYS mandatory
-XYZ coordinates, start/end points, placement locations are NEVER optional.
-You MUST NOT invent coordinates. Always ask the user to provide them.
-
-### Rule 6: Question options format and `enrich` tagging
-Each question MUST have:
-- 3-6 concrete options with details (dimensions, specs)
-- Last option: "其他 (自定义)" (Chinese) or "Other (custom)" (English)
-- Options in the user's language
-- An `enrich` field indicating what Revit data should replace these placeholder options:
-  - `"family_type:<category>"` — replace with real Revit family types (category = column, beam, wall, floor, window, door, ceiling, roof, furniture, etc.)
-  - `"level"` — replace with real Revit levels
-  - `"host_pick"` — this parameter requires the user to select an element in Revit interactively
-  - `"none"` — no enrichment needed (for coordinates, booleans, enums, free text, dimensions, etc.)
-
-  Examples: `"enrich": "family_type:column"`, `"enrich": "level"`, `"enrich": "host_pick"`, `"enrich": "none"`
-
-### Rule 7: Question ordering priority
-a) Ambiguity disambiguation (if any)
-b) Type / family selection
-c) Level selection
-d) Position / coordinates
-e) Dimensions and properties
-f) Other API parameters
-
-### Rule 8: QUANTITY — When user requests N items (N>1)
-Detect quantity keywords: 两/三/四/五/多个/几个/two/three/four/multiple etc.
-- Extract "quantity" into "slots"
-- Position-dependent params (coordinates, host elements) MUST ask for ALL N values in ONE question
-- Shared params (type, height, material) stay single values — ask once
-- Question text MUST clearly list N entries with numbered placeholders
-
-**CRITICAL**: Do NOT ask for only 1 position when quantity > 1. The code generator CANNOT invent positions.
-
-Example output for "创建两个结构柱" (quantity=2):
-{{
-  "intent": "custom",
-  "confidence": 0.85,
-  "api_method": "NewFamilyInstance",
-  "slots": {{ "quantity": 2 }},
-  "questions": [
-    {{
-      "slot": "column_type",
-      "text": "请选择结构柱族类型：",
-      "options": ["矩形柱 300×300mm", "矩形柱 300×450mm", "矩形柱 450×450mm", "圆柱 D300mm", "其他 (自定义)"],
-      "values": ["300x300", "300x450", "450x450", "D300", "custom"],
-      "enrich": "family_type:column"
-    }},
-    {{
-      "slot": "level",
-      "text": "放置在哪个标高？",
-      "options": ["标高 1 (0mm)", "标高 2 (3000mm)", "标高 3 (6000mm)", "其他 (自定义)"],
-      "values": ["Level 1", "Level 2", "Level 3", "custom"],
-      "enrich": "level"
-    }},
-    {{
-      "slot": "positions_array",
-      "text": "请输入 2 个柱子的放置坐标（每个柱子一组 XYZ）：\\n柱 1: (x, y, z)\\n柱 2: (x, y, z)\\n格式示例: 1000,0,0; 5000,0,0",
-      "options": ["其他 (自定义)"],
-      "values": ["custom"],
-      "enrich": "none"
-    }}
-  ]
-}}
-
-For English input with quantity=3:
-{{
-  "slot": "positions_array",
-  "text": "Enter XYZ coordinates for 3 columns:\\nColumn 1: (x,y,z)\\nColumn 2: (x,y,z)\\nColumn 3: (x,y,z)\\nFormat: 1000,0,0; 5000,0,0; 9000,0,0",
-  "options": ["Other (custom)"],
-  "values": ["custom"],
-  "enrich": "none"
-}}
-
-Example for "在墙上创建窗户" (window on host wall):
-{{
-  "slot": "host_wall",
-  "text": "请在 Revit 中选择宿主墙体：",
-  "options": ["在 Revit 中选择"],
-  "values": ["pick"],
-  "enrich": "host_pick"
-}},
-{{
-  "slot": "window_type",
-  "text": "请选择窗户类型：",
-  "options": ["固定窗 600×900mm", "推拉窗 1200×1500mm", "其他 (自定义)"],
-  "values": ["600x900", "1200x1500", "custom"],
-  "enrich": "family_type:window"
-}}
-
-### Rule 9: MULTI-ACTION DECOMPOSITION
-Some requests need multiple API calls (e.g., "create a room" needs walls first).
-Use "action_plan" format for composite operations.
-
-## AMBIGUITY DETECTION:
-| User text | Possible meanings | Must ask |
-|-----------|-------------------|----------|
-| 背面 | 北面(north) vs 背面(rear) | Which one? |
-| 前面 | 南面(south) vs 前面(entrance) | Which one? |
-| 左边/右边 | Depends on viewing direction | From which direction? |
-| 那面墙/这个 | Ambiguous reference | Must specify exactly |
-| 大的/小的/标准 | Unknown dimensions | Must give concrete sizes |
-
-## OUTPUT FORMAT (pure JSON, no markdown):
-
-For SINGLE action:
-{{
-  "intent": "intent_name",
-  "confidence": 0.0-1.0,
-  "api_method": "exact Revit API method",
-  "slots": {{ "param_name": "extracted_value" }},
-  "questions": [
-    {{
-      "slot": "parameter_name",
-      "text": "question in user's language",
-      "options": ["Option A", "Option B", "其他 (自定义)"],
-      "values": ["value_a", "value_b", "custom"],
-      "enrich": "none|level|host_pick|family_type:<category>"
-    }}
-  ],
-  "summary": "action description (ONLY when questions is empty)"
-}}
-
-For MULTI-ACTION (composite operations):
-{{
-  "intent": "composite",
-  "confidence": 0.0-1.0,
-  "action_plan": [
-    {{
-      "step": 1,
-      "intent": "create_wall",
-      "display_name": "创建闭合墙体 / Create enclosed walls",
-      "api_method": "Wall.Create",
-      "description": "Create 4 walls forming a rectangle",
-      "questions": [...]
-    }}
-  ],
-  "summary": ""
-}}
-
-IMPORTANT: "summary" should ONLY appear when ALL questions are empty.
-
-## User input:
-"{user_input}"
-"""
-
+_ANALYZE_PROMPT = load_prompt("intent_bridge.analyze_legacy.md")
 
 # ===================================================================
 # LLM Prompt V2 — Skill-enhanced, modular prompt
 # ===================================================================
 
-_ANALYZE_PROMPT_V2 = """You are a Revit API Agent. Analyze user requests using the retrieved API documentation below.
+_ANALYZE_PROMPT_V2 = load_prompt("intent_bridge.analyze.md")
 
-## Core Rules:
 
-{base_skill_rules}
+# Dynamic parameters must be resolved from the live Revit model, not from
+# LLM-fabricated option lists.
+_DYNAMIC_ENRICH_FIXED = {"level", "host_pick"}
+_FABRICATED_DEFAULT_PATTERNS = [
+    re.compile(r"\bLevel\s*1\b", re.IGNORECASE),
+    re.compile(r"标高\s*1"),
+    re.compile(r"\bfirst\s+available\b", re.IGNORECASE),
+    re.compile(r"\bdefault\b", re.IGNORECASE),
+    re.compile(r"\bgeneric\s*-\s*\d+", re.IGNORECASE),
+    re.compile(r"\(\s*0(?:\.0+)?\s*,\s*0(?:\.0+)?\s*,\s*0(?:\.0+)?\s*\)"),
+    re.compile(r"\b0(?:\.0+)?\s*,\s*0(?:\.0+)?\s*,\s*0(?:\.0+)?\b"),
+]
 
-{rag_context}
 
-## Known intents (for classification):
-{intent_list}
+def _normalize_enrich(enrich: Any) -> str:
+    """Normalize an LLM-provided enrich tag without losing category casing."""
+    if not isinstance(enrich, str):
+        return "none"
+    raw = enrich.strip()
+    if not raw:
+        return "none"
+    lower = raw.lower()
+    if lower in _DYNAMIC_ENRICH_FIXED or lower == "none":
+        return lower
+    if lower.startswith("family_type:"):
+        category = raw.split(":", 1)[1].strip()
+        return f"family_type:{category}" if category else "none"
+    return "none"
 
-If the user's request doesn't match any known intent above, use intent="custom" with the
-api_method derived from the API documentation. Do NOT reject unknown operations.
 
-## Active Skills (MUST FOLLOW these intent-specific rules):
-{skill_context}
+def _is_dynamic_enrich(enrich: str) -> bool:
+    return enrich in _DYNAMIC_ENRICH_FIXED or enrich.startswith("family_type:")
 
-## RAG Grounding Rules (CRITICAL — anti-hallucination):
 
-1. ONLY use API methods that appear in the "Retrieved API Documentation" above.
-   If no relevant API is found, set intent="custom" and describe the gap — do NOT invent methods.
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
-2. When citing an API method, the method signature MUST match the documentation exactly.
-   Do not merge parameters from different methods. Do not add parameters that don't exist.
 
-3. If the documentation shows a method requires parameters A, B, C — you must account for
-   ALL of them (in slots or questions). Do not silently omit parameters.
+def _sanitize_question_dict(raw: Any) -> dict[str, Any] | None:
+    """Apply the question contract before runtime enrichment or UI display."""
+    if not isinstance(raw, dict):
+        return None
 
-4. Report faithfully: if the API documentation does not cover the user's request,
-   say so. Do NOT fabricate an api_method or slots to appear complete.
-   "I don't have documentation for this" is better than a wrong answer.
+    slot = str(raw.get("slot", "")).strip()
+    if not slot:
+        return None
 
-5. NEVER fill a slot value by inventing a "reasonable" value. Every slot value must be
-   directly extractable from the user's exact input text. If you cannot point to the
-   specific word or number in the user's input that provides this value, it goes in questions.
+    enrich = _normalize_enrich(raw.get("enrich", "none"))
+    text = str(raw.get("text", "")).strip() or slot
+    options = _as_list(raw.get("options", []))
+    values = _as_list(raw.get("values", []))
+    allow_custom = raw.get("allow_custom", True)
+    allow_custom = allow_custom if isinstance(allow_custom, bool) else True
 
-## User input:
-"{user_input}"
-"""
+    if _is_dynamic_enrich(enrich):
+        # The live Revit query layer owns these choices. Keeping LLM-supplied
+        # options here would make fabricated family types/levels look real.
+        options = []
+        values = []
+        allow_custom = True
+    elif options and not values:
+        values = list(options)
+
+    return {
+        "slot": slot,
+        "text": text,
+        "options": options,
+        "values": values,
+        "allow_custom": allow_custom,
+        "enrich": enrich,
+    }
+
+
+def _looks_like_fabricated_default(value: Any, user_input: str) -> bool:
+    """Detect common defaults that should have been asked for instead."""
+    if value is None:
+        return False
+    text = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+    if text and text.lower() in user_input.lower():
+        return False
+    return any(pattern.search(text) for pattern in _FABRICATED_DEFAULT_PATTERNS)
+
+
+def _sanitize_slots_dict(
+    raw_slots: Any,
+    user_input: str,
+    question_slots: set[str],
+) -> dict[str, Any]:
+    """Remove slots that conflict with pending questions or obvious defaults."""
+    if not isinstance(raw_slots, dict):
+        return {}
+
+    cleaned: dict[str, Any] = {}
+    for key, value in raw_slots.items():
+        slot = str(key).strip()
+        if not slot:
+            continue
+        if slot in question_slots:
+            logger.info("[decode] dropping slot=%s because it is still a question", slot)
+            continue
+        if _looks_like_fabricated_default(value, user_input):
+            logger.info("[decode] dropping slot=%s fabricated default=%r", slot, value)
+            continue
+        cleaned[slot] = value
+    return cleaned
 
 
 # ===================================================================
@@ -852,6 +721,7 @@ class ConversationOrchestrator:
 
         raw = await self._llm.complete_async(prompt, temperature=0.1)
         result = LLMAdapter.extract_json(raw)
+        result = self._sanitize_llm_result(result, user_input)
 
         duration = (time.time() - start) * 1000
         logger.info("LLM analysis (with API docs): %.0fms", duration)
@@ -958,16 +828,65 @@ class ConversationOrchestrator:
     # -------------------------------------------------------------------
 
     @staticmethod
+    def _sanitize_llm_result(result: Any, user_input: str) -> dict[str, Any]:
+        """Normalize decoded LLM JSON before it can drive workflow state."""
+        if not isinstance(result, dict):
+            return {}
+
+        sanitized = dict(result)
+        questions = [
+            q for q in (_sanitize_question_dict(q) for q in sanitized.get("questions", []))
+            if q is not None
+        ]
+        question_slots = {q["slot"] for q in questions}
+        sanitized["questions"] = questions
+        sanitized["slots"] = _sanitize_slots_dict(
+            sanitized.get("slots", {}),
+            user_input,
+            question_slots,
+        )
+
+        action_plan = sanitized.get("action_plan")
+        if isinstance(action_plan, list):
+            clean_steps = []
+            for step in action_plan:
+                if not isinstance(step, dict):
+                    continue
+                clean_step = dict(step)
+                step_questions = [
+                    q for q in (
+                        _sanitize_question_dict(q)
+                        for q in clean_step.get("questions", [])
+                    )
+                    if q is not None
+                ]
+                step_question_slots = {q["slot"] for q in step_questions}
+                clean_step["questions"] = step_questions
+                clean_step["slots"] = _sanitize_slots_dict(
+                    clean_step.get("slots", {}),
+                    user_input,
+                    step_question_slots,
+                )
+                clean_steps.append(clean_step)
+            sanitized["action_plan"] = clean_steps
+
+        return sanitized
+
+    @staticmethod
     def _parse_questions(questions_raw: list[dict]) -> list[QuestionItem]:
         """Parse raw question dicts into QuestionItem list."""
         items = []
-        for q in questions_raw:
+        for raw in questions_raw:
+            q = _sanitize_question_dict(raw)
+            if not q:
+                continue
             items.append(QuestionItem(
-                slot=q.get("slot", ""),
-                text=q.get("text", ""),
-                options=q.get("options", []),
-                values=q.get("values", []),
-                allow_custom=q.get("allow_custom", True),
+                slot=q["slot"],
+                text=q["text"],
+                options=q["options"],
+                values=q["values"],
+                allow_custom=q["allow_custom"],
+                enrich=q["enrich"],
             ))
         return items
 

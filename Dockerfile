@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir -r requirements-server.txt
 
 # Copy source code
 COPY config/ config/
+COPY prompts/ prompts/
 COPY pipeline/ pipeline/
 COPY server/ server/
 COPY mcp_bridge/ mcp_bridge/

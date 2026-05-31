@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../types/api'
 import { useSettingsStore } from '../../store'
+import { getErrorMessage, isAbortError } from '../../utils/errors'
 
 /* ── Languages ── */
 const LANGUAGES: Record<string, string> = {
@@ -167,9 +168,9 @@ export default function TextStudioTab() {
 
       // Refresh cost status after each request
       fetchStatus()
-    } catch (e: any) {
-      if (e.name !== 'AbortError') {
-        setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }])
+    } catch (e: unknown) {
+      if (!isAbortError(e)) {
+        setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${getErrorMessage(e)}` }])
       }
     } finally {
       setStreaming(false)
@@ -301,7 +302,7 @@ export default function TextStudioTab() {
       )}
 
       {/* Language selector bar */}
-      <div style={{
+      <div className="language-bar" style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '10px 20px',
         borderBottom: '1px solid var(--line)',
@@ -354,7 +355,7 @@ export default function TextStudioTab() {
 
         {/* Cost indicator */}
         {costStatus && (
-          <div style={{
+          <div className="cost-indicator" style={{
             marginLeft: 'auto',
             fontFamily: 'var(--mono)', fontSize: 10,
             color: isInterrupted ? '#e74c3c' : 'var(--faint)',
@@ -396,12 +397,7 @@ export default function TextStudioTab() {
             </p>
 
             {/* Quick prompts */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: 10,
-              marginBottom: 24,
-            }}>
+            <div className="quick-prompt-grid">
               {QUICK_PROMPTS.map(q => (
                 <button
                   key={q.label}
@@ -493,7 +489,7 @@ export default function TextStudioTab() {
       </div>
 
       {/* Input */}
-      <div className="flex items-end gap-2 p-3" style={{ borderTop: '1px solid var(--line)' }}>
+      <div className="flex items-end gap-2 p-3 chat-input-row" style={{ borderTop: '1px solid var(--line)' }}>
         <textarea
           ref={textareaRef}
           className="input-field flex-1"

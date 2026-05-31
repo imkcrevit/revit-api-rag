@@ -15,6 +15,7 @@ const TABS = ['Skills & Tools', 'Code Generation', 'API Explorer', 'MCP Bridge',
 
 /* Experimental badge on specific tabs */
 const EXPERIMENTAL_TABS = new Set(['TextStudio'])
+const API_MODE = import.meta.env.VITE_API_BASE_URL || 'same-origin'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState(3) // Default to MCP Bridge
@@ -28,12 +29,21 @@ export default function App() {
     <div className="app-shell flex flex-col h-screen">
       {/* Header */}
       <div className="app-header">
-        <h1 className="app-title">
-          Revit API Assistant
-        </h1>
-        <p className="app-kicker">
-          BIM Retrieval · Code Generation · Revit Execution
-        </p>
+        <div className="brand-block">
+          <div className="brand-mark" aria-hidden="true">R</div>
+          <div>
+            <h1 className="app-title">
+              Revit API Assistant
+            </h1>
+            <p className="app-kicker">
+              BIM Retrieval · Code Generation · Revit Execution
+            </p>
+          </div>
+        </div>
+        <div className="runtime-chip">
+          <span>API</span>
+          <strong>{API_MODE}</strong>
+        </div>
       </div>
 
       {/* Settings */}

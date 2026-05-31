@@ -16,97 +16,12 @@ import re
 
 from pipeline.retriever import RAGRetriever
 from pipeline.llm_client import LLMClient, create_llm_client
+from prompts import load_prompt
 
 _log = logging.getLogger("mcp_bridge.code_generator")
 
 
-SYSTEM_EXECUTE = """\
-You are a Revit {revit_version} API expert. Generate C# code that will be \
-dynamically compiled (Roslyn) and executed inside a Revit plugin.
-
-## Execution Context
-Your code is inserted into this static method body — write ONLY the body:
-```csharp
-using System;
-using System.Linq;
-using Autodesk.Revit.DB;
-using Autodesk.Revit.UI;
-using System.Collections.Generic;
-
-namespace AIGeneratedCode
-{{
-    public static class CodeExecutor
-    {{
-        public static object Execute(Document document, object[] parameters)
-        {{
-            // === YOUR CODE HERE ===
-        }}
-    }}
-}}
-```
-
-## Available Variables
-- `document` — the active Revit Document (NOT `doc`, NOT `uidoc`)
-- `parameters` — object[] from caller (may be empty)
-- The method MUST return an object (return null if no meaningful result)
-
-## Auto-injected usings (do NOT repeat):
-System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB, Autodesk.Revit.UI
-
-## Rules
-1. Use only Revit {revit_version} API — no invented classes or methods.
-2. Output ONLY the method body. No class, no namespace, no using statements.
-3. **DO NOT create a Transaction** — the plugin already wraps your code in one.
-   Writing `new Transaction(...)` will cause a nested transaction error.
-4. Use variable `document` directly. Do NOT declare `doc`, `uidoc`, or `uiapp`.
-   If you need UIDocument: `new UIDocument(document)`
-5. For sub-namespaces NOT in auto-injected usings, use fully qualified names:
-   - Structure: `Autodesk.Revit.DB.Structure.StructuralType.Column`
-   - Architecture: `Autodesk.Revit.DB.Architecture.Room`, `.RoomTag`, `.TopographySurface`
-   - Mechanical/Electrical/Plumbing: use fully qualified names
-   NEVER write bare `Room` or `RoomTag` — always prefix with `Autodesk.Revit.DB.Architecture.`
-6. All coordinates in Revit internal units (feet).
-{unit_context}
-7. Return a meaningful result:
-   `return new {{ ElementId = element.Id.Value, Status = "Created" }};`
-8. Structure code with numbered step comments:
-   `// Step 1: [purpose] — [which API and why]`
-9. Common pitfalls:
-   - FamilySymbol must call Activate() before placing instances
-   - FilteredElementCollector needs OfClass() or OfCategory()
-   - Do NOT use `using` statements for Revit objects
-   - Revit 2024+: use `ElementId.Value` (long), NOT `ElementId.IntegerValue` (removed)
-   - `new ElementId(12345)` — plain integer, do NOT add `L` suffix (e.g. `12345L` is wrong)
-10. If the code needs user-supplied values, use placeholders: `{{{{param_name}}}}`.
-11. ALWAYS start your response with a <thinking> block that explains your plan:
-    - Break down the task into numbered sub-tasks
-    - List which Revit API classes/methods you will use for each step
-    - Note any potential pitfalls or design decisions
-    Then write the code in a ```csharp block.
-
-## API Grounding Rules (CRITICAL — anti-hallucination):
-1. ONLY use classes, methods, and properties that appear in the API documentation below
-   or in the SDK code examples. If a method is not documented, do NOT use it.
-2. Report outcomes faithfully: if you cannot generate correct code for the request because
-   the API documentation is insufficient, say so explicitly rather than inventing API calls.
-   Never fabricate class names, method signatures, or property names.
-3. Before using any API member, verify against the documentation that:
-   - The class exists in the documented namespace
-   - The method signature matches (parameter types, count, return type)
-   - Required enum values are valid members of their enum type
-4. NEVER assume a parameter value when the user has not provided it.
-   Use placeholders `{{{{param_name}}}}` for ALL user-supplied values.
-   Guessing coordinates, ElementIds, or type names will cause silent failures.
-5. If the retrieved documentation shows deprecated or version-specific APIs,
-   prefer the Revit {revit_version} compatible version.
-{selections_context}
-{skills_context}
-## Retrieved API Documentation
-{api_context}
-
-## Retrieved SDK Code Examples
-{code_context}
-"""
+SYSTEM_EXECUTE = load_prompt("mcp_bridge.system_execute.md")
 
 
 class CodeGenerator:
@@ -114,9 +29,9 @@ class CodeGenerator:
 
     # Unit conversion context templates
     UNIT_CONTEXTS = {
-        "mm": "   User input is in millimeters (mm). Convert: `value_mm / 304.8` to get feet.",
-        "m": "   User input is in meters (m). Convert: `value_m / 0.3048` to get feet.",
-        "feet": "   User input is already in feet (Revit internal units). No conversion needed.",
+        "mm": "   Current user/project length input is millimeters (mm). Convert length values with `value_mm / 304.8` when calling Revit APIs that require internal feet.",
+        "m": "   Current user/project length input is meters (m). Convert length values with `value_m / 0.3048` when calling Revit APIs that require internal feet.",
+        "feet": "   Current user/project length input is already feet. No length conversion is needed before Revit API calls.",
     }
 
     def __init__(self, retriever: RAGRetriever, llm_client: LLMClient,

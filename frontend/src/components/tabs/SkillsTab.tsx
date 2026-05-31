@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { bridgeApi } from '../../api/bridge'
 import type { ToolInfo } from '../../types/api'
+import { getErrorMessage } from '../../utils/errors'
 
 /* ── Types ── */
 interface Skill {
@@ -22,6 +23,8 @@ interface Skill {
   readonly?: boolean
   keywords?: string
 }
+
+type ToolDetail = ToolInfo & { code_template?: string; source_query?: string }
 
 /* ── Module label map ── */
 const MODULE_LABELS: Record<string, string> = {
@@ -70,7 +73,7 @@ export default function SkillsTab() {
   const [loadingSkills, setLoadingSkills] = useState(true)
   const [loadingTools, setLoadingTools] = useState(true)
   const [viewSkill, setViewSkill] = useState<Skill | null>(null)
-  const [viewTool, setViewTool] = useState<(ToolInfo & { code_template?: string }) | null>(null)
+  const [viewTool, setViewTool] = useState<ToolDetail | null>(null)
   const [showAdd, setShowAdd] = useState(false)
   const [showImport, setShowImport] = useState(false)
 
@@ -257,7 +260,7 @@ function SkillsView({ skills, loading, onToggle, onView, onAdd, onImport, onRefr
 
     // Parse YAML frontmatter
     const fmMatch = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n/)
-    let meta: Record<string, string> = {}
+    const meta: Record<string, string> = {}
     let content = text
     if (fmMatch) {
       try {
@@ -636,9 +639,9 @@ function ToolViewModal({ tool, onClose, onDelete }: {
           </p>
         )}
 
-        {(tool as any).source_query && (
+        {tool.source_query && (
           <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--faint)', marginBottom: 12 }}>
-            Source query: {(tool as any).source_query}
+            Source query: {tool.source_query}
           </p>
         )}
 
@@ -798,8 +801,8 @@ function SkillImportModal({ onClose, onImported }: { onClose: () => void; onImpo
         return
       }
       setResult(await resp.json())
-    } catch (e: any) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(getErrorMessage(e))
     } finally {
       setImporting(false)
     }

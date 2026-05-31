@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import chromadb
+from prompts import load_prompt
 
 
 @dataclass
@@ -144,32 +145,8 @@ class RAGRetriever:
     # Query rewriting
     # ------------------------------------------------------------------
 
-    _REWRITE_PROMPT = """\
-You are a Revit API expert. Given a user query (possibly in Chinese), extract ALL relevant \
-Revit API class names, method names, properties, enums, and English technical keywords.
-
-Rules:
-1. Translate non-English terms to their EXACT Revit API equivalents
-2. PRIORITY: Entity nouns (Wall, Room, Floor) are the PRIMARY search targets. \
-   Action verbs (Create, Delete, Move) are SECONDARY qualifiers.
-   For "i want get wall created api" → the KEY entity is "Wall", action is "Create" → Wall.Create
-3. Strip natural-language filler words (want, get, need, please, how to, etc.) — focus on API entities
-4. Be EXHAUSTIVE — include parent classes, related interfaces, relevant enums
-5. Include the full namespace path (e.g. Autodesk.Revit.DB.Wall)
-6. Include method signatures, property names, and BuiltInParameter/BuiltInCategory enums
-7. Think about what a developer would search for when implementing this feature
-8. Output ONLY a JSON object, no explanation
-
-Examples:
-- "结构柱" → {{"keywords": "structural column FamilyInstance BuiltInCategory.OST_StructuralColumns NewFamilyInstance StructuralType", "api_terms": ["FamilyInstance", "FamilySymbol", "NewFamilyInstance", "StructuralType", "BuiltInCategory.OST_StructuralColumns", "Level", "XYZ"]}}
-- "创建墙体" → {{"keywords": "create wall Wall.Create WallType Level Line CurveLoop", "api_terms": ["Wall", "Wall.Create", "WallType", "WallUtils", "CurtainGrid", "Line.CreateBound", "Level"]}}
-- "i want get wall created api" → {{"keywords": "Wall Wall.Create WallType Level Line", "api_terms": ["Wall", "Wall.Create", "WallType", "WallUtils", "Line.CreateBound", "Level", "FilteredElementCollector"]}}
-- "获取房间面积" → {{"keywords": "room area Room get_Area SpatialElement BoundarySegment", "api_terms": ["Room", "SpatialElement", "Area", "Room.Area", "Room.get_BoundarySegments", "SpatialElementBoundaryOptions"]}}
-- "修改墙类型" → {{"keywords": "change wall type WallType ChangeTypeId Element.ChangeTypeId GetTypeId", "api_terms": ["Element.ChangeTypeId", "Element.GetTypeId", "WallType", "FilteredElementCollector", "Wall"]}}
-- "Part" → {{"keywords": "Part PartUtils PartMaker CreateParts DivideParts PartType", "api_terms": ["Part", "PartUtils", "PartMaker", "PartUtils.CreateParts", "PartUtils.AreElementsValidForCreateParts"]}}
-
-User query: {query}
-"""
+    _REWRITE_PROMPT = load_prompt("pipeline.rewrite_query.md")
+    _REWRITE_SYSTEM_PROMPT = load_prompt("pipeline.rewrite_query_system.md")
 
     def _get_rewrite_client(self):
         """Lazy-init the query rewriting LLM client."""
@@ -192,7 +169,7 @@ User query: {query}
             client = self._get_rewrite_client()
             raw = client.generate_text(
                 self._REWRITE_PROMPT.format(query=query),
-                system_prompt="You are a Revit API keyword extractor. Output JSON only.",
+                system_prompt=self._REWRITE_SYSTEM_PROMPT,
             )
             raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
             raw = re.sub(r"\s*```$", "", raw.strip())

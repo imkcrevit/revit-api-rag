@@ -6,42 +6,12 @@ from __future__ import annotations
 
 import logging
 
+from prompts import load_prompt
+
 log = logging.getLogger(__name__)
 
-RETRY_PROMPT = """\
-The following C# code was generated for this Revit task but failed to compile.
-
-## Original User Request
-{user_query}
-
-## Broken Code
-```csharp
-{code}
-```
-
-## Compile Error
-{error_msg}
-
-## Common Fixes
-- Do NOT add `using` statements — they are auto-injected.
-- Do NOT wrap code in a class/namespace — only write the method body.
-- Do NOT create a Transaction — the plugin already provides one.
-- Use `document` (not `doc` or `uidoc`) as the Document variable.
-- For Structure namespace types, use fully qualified names (e.g. `Autodesk.Revit.DB.Structure.StructuralType`).
-- FamilySymbol requires `.Activate()` before placement.
-- Make sure all referenced types exist in Revit 2026 API.
-
-Please output ONLY the corrected method body. No class, no namespace, no usings.
-"""
-
-RETRY_SYSTEM = (
-    "You are a Revit API expert. Fix the compile error in the C# code. "
-    "Output ONLY the corrected method body — no class, no namespace, no usings. "
-    "IMPORTANT: Diagnose the root cause before fixing. Do NOT blindly retry "
-    "the same approach — read the error message carefully and address the specific issue. "
-    "If the error references a class or method that doesn't exist in Revit 2026 API, "
-    "find the correct alternative rather than guessing a similar name."
-)
+RETRY_PROMPT = load_prompt("mcp_bridge.retry_user.md")
+RETRY_SYSTEM = load_prompt("mcp_bridge.retry_system.md")
 
 
 def is_compile_error(error: str | None) -> bool:

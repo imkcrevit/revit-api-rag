@@ -173,7 +173,7 @@
 | `interactive:pick_object` | 用户在 Revit 中点选元素 | 用 `enrich: host_pick`，**绝不编造 ElementId** |
 | `interactive:pick_point` | 用户在 Revit 中点选坐标 | 用 `enrich: host_pick`，**绝不编造坐标** |
 | `ask_user` | 必须向用户提问 | 创建 question，**绝不假设** |
-| `default` | 有合理默认值 | 可以使用默认值，但仅限于明确标注的参数 |
+| `default` | API 文档明确标注默认值且用户同意 | 只有在文档写明默认值、且用户要求使用默认时才可使用；否则提问 |
 
 **核心规则：如果参数来源是 `query:*` 或 `interactive:*`，你生成的 options 只是占位符。
 实际选项由前端从 Revit 查询后替换。你的 options 内容不会被使用。**

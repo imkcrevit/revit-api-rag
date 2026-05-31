@@ -31,6 +31,7 @@ except ImportError:
     _tqdm = None  # type: ignore[assignment]
 
 from pipeline.llm_client import LLMClient, create_llm_client
+from prompts import load_prompt
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -148,35 +149,8 @@ def discover_sdk_projects(sdk_root: str) -> list[dict[str, Any]]:
 # Phase 1: ReadMe Analysis (Gemini Flash)
 # ---------------------------------------------------------------------------
 
-_README_SYSTEM_PROMPT = (
-    "You are an AI assistant specializing in codebase analysis, an expert at extracting "
-    "structured data from technical documentation."
-)
-
-_README_USER_PROMPT_TPL = """\
-# ROLE
-You are an AI assistant specializing in codebase analysis, an expert at extracting structured data from technical documentation.
-
-# GOAL
-Parse the provided ReadMe text to extract key identifiers for code. Output will be used programmatically by an automated code retrieval system.
-
-# INSTRUCTIONS
-1. Carefully analyze the text provided.
-2. Extract the following three categories:
-   - `target_files`: list of all project source filenames (e.g. `.cs` files) explicitly mentioned.
-   - `key_classes_and_methods`: list of custom class or method names responsible for core functionality.
-   - `mentioned_apis`: list of key API classes from external frameworks (e.g. `Autodesk.Revit.DB.View`).
-3. Format output as a single strict JSON object.
-4. If no information is found for a field, use an empty list `[]`. Do not omit the key.
-5. Response MUST contain ONLY the raw JSON object — no markdown, no explanation.
-
-# EXAMPLE
-Input: "This tool is in `Processor.cs`. Core logic is in `DataParser` using `Autodesk.Revit.DB.Transaction`."
-Output: {{"target_files": ["Processor.cs"], "key_classes_and_methods": ["DataParser"], "mentioned_apis": ["Autodesk.Revit.DB.Transaction"]}}
-
-# README CONTENT
-{readme_text}
-"""
+_README_SYSTEM_PROMPT = load_prompt("pipeline.sdk_extract_readme_system.md")
+_README_USER_PROMPT_TPL = load_prompt("pipeline.sdk_extract_readme_user.md")
 
 
 def _parse_readme_text(readme_path: Path) -> str:
@@ -456,65 +430,8 @@ def match_and_extract(
 # Phase 2: Golden Code Generation (Claude)
 # ---------------------------------------------------------------------------
 
-_GOLDEN_CODE_SYSTEM = (
-    "You are an expert C# software architect and technical writer specializing in the "
-    "Autodesk Revit API. You excel at identifying core logic and refactoring it into "
-    "clear, concise, and educational code examples. Always reply with a single valid "
-    "JSON object and nothing else."
-)
-
-_GOLDEN_CODE_PROMPT_TPL = """\
-# ROLE
-You are an expert C# software architect and technical writer specializing in the Autodesk Revit API.
-
-# GOAL
-Analyze the ReadMe context and raw C# code details. Identify the single most relevant code block representing the core functionality described in the ReadMe, then synthesize it into a clean, reusable, documented 'Golden Code Snippet' for a RAG knowledge base.
-
-# CONTEXT
-<ReadMeContext>
-{readme_summary}
-</ReadMeContext>
-
-<RawCodeDetails>
-{detail_code_analysis}
-</RawCodeDetails>
-
-# STEP-BY-STEP INSTRUCTIONS
-
-1. **Analyze Goal & Context**: Read `<ReadMeContext>` to understand the project's main purpose and key APIs.
-
-2. **Identify Core Logic Block**: Examine `<RawCodeDetails>`.
-   - If multiple methods exist, select the ONE that most directly implements the core functionality from the Project Summary.
-   - Prioritize methods with significant API logic over simple event handlers or UI boilerplate.
-   - Call the selected block the **"Target Code"**.
-
-3. **Filter the Target Code** — remove all:
-   - UI interaction code (MessageBox, TaskDialog, control properties like .Text or .Checked)
-   - Logging/debugging (Console.WriteLine, Debug.WriteLine)
-   - Generic file I/O (unless it IS the core API function)
-   - IExternalCommand.Execute boilerplate — assume a Document `doc` is available
-
-4. **Refactor for Reusability**:
-   - Create a clear, descriptive method signature with typed parameters
-   - Convert hardcoded values into parameters with descriptive names
-   - Ensure Transaction pattern wraps all model modifications
-
-5. **Generate XML Documentation** (`/// <summary>...`):
-   - `<summary>` describes what the FINAL refactored code does
-   - `<param>` for ALL parameters
-   - `<returns>` if method returns a value
-
-6. **Final Output**: Single complete syntactically-correct C# method block.
-
-# OUTPUT FORMAT
-Return ONLY a JSON object with exactly two keys:
-{{
-  "summary": "One sentence English description of what this code demonstrates and which Revit APIs it uses.",
-  "content": "The complete clean C# method with XML documentation comments."
-}}
-
-JSON only. No markdown. No explanation outside the JSON.
-"""
+_GOLDEN_CODE_SYSTEM = load_prompt("pipeline.sdk_golden_code_system.md")
+_GOLDEN_CODE_PROMPT_TPL = load_prompt("pipeline.sdk_golden_code.md")
 
 
 def generate_golden_code(

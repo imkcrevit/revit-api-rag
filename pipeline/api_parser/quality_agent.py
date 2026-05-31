@@ -33,6 +33,7 @@ except ImportError:
     tqdm = None  # type: ignore[assignment]
 
 from pipeline.llm_client import LLMClient, create_llm_client
+from prompts import load_prompt
 
 # ─────────────────────────────────────────────────────────────
 # 并发配置
@@ -187,79 +188,9 @@ def _load_html_excerpt(item: dict[str, Any], html_dir: str | None, max_chars: in
 # Stage-1: Gemini 快速审核（含 HTML 对比）
 # ─────────────────────────────────────────────────────────────
 
-_STAGE1_SYSTEM = (
-    "You are a data-quality auditor for Revit API documentation records. "
-    "You measure PARSE QUALITY — how well the parser captured information that EXISTS in the HTML. "
-    "Always reply with a single valid JSON object and nothing else."
-)
-
-_STAGE1_PROMPT_WITH_HTML = """\
-Audit the following parsed Revit API record by comparing it against the RAW HTML source.
-
-CRITICAL PRINCIPLE: You are measuring PARSE QUALITY, NOT documentation completeness.
-Only deduct points when the HTML source CONTAINS information that the parsed record
-is MISSING or incorrectly captured. If the HTML itself lacks a field (e.g., no parameters,
-no syntax block, no description), then having that field empty is CORRECT — do NOT deduct.
-
-Score criteria (cumulative deductions from 1.0, ONLY apply when HTML evidence exists):
-  -0.5  name/full_id indicates a constructor (#ctor / "Constructor") → noise record
-  -0.4  summary AND info are BOTH empty, BUT the HTML contains a real description
-  -0.3  summary/info is generic boilerplate ("The XYZ type exposes…") while the HTML has a real description
-  -0.25 parameters field is empty BUT the HTML shows method parameters with descriptions
-  -0.2  syntax/C# signature is missing BUT the HTML contains a public C# signature
-  -0.2  important content in the HTML (description, return value) is absent from parsed fields
-  -0.15 all parameter types are "Unknown Type" BUT the HTML has actual type information
-  -0.1  any field contains raw HTML tags, garbled unicode, or excessive whitespace
-
-Parsed record:
-  name        : {name}
-  full_id     : {full_id}
-  syntax      : {syntax}
-  summary     : {summary}
-  info        : {info}
-  parameters  : {parameters}
-
-Raw HTML excerpt (up to 2500 chars):
-{html_excerpt}
-
-Return ONLY a JSON object:
-  "quality_score" : float 0.0–1.0  (a well-parsed record capturing all HTML info should score 0.85–0.95)
-  "issues"        : list of short English strings (empty list if parsed data correctly reflects HTML)
-  "needs_rewrite" : boolean (true when quality_score < {threshold})
-
-JSON only. No markdown. No explanation."""
-
-_STAGE1_PROMPT_NO_HTML = """\
-Audit the following parsed Revit API record for data quality.
-No raw HTML is available — be CONSERVATIVE. Without HTML to compare, you cannot know
-if missing fields are a parse failure or just absent from the source documentation.
-Only deduct for clearly detectable issues.
-
-Score criteria (cumulative deductions from 1.0):
-  -0.5  name/full_id indicates a constructor (#ctor / "Constructor") → noise
-  -0.3  summary or info is clearly generic boilerplate ("The XYZ type exposes…", "Initializes a new instance…")
-  -0.25 parameters field is empty but syntax shows the method takes arguments (with actual param names)
-  -0.1  any field contains raw HTML tags, garbled text, or excessive whitespace
-
-DO NOT deduct for:
-  - Empty summary/info (could be genuinely absent in source documentation)
-  - Missing syntax (source may not have a code block)
-  - Missing parameters (could be a property or parameterless method)
-
-Parsed record:
-  name        : {name}
-  full_id     : {full_id}
-  syntax      : {syntax}
-  summary     : {summary}
-  info        : {info}
-  parameters  : {parameters}
-
-Return ONLY a JSON object:
-  "quality_score" : float 0.0–1.0  (default to 0.8 when no clear issues found)
-  "issues"        : list of short English strings (empty list when no detectable issues)
-  "needs_rewrite" : boolean (true when quality_score < {threshold})
-
-JSON only. No markdown. No explanation."""
+_STAGE1_SYSTEM = load_prompt("pipeline.api_quality_stage1_system.md")
+_STAGE1_PROMPT_WITH_HTML = load_prompt("pipeline.api_quality_stage1_with_html.md")
+_STAGE1_PROMPT_NO_HTML = load_prompt("pipeline.api_quality_stage1_no_html.md")
 
 
 def _stage1_audit(
@@ -323,45 +254,8 @@ def _stage1_audit(
 # Stage-2: Claude Sonnet 兜底重写
 # ─────────────────────────────────────────────────────────────
 
-_STAGE2_SYSTEM = (
-    "You are an expert Revit API documentation writer. "
-    "Your task is to repair and improve incomplete or garbled API records "
-    "using the raw HTML source as the authoritative reference. "
-    "Always reply with a single valid JSON object and nothing else."
-)
-
-_STAGE2_PROMPT_TPL = """\
-The following Revit API record has quality issues. Use the RAW HTML as ground truth to produce corrected fields.
-
-Identified issues:
-{issues}
-
-Original parsed record:
-  name        : {name}
-  full_id     : {full_id}
-  syntax      : {syntax}
-  summary     : {summary}
-  info        : {info}
-  parameters  : {parameters}
-  remark      : {remark}
-
-Raw HTML excerpt (up to 5000 chars):
-{html_excerpt}
-
-IMPORTANT:
-- Only include fields where you can make a GENUINE improvement based on HTML evidence.
-- If the original field already matches the HTML, do NOT include it.
-- If a field is empty in both the record AND the HTML, omit it — do NOT fabricate content.
-- Keep output concise to minimize tokens.
-
-Return ONLY a JSON object with improved fields (omit unchanged ones):
-  "summary"    : clear 1-sentence English description of what this API member does
-  "parameters" : multiline string, one param per line: "[paramName : Type]  - description"
-                 (empty string "" if this API truly has no parameters)
-  "syntax"     : the correct C# public signature (single line, from HTML)
-  "info"       : concise description if summary is also missing
-
-JSON only. No markdown. No explanation."""
+_STAGE2_SYSTEM = load_prompt("pipeline.api_quality_stage2_system.md")
+_STAGE2_PROMPT_TPL = load_prompt("pipeline.api_quality_stage2.md")
 
 
 def _stage2_rewrite(

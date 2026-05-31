@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../types/api'
 import { useSettingsStore } from '../../store'
+import { getErrorMessage, isAbortError } from '../../utils/errors'
 
 /* ── Quick prompts shown on welcome screen ── */
 const QUICK_PROMPTS = [
@@ -138,9 +139,9 @@ export default function PromptBridgeTab() {
       if (!content) {
         setMessages(prev => [...prev, { role: 'assistant', content: '(No response / 无响应)' }])
       }
-    } catch (e: any) {
-      if (e.name !== 'AbortError') {
-        setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }])
+    } catch (e: unknown) {
+      if (!isAbortError(e)) {
+        setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${getErrorMessage(e)}` }])
       }
     } finally {
       setStreaming(false)
@@ -343,12 +344,7 @@ export default function PromptBridgeTab() {
             </p>
 
             {/* Quick prompts */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: 10,
-              marginBottom: 24,
-            }}>
+            <div className="quick-prompt-grid">
               {QUICK_PROMPTS.map(q => (
                 <button
                   key={q.label}
@@ -415,7 +411,7 @@ export default function PromptBridgeTab() {
       </div>
 
       {/* Input */}
-      <div className="flex items-center gap-2 p-3" style={{ borderTop: '1px solid var(--line)' }}>
+      <div className="flex items-center gap-2 p-3 chat-input-row" style={{ borderTop: '1px solid var(--line)' }}>
         <input
           type="text"
           className="input-field flex-1"

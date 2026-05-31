@@ -4,6 +4,31 @@
 
 ---
 
+## Prompt 存放与加载约定
+
+所有可编辑提示词统一存放在 `prompts/`，并通过
+`prompts.loader.load_prompt()` 加载。提示词属于产品行为，必须进入版本控制；
+不要把长提示词重新写回 `server/`、`mcp_bridge/`、`intent_bridge/`、
+`pipeline/`、`prompt_bridge/` 或 `text_studio/` 的业务模块。
+
+| 模块 | 运行代码 | Prompt 文件 |
+|---|---|---|
+| MCP Bridge codegen | `mcp_bridge/code_generator.py` | `prompts/mcp_bridge.system_execute.md` |
+| MCP Bridge retry | `mcp_bridge/retry.py` | `prompts/mcp_bridge.retry_user.md`, `prompts/mcp_bridge.retry_system.md` |
+| MCP Bridge classify | `mcp_bridge/interactive.py` | `prompts/mcp_bridge.classify_intent.md` |
+| Intent Bridge analyze | `intent_bridge/slot_engine.py` | `prompts/intent_bridge.analyze.md`, `prompts/intent_bridge.analyze_legacy.md` |
+| Server RAG | `server/app/prompts/templates.py` | `prompts/server.rag_system_brief.md`, `prompts/server.rag_system_full.md` |
+| API Explorer | `server/app/prompts/api_explorer.py` | `prompts/server.api_explorer_*.md` |
+| Text2Revit legacy intent | `server/app/text2revit/intent.py` | `prompts/server.text2revit_intent*.md` |
+| PromptBridge | `prompt_bridge/service.py` | `prompts/prompt_bridge.system.md` |
+| TextStudio | `text_studio/service.py` | `prompts/text_studio.system.md` |
+| Pipeline quality/rewrite | `pipeline/**` | `prompts/pipeline.*.md` |
+
+Docker 运行时会复制 `prompts/`，`.dockerignore` 允许 `prompts/*.md` 进入镜像。
+缓存文件如 `prompts/__pycache__/` 不进入版本控制。
+
+---
+
 ## 1. 清晰明确的指令和背景上下文
 
 ### PromptBridge — 步骤化指令
@@ -20,17 +45,17 @@ Case A — Clear request: Output ONE precise prompt using [OPTION]
 Case B — Ambiguous request: Output 2-4 [OPTION] blocks
 Case C — Missing critical info: Output [CHOICE] blocks for user confirmation
 ```
-`prompt_bridge/service.py` · `_build_system_prompt()`
+`prompts/prompt_bridge.system.md` · `prompt_bridge/service.py`
 
 ### MCP Bridge 代码生成 — 直接且具体的禁止项
 明确告诉模型"做什么"和"不做什么"，每条规则都有具体原因。
 
 ```
 Rule 1: Do NOT wrap code in a Transaction — the plugin already handles it
-Rule 5: All coordinates are in Revit internal units (feet)
+Rule 6: Preserve user/project units; convert to Revit internal feet only at API boundaries
 Rule 9: Do NOT use doc or uidoc — use the variable named "document"
 ```
-`mcp_bridge/code_generator.py` · `SYSTEM_EXECUTE`
+`prompts/mcp_bridge.system_execute.md` · `mcp_bridge/code_generator.py`
 
 ### RAG 代码生成 — 提供动机与背景
 直接说明上下文来源和目标，让模型理解为什么拿到这些材料。
@@ -40,7 +65,7 @@ Given the user's request and the retrieved API documentation
 + SDK code examples below, generate a concise C# code snippet
 that addresses the request.
 ```
-`server/app/prompts/templates.py` · `SYSTEM_BRIEF`
+`prompts/server.rag_system_brief.md` · `server/app/prompts/templates.py`
 
 ---
 
@@ -51,20 +76,20 @@ that addresses the request.
 You are PromptBridge — a prompt refinement assistant for Revit.
 You transform vague designer requests into precise, executable Revit AI prompts.
 ```
-`prompt_bridge/service.py`
+`prompts/prompt_bridge.system.md`
 
 ### TextStudio
 ```
 You are TextStudio — a professional multilingual translation
 and text refinement assistant.
 ```
-`text_studio/service.py`
+`prompts/text_studio.system.md`
 
 ### RAG 代码生成
 ```
 You are a Revit 2026 API expert assistant.
 ```
-`server/app/prompts/templates.py`
+`prompts/server.rag_system_brief.md`
 
 ---
 
@@ -84,7 +109,7 @@ You are a Revit 2026 API expert assistant.
 ## Retrieved SDK Code Examples
 {code_context}
 ```
-`server/app/prompts/templates.py`
+`prompts/server.rag_system_brief.md`
 
 ### PromptBridge — 知识库与 Skills 分层注入
 base prompt（固定指令）+ knowledge context（知识库 .md 文件拼接）+ skills context（用户可配置规范）三层拼接，各自独立加载。
@@ -94,7 +119,7 @@ base_prompt = _get_system_prompt()          # 固定指令 + 知识库
 skills_ctx = get_skill_store().get_active_prompt("prompt_bridge")  # 用户 Skills
 system_prompt = base_prompt + "\n\n---\n\n" + skills_ctx
 ```
-`prompt_bridge/service.py` · `process_prompt_bridge_chat()`
+`prompts/prompt_bridge.system.md` · `prompt_bridge/service.py`
 
 ---
 
@@ -115,7 +140,7 @@ Example (CHOICE block):
 [CHOICE: 内墙 / Interior Wall]
 适用于室内分隔，常见厚度 100-200mm
 ```
-`prompt_bridge/service.py`
+`prompts/prompt_bridge.system.md`
 
 ### API Explorer 查询理解 — 输入→输出映射
 给出自然语言到 JSON 的转换示例，消除输出格式歧义。
@@ -127,7 +152,7 @@ Example (CHOICE block):
 "删除所有房间" → {"entity": "Room", "action": "Delete",
                   "keywords": ["Room","Delete"], "api_terms": ["Room","Delete"]}
 ```
-`server/app/prompts/api_explorer.py` · `QUERY_UNDERSTANDING_PROMPT`
+`prompts/server.api_explorer_query_understanding.md` · `server/app/prompts/api_explorer.py`
 
 ---
 
@@ -142,7 +167,7 @@ Example (CHOICE block):
 - Mark unconfirmed values as [TBD / 待确认]
 - Be concise — no tables, no lengthy explanations
 ```
-`prompt_bridge/service.py`
+`prompts/prompt_bridge.system.md`
 
 ### Intent Bridge — 双语风格强制
 所有面向用户的文本必须中英双语，格式固定。
@@ -151,7 +176,7 @@ Example (CHOICE block):
 HIGHEST PRIORITY — ALL question text MUST be bilingual:
 Format: "中文说明 / English description"
 ```
-`intent_bridge/slot_engine.py` · `_ANALYZE_PROMPT`
+`prompts/intent_bridge.analyze.md` · `intent_bridge/slot_engine.py`
 
 ### TextStudio — 输出风格规则
 匹配翻译场景的不同输出格式。
@@ -161,7 +186,7 @@ For translation: Output the translation directly — no preamble
 For polishing: Output polished version first, then note key changes after ---
 For grammar check: Show corrections inline: ~~wrong~~**correct**
 ```
-`text_studio/service.py`
+`prompts/text_studio.system.md`
 
 ---
 
@@ -177,7 +202,7 @@ IMPORTANT — API Grounding Rules:
 - If the user asks for functionality not covered by the retrieved docs,
   say so — do NOT invent class names or method signatures
 ```
-`mcp_bridge/code_generator.py` · `SYSTEM_EXECUTE`
+`prompts/mcp_bridge.system_execute.md` · `mcp_bridge/code_generator.py`
 
 ### MCP Bridge 交互分类 — 限定类别枚举
 只允许从预定义列表中选取，未知时用兜底值。
@@ -188,7 +213,7 @@ Anti-hallucination rules:
 - Use OST_GenericModel for uncertain cases
 - Do NOT invent category names
 ```
-`mcp_bridge/interactive.py` · `_CLASSIFY_SYSTEM`
+`prompts/mcp_bridge.classify_intent.md` · `mcp_bridge/interactive.py`
 
 ### Intent Bridge — 禁止静默默认
 宁可追问也不假设参数值。
@@ -197,7 +222,7 @@ Anti-hallucination rules:
 NEVER silently default ANY parameter —
 Extract exact values from user input OR generate a question to ask the user.
 ```
-`intent_bridge/slot_engine.py` · `_ANALYZE_PROMPT`
+`prompts/intent_bridge.analyze.md` · `intent_bridge/slot_engine.py`
 
 ---
 
@@ -213,7 +238,7 @@ Extract exact values from user input OR generate a question to ask the user.
   "options": ["(由 Revit 运行时填充)"]
 }
 ```
-`intent_bridge/slot_engine.py` · enrich 类型：`family_type:<category>` / `level` / `host_pick` / `none`
+`prompts/intent_bridge.analyze.md` · `intent_bridge/slot_engine.py` · enrich 类型：`family_type:<category>` / `level` / `host_pick` / `none`
 
 ### MCP Bridge — 交互分类 → 代码生成编排
 先用分类提示词判断交互类型，再根据结果编排后续工具调用（选族/选宿主/直接执行）。
@@ -234,7 +259,7 @@ Text2Revit:  {"intent": "create_wall", "extracted_params": {...}}
 API Explorer: {"entity": "Wall", "action": "Create", "keywords": [...]}
 Interactive:  {"interaction_type": "select_family", "revit_categories": [...]}
 ```
-`server/app/text2revit/intent.py` · `server/app/prompts/api_explorer.py` · `mcp_bridge/interactive.py`
+`prompts/server.text2revit_intent.md` · `prompts/server.api_explorer_query_understanding.md` · `prompts/mcp_bridge.classify_intent.md`
 
 ---
 

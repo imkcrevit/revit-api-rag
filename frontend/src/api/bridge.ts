@@ -9,6 +9,8 @@ import type {
   ToolInfo,
   ToolChoiceItem,
   GenerateStreamDone,
+  ParameterizeResponse,
+  SolidifyResponse,
 } from '../types/api'
 
 const B = '/api/v1/bridge'
@@ -34,9 +36,9 @@ export const bridgeApi = {
 
   solidify: (name: string, code: string, description: string,
     source_query: string, thinking: string, selections: Record<string, unknown>) =>
-    apiPost(`${B}/parameterize`, { code, source_query, thinking, selections })
-      .then((paramData: any) =>
-        apiPost(`${B}/solidify`, {
+    apiPost<ParameterizeResponse>(`${B}/parameterize`, { code, source_query, thinking, selections })
+      .then((paramData) =>
+        apiPost<SolidifyResponse>(`${B}/solidify`, {
           name, code: paramData.code || code, description,
           parameters: paramData.parameters || [],
           source_query,
@@ -47,7 +49,7 @@ export const bridgeApi = {
   deleteTool: (name: string) =>
     apiFetch(`${B}/tools/${name}`, { method: 'DELETE' }),
 
-  getToolDetail: (name: string) => apiGet<ToolInfo & { code_template: string }>(`${B}/tools/${name}`),
+  getToolDetail: (name: string) => apiGet<ToolInfo & { code_template: string; source_query?: string }>(`${B}/tools/${name}`),
 
   getToolChoices: (name: string) =>
     apiGet<Record<string, ToolChoiceItem[]>>(`${B}/tools/${name}/choices`),

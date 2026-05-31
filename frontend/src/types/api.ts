@@ -18,6 +18,7 @@ export interface OrchestratorQuestion {
   options: string[]
   values?: string[]
   allow_custom?: boolean
+  enrich?: string
   _pick_mode?: boolean
 }
 
@@ -54,6 +55,8 @@ export interface ToolInfo {
   parameters: ToolParam[]
   tags: string[]
   execution_count: number
+  code_template?: string
+  source_query?: string
 }
 
 export interface ToolParam {
@@ -78,6 +81,15 @@ export interface MatchToolResponse {
   has_params?: boolean
   has_dynamic_params?: boolean
   execution_count?: number
+}
+
+export interface ParameterizeResponse {
+  code?: string
+  parameters?: ToolParam[]
+}
+
+export interface SolidifyResponse {
+  name?: string
 }
 
 export interface ApiSearchResult {

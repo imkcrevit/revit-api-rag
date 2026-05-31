@@ -1,6 +1,7 @@
-/* Base API client — all calls go through Vite proxy in dev, same origin in prod */
+/* Base API client — same-origin by default, configurable for split deployment. */
 
-const BASE = ''  // relative — uses Vite proxy or same-origin
+const RAW_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const BASE = RAW_BASE.replace(/\/+$/, '')
 
 function _slotHeader(): Record<string, string> {
   const slot = sessionStorage.getItem('mcp_slot')

@@ -34,6 +34,8 @@ try:
 except ImportError:
     tqdm = None  # type: ignore[assignment]
 
+from prompts import load_prompt
+
 from pipeline.llm_client import LLMClient, create_llm_client
 
 # ─────────────────────────────────────────────────────────────
@@ -48,30 +50,8 @@ _print_lock     = threading.Lock()
 # Project-level analysis
 # ─────────────────────────────────────────────────────────────
 
-_PROJECT_SYSTEM = (
-    "You are a Revit SDK code analyst. You analyze C# sample projects that demonstrate "
-    "Revit API usage patterns. Always reply with a single valid JSON object and nothing else."
-)
-
-_PROJECT_PROMPT_TPL = """\
-Analyze this Revit SDK sample project.
-
-Project name: {project_name}
-Number of C# files: {file_count}
-
-README content:
-{readme}
-
-File listing with code previews:
-{file_previews}
-
-Return a JSON object with:
-  "project_summary"   : 2-3 sentence English description of what this project demonstrates
-  "api_classes_used"  : list of main Revit API classes/types used (e.g. ["Document", "FamilyInstance", "Transaction"])
-  "key_patterns"      : list of design patterns demonstrated (e.g. ["ExternalCommand", "FilteredElementCollector", "Event handling"])
-  "use_case_category" : one of: "geometry", "family", "view", "structure", "mep", "annotation", "export", "utility", "ui", "analysis", "database", "other"
-
-JSON only. No markdown. No explanation."""
+_PROJECT_SYSTEM = load_prompt("pipeline.sdk_quality_project_system.md")
+_PROJECT_PROMPT_TPL = load_prompt("pipeline.sdk_quality_project.md")
 
 
 def _analyze_project(
@@ -131,28 +111,8 @@ def _analyze_project(
 # File-level batch analysis (5 files per Claude call)
 # ─────────────────────────────────────────────────────────────
 
-_FILE_BATCH_SYSTEM = (
-    "You are a Revit SDK code analyst. Analyze C# source files and extract metadata. "
-    "Always reply with a single valid JSON array and nothing else."
-)
-
-_FILE_BATCH_PROMPT_TPL = """\
-Analyze these C# files from the Revit SDK project "{project_name}".
-Project context: {project_summary}
-
-{file_sections}
-
-Return a JSON array with one object per file (in the same order):
-[
-  {{
-    "filename": "exact filename",
-    "file_purpose": "1-sentence English description of what this file does",
-    "key_classes": ["ClassName1", "ClassName2"],
-    "key_methods": ["MethodName1 - brief description", "MethodName2 - brief description"]
-  }}
-]
-
-JSON array only. No markdown. No explanation."""
+_FILE_BATCH_SYSTEM = load_prompt("pipeline.sdk_quality_file_system.md")
+_FILE_BATCH_PROMPT_TPL = load_prompt("pipeline.sdk_quality_file_batch.md")
 
 
 def _analyze_file_batch(

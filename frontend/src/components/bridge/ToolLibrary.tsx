@@ -6,6 +6,7 @@ import type { ToolInfo, ToolParam, ToolChoiceItem } from '../../types/api'
 import StepIndicator from '../shared/StepIndicator'
 import ToolParamEditor from './ToolParamEditor'
 import Accordion from '../shared/Accordion'
+import { getErrorMessage } from '../../utils/errors'
 
 const STEPS = ['Select Tool', 'Load Choices', 'Set Params', 'Run']
 
@@ -38,15 +39,7 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
 
   useEffect(() => { refresh() }, [refresh])
 
-  // Auto-select tool when matched from pipeline
-  useEffect(() => {
-    if (autoSelectTool && autoSelectTool !== selected) {
-      setSelected(autoSelectTool)
-      loadChoices(autoSelectTool)
-    }
-  }, [autoSelectTool])
-
-  const loadChoices = async (name: string) => {
+  const loadChoices = useCallback(async (name: string) => {
     if (!name) return
     setLoading(true)
     setStep(2)
@@ -57,7 +50,7 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
       setParams(allParams)
       setCodeTemplate(detail.code_template || '')
       setToolDescription(detail.description || '')
-      setSourceQuery((detail as any).source_query || '')
+      setSourceQuery(detail.source_query || '')
 
       const hasDynamic = allParams.some(p => p.choices_from)
       let ch: Record<string, ToolChoiceItem[]> = {}
@@ -76,12 +69,20 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
       }
       setValues(defaults)
       setStep(3)
-    } catch (e: any) {
-      setResult(`Error loading: ${e.message}`)
+    } catch (e: unknown) {
+      setResult(`Error loading: ${getErrorMessage(e)}`)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  // Auto-select tool when matched from pipeline
+  useEffect(() => {
+    if (autoSelectTool && autoSelectTool !== selected) {
+      setSelected(autoSelectTool)
+      loadChoices(autoSelectTool)
+    }
+  }, [autoSelectTool, loadChoices, selected])
 
   const run = async () => {
     if (!selected) return
@@ -94,8 +95,8 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
       } else {
         setResult(`Failed: ${res.error}`)
       }
-    } catch (e: any) {
-      setResult(`Error: ${e.message}`)
+    } catch (e: unknown) {
+      setResult(`Error: ${getErrorMessage(e)}`)
     } finally {
       setLoading(false)
     }
@@ -111,7 +112,7 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
 
       {/* Tools table */}
       {tools.length > 0 && (
-        <div className="card overflow-hidden">
+        <div className="card table-scroll">
           <table className="w-full" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
             <thead>
               <tr style={{ background: 'var(--bg2)' }}>

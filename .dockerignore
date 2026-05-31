@@ -36,6 +36,7 @@ pipeline/cleaner/
 # Docs
 *.md
 !config/*.md
+!prompts/*.md
 
 # Misc
 .env
