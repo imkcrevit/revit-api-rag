@@ -40,6 +40,7 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
   const [editCode, setEditCode] = useState('')
   const [saveStatus, setSaveStatus] = useState('')
   const [reviewStatus, setReviewStatus] = useState('')
+  const [choicesWarning, setChoicesWarning] = useState('')
 
   const refresh = useCallback(async () => {
     try {
@@ -58,6 +59,8 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
     setEditMode(false)
     setSaveStatus('')
     setReviewStatus('')
+    setChoicesWarning('')
+    setResult('')
     try {
       const detail = await bridgeApi.getToolDetail(name)
       const allParams = detail.parameters || []
@@ -77,7 +80,11 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
       const hasDynamic = allParams.some(p => p.choices_from)
       let ch: Record<string, ToolChoiceItem[]> = {}
       if (hasDynamic) {
-        ch = await bridgeApi.getToolChoices(name)
+        try {
+          ch = await bridgeApi.getToolChoices(name)
+        } catch (e: unknown) {
+          setChoicesWarning(`Dynamic Revit choices unavailable: ${getErrorMessage(e)}. You can still view code and fill parameters manually.`)
+        }
       }
       setChoices(ch)
 
@@ -221,6 +228,7 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
                     setTags(t.tags || [])
                     setSaveStatus('')
                     setReviewStatus('')
+                    setChoicesWarning('')
                   }}
                   style={{
                     cursor: 'pointer',
@@ -289,6 +297,9 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
             <div className="tool-tag-row">
               {tags.map(tag => <span key={tag}>{tag}</span>)}
             </div>
+          )}
+          {choicesWarning && (
+            <p className="tool-warning-status">{choicesWarning}</p>
           )}
         </div>
       )}

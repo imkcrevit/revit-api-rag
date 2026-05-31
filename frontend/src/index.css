@@ -499,7 +499,8 @@ button {
 }
 
 .tool-code-note,
-.tool-review-status {
+.tool-review-status,
+.tool-warning-status {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--faint);
@@ -508,6 +509,11 @@ button {
 .tool-review-status {
   margin: 8px 0 0;
   color: var(--mid);
+}
+
+.tool-warning-status {
+  margin: 8px 0 0;
+  color: var(--accent);
 }
 
 .tool-tag-row {
