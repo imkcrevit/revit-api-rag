@@ -3,8 +3,8 @@
 当用户的一句话包含多个步骤时，必须拆分为 `action_plan`。
 
 ## 触发关键词
-中文：并、然后、同时、之后、接着、再、以及、顺便、配置、布置、装修
-English：and then, also, after that, with, including, furnish, layout
+中文：并、然后、同时、之后、接着、再、以及、顺便、配置、布置、装修、需要有、需要、带有、带、包含、含有、有窗、有门、加上、还要
+English：and then, also, after that, with, including, furnish, layout, need, require, contain
 
 ## 什么时候必须拆分
 

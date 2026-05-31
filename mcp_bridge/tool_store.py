@@ -181,13 +181,14 @@ class ToolStore:
             except ValueError:
                 pass
 
-        # Never successfully used
+        # Never successfully used — informational, not a hard block
         if tool.execution_count == 0:
             issues.append("从未成功执行 / never successfully executed")
 
         if issues:
             status = "failing" if tool.failure_count >= 2 else "stale"
-            return {"status": status, "issues": issues, "recommendation": "fallback_to_rag"}
+            rec = "fallback_to_rag" if tool.failure_count >= 2 else "use_tool"
+            return {"status": status, "issues": issues, "recommendation": rec}
 
         return {"status": "healthy", "issues": [], "recommendation": "use_tool"}
 
@@ -345,11 +346,8 @@ class ToolStore:
 
         scored: list[tuple[float, SolidifiedTool]] = []
         for tool in self.list_tools():
-            # Skip never-executed or unhealthy tools
-            if tool.execution_count <= 0:
-                continue
-            health = self.health_check(tool.name)
-            if health["recommendation"] == "fallback_to_rag":
+            # Hard-skip only actively failing tools (consecutive failures)
+            if tool.failure_count >= 2:
                 continue
 
             # Check not_for exclusions first
@@ -373,6 +371,11 @@ class ToolStore:
             if max_possible == 0:
                 continue
             score = total_hits / max_possible
+
+            # Soft penalty for never-executed tools (less confident match)
+            if tool.execution_count <= 0:
+                score *= 0.8
+
             if total_hits > 0:
                 scored.append((score, tool))
 

@@ -16,8 +16,12 @@ export async function apiFetch<T = unknown>(
     headers: { 'Content-Type': 'application/json', ..._slotHeader(), ...init?.headers },
   })
   if (!resp.ok) {
-    const text = await resp.text().catch(() => '')
-    throw new Error(`${resp.status} ${resp.statusText}: ${text}`)
+    const raw = await resp.text().catch(() => '')
+    const isHtml = raw.trimStart().startsWith('<') || resp.headers.get('content-type')?.includes('text/html')
+    const detail = isHtml
+      ? 'Backend unreachable (received HTML error page instead of JSON). Is the server running?'
+      : raw.slice(0, 300)
+    throw new Error(`${resp.status}: ${detail}`)
   }
   return resp.json()
 }
@@ -47,7 +51,13 @@ export async function* sseStream(
     body: JSON.stringify(body),
     signal,
   })
-  if (!resp.ok) throw new Error(`SSE ${resp.status}`)
+  if (!resp.ok) {
+    const raw = await resp.text().catch(() => '')
+    const isHtml = raw.trimStart().startsWith('<')
+    throw new Error(isHtml
+      ? `SSE ${resp.status}: Backend unreachable`
+      : `SSE ${resp.status}: ${raw.slice(0, 200)}`)
+  }
   const reader = resp.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''

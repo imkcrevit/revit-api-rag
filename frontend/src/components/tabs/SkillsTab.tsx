@@ -74,12 +74,17 @@ export default function SkillsTab() {
   const [showAdd, setShowAdd] = useState(false)
   const [showImport, setShowImport] = useState(false)
 
+  const skillsFetched = useRef(false)
+  const toolsFetched = useRef(false)
+
   const fetchSkills = useCallback(async () => {
+    setLoadingSkills(true)
     try {
       const resp = await fetch('/api/skills')
       if (!resp.ok) return
       const data = await resp.json()
       setSkills(data.skills)
+      skillsFetched.current = true
     } catch { /* ignore */ }
     finally { setLoadingSkills(false) }
   }, [])
@@ -89,12 +94,16 @@ export default function SkillsTab() {
     try {
       const list = await bridgeApi.listTools()
       setTools(list)
+      toolsFetched.current = true
     } catch { /* ignore */ }
     finally { setLoadingTools(false) }
   }, [])
 
-  useEffect(() => { fetchSkills() }, [fetchSkills])
-  useEffect(() => { fetchTools() }, [fetchTools])
+  // Lazy load: only fetch when the sub-tab is first shown
+  useEffect(() => {
+    if (activeView === 'skills' && !skillsFetched.current) fetchSkills()
+    if (activeView === 'tools' && !toolsFetched.current) fetchTools()
+  }, [activeView, fetchSkills, fetchTools])
 
   const handleToggle = async (id: string, enabled: boolean) => {
     const skill = skills.find(s => s.id === id)

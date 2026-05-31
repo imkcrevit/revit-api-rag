@@ -17,10 +17,18 @@ import os
 import sys
 from typing import Any, Generator
 
+import time
+
 import httpx
 
 # SDK 代码归纳总结任务耗时较长，使用更宽松的超时
 _DEFAULT_TIMEOUT = 120.0
+
+# 瞬时错误（OpenRouter / 上游 provider 偶发）——可重试。
+# 403 经验上是 Anthropic 经 OpenRouter 的瞬时拒绝，并非持久权限问题，故纳入重试。
+_RETRYABLE_STATUS = frozenset({403, 408, 409, 429, 500, 502, 503, 504, 529})
+_MAX_RETRIES = 4          # 总尝试次数 = 1 + 重试
+_BACKOFF_BASE = 1.5       # 退避基数（秒）：1.5, 3.0, 4.5 …
 
 
 class LLMClient:
@@ -88,8 +96,48 @@ class LLMClient:
         """
         url, headers, payload = self._build_request(prompt, system_prompt, stream=False)
 
-        resp = self._client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
+        import logging
+        _llm_log = logging.getLogger("pipeline.llm_client")
+
+        resp = None
+        last_err: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                resp = self._client.post(url, headers=headers, json=payload)
+                if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
+                    body = resp.text[:300].replace("\n", " ")
+                    wait = _BACKOFF_BASE * attempt
+                    _llm_log.warning(
+                        f"[generate_text] {self.model} HTTP {resp.status_code} "
+                        f"(attempt {attempt}/{_MAX_RETRIES}) — retrying in {wait:.1f}s. Body: {body}"
+                    )
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                break
+            except (httpx.TransportError, httpx.TimeoutException) as e:
+                # 网络层瞬时错误：同样重试
+                last_err = e
+                if attempt < _MAX_RETRIES:
+                    wait = _BACKOFF_BASE * attempt
+                    _llm_log.warning(
+                        f"[generate_text] {self.model} transport error "
+                        f"(attempt {attempt}/{_MAX_RETRIES}): {e} — retrying in {wait:.1f}s"
+                    )
+                    time.sleep(wait)
+                    continue
+                raise
+            except httpx.HTTPStatusError as e:
+                # 非重试状态码，或已用尽重试：把响应体一并抛出，便于诊断
+                body = e.response.text[:500] if e.response is not None else ""
+                raise httpx.HTTPStatusError(
+                    f"{e} | OpenRouter response: {body}",
+                    request=e.request, response=e.response,
+                ) from None
+
+        if resp is None:  # 理论上不会到这里
+            raise last_err or RuntimeError("generate_text: no response")
+
         data = resp.json()
 
         choices = data.get("choices") or []
@@ -101,8 +149,6 @@ class LLMClient:
         message = choice.get("message") or {}
         content = message.get("content") or ""
 
-        import logging
-        _llm_log = logging.getLogger("pipeline.llm_client")
         _llm_log.info(
             f"[generate_text] finish_reason={finish_reason} "
             f"content_len={len(content)} max_tokens={self.max_tokens}"

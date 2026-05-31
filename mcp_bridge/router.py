@@ -91,6 +91,7 @@ class GenerateWithSelectionsRequest(BaseModel):
     selections: dict = {}
     api_top_k: int = 15
     code_top_k: int = 5
+    tool_context: dict | None = None
 
 
 class ExecuteRequest(BaseModel):
@@ -405,13 +406,30 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
         code_ctx_len = len(ctx.get("code_context", ""))
         yield _p(f"RAG context ready — API: {api_ctx_len} chars, SDK: {code_ctx_len} chars")
 
+        # ── Phase 2.5: Tool context (reference from matched tool) ──
+        tool_ref_ctx = ""
+        if req.tool_context:
+            tc = req.tool_context
+            tool_ref_ctx = (
+                f"\n## Reference Tool — \"{tc.get('name', '')}\" (user skipped direct execution)\n"
+                f"The following code template was previously solidified for a similar task.\n"
+                f"Use it as a REFERENCE for structure and API usage patterns, "
+                f"but generate fresh code that fulfills the user's actual request.\n"
+                f"```csharp\n{tc.get('code_template', '')}\n```\n"
+            )
+            if tc.get("parameters"):
+                tool_ref_ctx += "Tool parameters:\n"
+                for p in tc["parameters"]:
+                    tool_ref_ctx += f"  - {p.get('name')}: {p.get('type', 'string')} — {p.get('description', '')}\n"
+            yield _p(f"Tool reference loaded — {tc.get('name', '?')} ({len(tool_ref_ctx)} chars)")
+
         yield _p("Assembling system prompt (rules + context + unit config + skills)...")
         from mcp_bridge.code_generator import SYSTEM_EXECUTE, CodeGenerator as CG
         selections_ctx = CG._build_selections_context(selections) if selections else ""
         system = SYSTEM_EXECUTE.format(
             revit_version=gen.revit_version,
             api_context=ctx.get("api_context", "(none)"),
-            code_context=ctx.get("code_context", "(none)"),
+            code_context=ctx.get("code_context", "(none)") + tool_ref_ctx,
             selections_context=selections_ctx,
             unit_context=CG.UNIT_CONTEXTS.get(gen.user_unit, CG.UNIT_CONTEXTS["mm"]),
             skills_context=skills_ctx,
