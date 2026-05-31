@@ -171,7 +171,6 @@ export default function BridgeTab() {
 
   // --- Tool match state ---
   const [matchedTool, setMatchedTool] = useState('')
-  const [matchedToolData, setMatchedToolData] = useState<ToolContext | null>(null)
   const [toolLibraryOpen, setToolLibraryOpen] = useState(false)
   const toolLibraryRef = useRef<HTMLDivElement>(null)
 
@@ -203,7 +202,6 @@ export default function BridgeTab() {
     setIntentMeta({})
     setOrchQuestions([]); setOrchAnswers({}); setOrchData(null)
     setMatchedTool('')
-    setMatchedToolData(null)
     setToolLibraryOpen(false)
   }
 
@@ -287,7 +285,6 @@ export default function BridgeTab() {
   // --- Skip matched tool & generate fresh code without saved-tool context ---
   const skipToolAndGenerate = async () => {
     setMatchedTool('')
-    setMatchedToolData(null)
     setToolLibraryOpen(false)
     setGenerating(true)
     startTimer()
@@ -351,19 +348,6 @@ export default function BridgeTab() {
       const matched = await bridgeApi.matchTool(query)
       if (matched.matched && matched.name) {
         setMatchedTool(matched.name)
-        // Fetch full tool detail (includes code_template) for skip-to-RAG context
-        try {
-          const detail = await bridgeApi.getToolDetail(matched.name)
-          setMatchedToolData({
-            name: detail.name,
-            display_name: detail.display_name,
-            description: detail.description,
-            code_template: detail.code_template,
-            parameters: detail.parameters,
-          })
-        } catch {
-          setMatchedToolData({ name: matched.name, parameters: matched.parameters })
-        }
         setThinking(
           `**Tool application**: \`${matched.name}\` - ${matched.display_name}\n\n` +
           `**Mode**: saved tool code is loaded directly; no new code generation is required.\n\n` +
