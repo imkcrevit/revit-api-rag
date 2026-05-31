@@ -3,21 +3,27 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/update-and-restart.sh [--allow-dirty] [--no-pull]
+Usage: scripts/update-and-restart.sh [--allow-dirty] [--no-pull] [--no-cache] [--prune-build-cache] [--service NAME]
 
 Pull the latest code and restart the Docker Compose deployment:
   git pull --ff-only
   docker-compose up -d --build
 
 Options:
-  --allow-dirty  Do not fail when the worktree has local changes.
-  --no-pull      Skip git pull and only rebuild/restart containers.
-  -h, --help     Show this help text.
+  --allow-dirty        Do not fail when the worktree has local changes.
+  --no-pull            Skip git pull and only rebuild/restart containers.
+  --no-cache           Build the app service without Docker layer cache first.
+  --prune-build-cache  Run docker builder prune -f before building.
+  --service NAME       Compose service to rebuild with --no-cache (default: revit-api-rag).
+  -h, --help           Show this help text.
 EOF
 }
 
 allow_dirty=0
 do_pull=1
+no_cache=0
+prune_build_cache=0
+service_name="revit-api-rag"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,6 +34,23 @@ while [[ $# -gt 0 ]]; do
     --no-pull)
       do_pull=0
       shift
+      ;;
+    --no-cache)
+      no_cache=1
+      shift
+      ;;
+    --prune-build-cache)
+      prune_build_cache=1
+      shift
+      ;;
+    --service)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--service requires a service name." >&2
+        usage >&2
+        exit 2
+      fi
+      service_name="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -71,7 +94,19 @@ else
   exit 1
 fi
 
-echo "Rebuilding and restarting containers..."
-"${compose_cmd[@]}" up -d --build
+if [[ "$prune_build_cache" == "1" ]]; then
+  echo "Pruning Docker build cache..."
+  docker builder prune -f
+fi
+
+if [[ "$no_cache" == "1" ]]; then
+  echo "Building $service_name without Docker layer cache..."
+  "${compose_cmd[@]}" build --no-cache "$service_name"
+  echo "Restarting containers..."
+  "${compose_cmd[@]}" up -d
+else
+  echo "Rebuilding and restarting containers..."
+  "${compose_cmd[@]}" up -d --build
+fi
 
 echo "Deployment updated."
