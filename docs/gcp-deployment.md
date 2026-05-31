@@ -114,7 +114,7 @@ gh release download v2.0-data -D data/
 # From project root
 docker build -t revit-api-rag:latest .
 
-# Image size will be ~600MB (Python + deps + data)
+# Image contains Python deps and app code. SQLite/ChromaDB data is mounted at runtime.
 docker images revit-api-rag
 ```
 

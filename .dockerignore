@@ -16,6 +16,11 @@ venv
 .idea
 *.swp
 
+# Runtime data is mounted into the container, not copied into the image.
+data/sqlite/
+data/chromadb/
+data/legacy_db/
+
 # Data archives (use extracted dirs only)
 data/chromadb_api.tar.gz
 data/chromadb_code.tar.gz
@@ -37,6 +42,7 @@ pipeline/cleaner/
 *.md
 !config/*.md
 !prompts/*.md
+!data/skills/*.md
 
 # Misc
 .env

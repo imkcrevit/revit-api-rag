@@ -33,10 +33,9 @@ COPY text_studio/ text_studio/
 # Copy built React frontend
 COPY --from=frontend-build /build/dist/ frontend/dist/
 
-# Copy data (ChromaDB + SQLite + Skills)
-# For VM deployment: prefer volume mount (-v ./data:/app/data) instead
-COPY data/sqlite/ data/sqlite/
-COPY data/chromadb/ data/chromadb/
+# Runtime databases are mounted by docker-compose; do not bake large model data
+# into the image layer.
+RUN mkdir -p data/sqlite data/chromadb data/skills
 COPY data/skills/ data/skills/
 
 # Environment
