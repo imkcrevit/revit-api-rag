@@ -403,6 +403,53 @@ button {
   padding: 16px 20px;
 }
 
+.tool-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.tool-edit-wide {
+  grid-column: 1 / -1;
+}
+
+.tool-edit-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tool-code-note,
+.tool-review-status {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.tool-review-status {
+  margin: 8px 0 0;
+  color: var(--mid);
+}
+
+.tool-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-tag-row span {
+  border: 1px solid var(--line);
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  text-transform: uppercase;
+}
+
 .table-scroll {
   overflow-x: auto;
 }
@@ -503,6 +550,7 @@ button {
   .bridge-status-row,
   .tool-match-content,
   .tool-match-actions,
+  .tool-edit-actions,
   .language-bar {
     flex-wrap: wrap;
   }
@@ -533,5 +581,9 @@ button {
   .language-bar .cost-indicator {
     width: 100%;
     margin-left: 0 !important;
+  }
+
+  .tool-edit-grid {
+    grid-template-columns: 1fr;
   }
 }

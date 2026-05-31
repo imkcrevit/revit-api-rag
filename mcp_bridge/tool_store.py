@@ -136,6 +136,31 @@ class ToolStore:
             return True
         return False
 
+    def update(self, name: str, updates: dict) -> SolidifiedTool | None:
+        """Update editable fields on an existing solidified tool."""
+        path = self._tool_path(name)
+        if not path.exists():
+            return None
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        editable = {
+            "display_name",
+            "description",
+            "code_template",
+            "parameters",
+            "tags",
+            "source_query",
+            "preconditions",
+            "applies_when",
+            "not_for",
+        }
+        for key, value in updates.items():
+            if key in editable and value is not None:
+                data[key] = value
+
+        path.write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return SolidifiedTool(**data)
+
     def record_usage(self, name: str, success: bool = True) -> None:
         """Record tool execution result.
 

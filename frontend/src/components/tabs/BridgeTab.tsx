@@ -5,7 +5,6 @@ import { useState, useRef, useCallback } from 'react'
 import { bridgeApi } from '../../api/bridge'
 import { sseStream } from '../../api/client'
 import { extractThinkingAndCode } from '../../utils/sse'
-import { useSettingsStore } from '../../store'
 import type { ClassifyIntentResponse, OrchestratorQuestion, OrchestrateResponse, ToolParam } from '../../types/api'
 import { getErrorMessage, isAbortError } from '../../utils/errors'
 import StepIndicator from '../shared/StepIndicator'
@@ -79,8 +78,8 @@ function buildThinkingChain(orch: OrchestrateResponse, questions: OrchestratorQu
   const lines: string[] = []
   if (orch.intent && !orch.summary?.startsWith('Error')) {
     const oi = orch.intent as Record<string, unknown>
-    lines.push(`**Intent**: \`${String(oi.name || '')}\`${oi.display_name ? ` - ${String(oi.display_name)}` : ''}`)
-    if (oi.confidence != null) lines.push(`**Confidence**: ${String(oi.confidence)}`)
+    lines.push(`**Workflow**: \`${String(oi.name || '')}\`${oi.display_name ? ` - ${String(oi.display_name)}` : ''}`)
+    lines.push('**Mode**: generate reviewed C# after the required parameters are confirmed.')
   }
   if (orch.action_plan?.length) {
     lines.push(`**Action plan**: ${orch.action_plan.length} step${orch.action_plan.length === 1 ? '' : 's'}`)
@@ -94,7 +93,7 @@ function buildThinkingChain(orch: OrchestrateResponse, questions: OrchestratorQu
       const source = q._pick_mode || q.enrich === 'host_pick'
         ? 'Revit pick'
         : q.enrich || 'manual'
-      lines.push(`- \`${q.slot}\`: ${source}${q.options?.length ? `, ${q.options.length} option(s)` : ''}`)
+      lines.push(`- \`${q.slot}\`: ${source}${q.options?.length ? `, ${q.options.length} choice${q.options.length === 1 ? '' : 's'}` : ''}`)
     }
   }
   if (orch.summary) lines.push(`**Summary**: ${orch.summary}`)
@@ -126,7 +125,6 @@ export default function BridgeTab() {
   const [revitStatus, setRevitStatus] = useState('Revit Disconnected')
   const [slotId, setSlotId] = useState<string>(() => sessionStorage.getItem('mcp_slot') || '')
   const [slotsStatus, setSlotsStatus] = useState<SlotsStatus | null>(null)
-  const { unit, setUnit } = useSettingsStore()
 
   /* Persist slot selection */
   const selectSlot = (id: string) => {
@@ -369,12 +367,13 @@ export default function BridgeTab() {
           setMatchedToolData({ name: matched.name, parameters: matched.parameters })
         }
         setThinking(
-          `**Found existing tool: \`${matched.display_name}\`**\n\n` +
-          `Description: ${matched.description}\n\n` +
+          `**Tool application**: \`${matched.name}\` - ${matched.display_name}\n\n` +
+          `**Mode**: saved tool code is loaded directly; no new code generation is required.\n\n` +
+          (matched.description ? `**Description**: ${matched.description}\n\n` : '') +
           (matched.parameters?.length
-            ? `Parameters: ${matched.parameters.map(p => p.name).join(', ')}\n\n`
-            : 'No parameters needed.\n\n') +
-          `Used ${matched.execution_count} time(s).`
+            ? `**Parameters**: ${matched.parameters.map(p => p.name).join(', ')}\n\n`
+            : '**Parameters**: none\n\n') +
+          `**Uses**: ${matched.execution_count} time(s).`
         )
         // Auto-expand tool library and scroll to it
         setToolLibraryOpen(true)
@@ -562,33 +561,8 @@ export default function BridgeTab() {
                 : `Disconnected: ${h.detail}`)
             }
           }).catch(() => setRevitStatus('Revit Disconnected: server unreachable'))
-          bridgeApi.getProjectUnits().then(d => {
-            if (d.detected && !d.error) { setUnit(d.detected); bridgeApi.setUnit(d.detected).catch(() => {}) }
-          }).catch(() => {})
         }} className="btn-secondary">Connect</button>
       </div>
-
-      {/* Settings */}
-      <Accordion title="Settings">
-        <div className="flex items-center gap-4" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
-          <span style={{ color: 'var(--mid)' }}>Unit:</span>
-          {['mm', 'm', 'feet'].map(u => (
-            <label key={u} className="flex items-center gap-1" style={{ color: 'var(--mid)', cursor: 'pointer' }}>
-              <input type="radio" checked={unit === u} onChange={() => {
-                setUnit(u)
-                bridgeApi.setUnit(u).catch(() => {})
-              }} />
-              {u}
-            </label>
-          ))}
-          <button onClick={async () => {
-            try {
-              const d = await bridgeApi.getProjectUnits()
-              if (d.detected && !d.error) { setUnit(d.detected); bridgeApi.setUnit(d.detected).catch(() => {}) }
-            } catch { /* server unreachable */ }
-          }} className="btn-ghost">Re-detect from Revit</button>
-        </div>
-      </Accordion>
 
       {/* === Code Generation Pipeline === */}
       <h3 className="heading-display" style={{ fontSize: 16 }}>Code Generation Pipeline</h3>
@@ -634,7 +608,7 @@ export default function BridgeTab() {
                 Existing Tool Found
               </h4>
               <p style={{ fontFamily: 'var(--serif)', fontSize: 14, color: 'var(--dark)', lineHeight: 1.5, margin: 0 }}>
-                A solidified tool matches your request. You can configure and run it directly, or skip and generate new code from scratch.
+                This request can run as a saved tool application. The saved tool code is loaded directly and can be reviewed or edited before execution.
               </p>
             </div>
             <div className="flex gap-2 shrink-0 tool-match-actions">
@@ -647,22 +621,22 @@ export default function BridgeTab() {
                 }}
                 className="btn-primary"
               >
-                Use Tool
+                Use Saved Tool
               </button>
               <button
                 onClick={skipToolAndGenerate}
                 disabled={generating}
                 className="btn-secondary"
               >
-                Skip & Generate New Code
+                Generate New Code
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Thinking chain — React UI only, streams in real time */}
-      <ThinkingPanel content={thinking} title="Think Chain" />
+      {/* Process summary */}
+      <ThinkingPanel content={thinking} title={matchedTool ? 'Tool Application' : 'Process'} />
 
       {/* Pipeline log */}
       <PipelineLog messages={pipelineLog} />

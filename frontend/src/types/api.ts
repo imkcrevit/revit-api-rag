@@ -72,6 +72,15 @@ export interface ToolChoiceItem {
   value: string
 }
 
+export interface ToolUpdatePayload {
+  display_name?: string
+  description?: string
+  code_template?: string
+  parameters?: ToolParam[]
+  tags?: string[]
+  source_query?: string
+}
+
 export interface MatchToolResponse {
   matched: boolean
   name?: string

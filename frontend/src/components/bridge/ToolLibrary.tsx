@@ -29,6 +29,17 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
   const [showCode, setShowCode] = useState(false)
   const [toolDescription, setToolDescription] = useState('')
   const [sourceQuery, setSourceQuery] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [tags, setTags] = useState<string[]>([])
+  const [editMode, setEditMode] = useState(false)
+  const [editDisplayName, setEditDisplayName] = useState('')
+  const [editDescription, setEditDescription] = useState('')
+  const [editSourceQuery, setEditSourceQuery] = useState('')
+  const [editTags, setEditTags] = useState('')
+  const [editParamsText, setEditParamsText] = useState('[]')
+  const [editCode, setEditCode] = useState('')
+  const [saveStatus, setSaveStatus] = useState('')
+  const [reviewStatus, setReviewStatus] = useState('')
 
   const refresh = useCallback(async () => {
     try {
@@ -44,6 +55,9 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
     setLoading(true)
     setStep(2)
     setShowCode(false)
+    setEditMode(false)
+    setSaveStatus('')
+    setReviewStatus('')
     try {
       const detail = await bridgeApi.getToolDetail(name)
       const allParams = detail.parameters || []
@@ -51,6 +65,14 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
       setCodeTemplate(detail.code_template || '')
       setToolDescription(detail.description || '')
       setSourceQuery(detail.source_query || '')
+      setDisplayName(detail.display_name || detail.name)
+      setTags(detail.tags || [])
+      setEditDisplayName(detail.display_name || detail.name)
+      setEditDescription(detail.description || '')
+      setEditSourceQuery(detail.source_query || '')
+      setEditTags((detail.tags || []).join(', '))
+      setEditParamsText(JSON.stringify(allParams, null, 2))
+      setEditCode(detail.code_template || '')
 
       const hasDynamic = allParams.some(p => p.choices_from)
       let ch: Record<string, ToolChoiceItem[]> = {}
@@ -75,6 +97,68 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
       setLoading(false)
     }
   }, [])
+
+  const beginEdit = async () => {
+    if (!selected) return
+    if (!codeTemplate) {
+      await loadChoices(selected)
+    }
+    setShowCode(true)
+    setEditMode(true)
+    setSaveStatus('')
+    setReviewStatus('')
+  }
+
+  const reviewEditedCode = async () => {
+    setReviewStatus('Reviewing...')
+    try {
+      const res = await bridgeApi.reviewCode(editCode)
+      setReviewStatus(res.safe
+        ? 'Static review: safe'
+        : `Static review warning: ${res.warnings.join('; ')}`)
+    } catch (e: unknown) {
+      setReviewStatus(`Review error: ${getErrorMessage(e)}`)
+    }
+  }
+
+  const saveTool = async () => {
+    if (!selected) return
+    let parsedParams: ToolParam[]
+    try {
+      const parsed = JSON.parse(editParamsText)
+      if (!Array.isArray(parsed)) throw new Error('Parameters must be an array')
+      parsedParams = parsed
+    } catch (e: unknown) {
+      setSaveStatus(`Parameter JSON error: ${getErrorMessage(e)}`)
+      return
+    }
+
+    setLoading(true)
+    setSaveStatus('Saving...')
+    try {
+      const updated = await bridgeApi.updateTool(selected, {
+        display_name: editDisplayName,
+        description: editDescription,
+        source_query: editSourceQuery,
+        tags: editTags.split(',').map(t => t.trim()).filter(Boolean),
+        parameters: parsedParams,
+        code_template: editCode,
+      })
+      setCodeTemplate(updated.code_template || editCode)
+      setToolDescription(updated.description || '')
+      setSourceQuery(updated.source_query || '')
+      setDisplayName(updated.display_name || updated.name)
+      setTags(updated.tags || [])
+      setParams(updated.parameters || [])
+      setEditMode(false)
+      setSaveStatus('Saved after static review')
+      await refresh()
+    } catch (e: unknown) {
+      setSaveStatus(`Save error: ${getErrorMessage(e)}`)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   // Auto-select tool when matched from pipeline
   useEffect(() => {
@@ -126,7 +210,18 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
               {tools.map(t => (
                 <tr
                   key={t.name}
-                  onClick={() => { setSelected(t.name); setStep(1); setShowCode(false); setCodeTemplate('') }}
+                  onClick={() => {
+                    setSelected(t.name)
+                    setStep(1)
+                    setShowCode(false)
+                    setEditMode(false)
+                    setCodeTemplate('')
+                    setDisplayName(t.display_name || t.name)
+                    setToolDescription(t.description || '')
+                    setTags(t.tags || [])
+                    setSaveStatus('')
+                    setReviewStatus('')
+                  }}
                   style={{
                     cursor: 'pointer',
                     background: selected === t.name ? 'rgba(217,119,87,0.08)' : 'transparent',
@@ -151,13 +246,13 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
         <div className="space-y-3">
           <div className="flex items-center gap-3 flex-wrap">
             <span className="label-text" style={{ margin: 0 }}>Selected:</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--accent)' }}>{selected}</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--accent)' }}>{displayName || selected}</span>
             <button
               onClick={() => loadChoices(selected)}
               disabled={loading}
               className="btn-primary"
             >
-              {loading ? 'Loading...' : 'Load Parameters'}
+              {loading ? 'Loading...' : 'Load Tool'}
             </button>
             {codeTemplate && (
               <button
@@ -167,31 +262,77 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
                 {showCode ? 'Hide Code' : 'View Code'}
               </button>
             )}
+            <button
+              onClick={beginEdit}
+              disabled={loading}
+              className="btn-secondary"
+            >
+              Edit Tool
+            </button>
             {onSkipToGenerate && (
               <button
                 onClick={() => onSkipToGenerate(sourceQuery || '')}
                 className="btn-ghost"
-                title="Skip this tool and generate new code via the full pipeline"
               >
-                Regenerate Code Instead
+                Generate New Code
               </button>
             )}
           </div>
 
           {/* Tool description */}
           {toolDescription && step >= 3 && (
-            <p style={{ fontFamily: 'var(--serif)', fontSize: 14, color: 'var(--mid)', fontStyle: 'italic', margin: 0 }}>
+            <p style={{ fontFamily: 'var(--serif)', fontSize: 14, color: 'var(--mid)', margin: 0 }}>
               {toolDescription}
             </p>
+          )}
+          {tags.length > 0 && step >= 3 && (
+            <div className="tool-tag-row">
+              {tags.map(tag => <span key={tag}>{tag}</span>)}
+            </div>
           )}
         </div>
       )}
 
       {/* Code template viewer */}
       {showCode && codeTemplate && (
-        <Accordion title="Tool Code Template" defaultOpen>
+        <Accordion title={editMode ? 'Edit Tool' : 'Tool Code'} defaultOpen>
+          {editMode && (
+            <div className="tool-edit-grid">
+              <label>
+                <span className="label-text">Display Name</span>
+                <input
+                  className="input-field"
+                  value={editDisplayName}
+                  onChange={e => setEditDisplayName(e.target.value)}
+                />
+              </label>
+              <label>
+                <span className="label-text">Tags</span>
+                <input
+                  className="input-field"
+                  value={editTags}
+                  onChange={e => setEditTags(e.target.value)}
+                />
+              </label>
+              <label className="tool-edit-wide">
+                <span className="label-text">Description</span>
+                <input
+                  className="input-field"
+                  value={editDescription}
+                  onChange={e => setEditDescription(e.target.value)}
+                />
+              </label>
+              <label className="tool-edit-wide">
+                <span className="label-text">Source Query</span>
+                <input
+                  className="input-field"
+                  value={editSourceQuery}
+                  onChange={e => setEditSourceQuery(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
           <textarea
-            readOnly
             className="w-full min-h-[200px] p-4"
             style={{
               fontFamily: 'var(--mono)',
@@ -202,11 +343,48 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
               borderRadius: 2,
               resize: 'vertical',
             }}
-            value={codeTemplate}
+            readOnly={!editMode}
+            value={editMode ? editCode : codeTemplate}
+            onChange={e => setEditCode(e.target.value)}
           />
-          <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--faint)', marginTop: 4 }}>
-            Placeholders like {'{{param_name}}'} are filled with parameter values at runtime.
-          </p>
+          {editMode && (
+            <label style={{ display: 'block', marginTop: 10 }}>
+              <span className="label-text">Parameters JSON</span>
+              <textarea
+                className="w-full min-h-[120px] p-3"
+                style={{
+                  fontFamily: 'var(--mono)',
+                  fontSize: 12,
+                  background: 'var(--panel)',
+                  color: 'var(--dark)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 2,
+                  resize: 'vertical',
+                }}
+                value={editParamsText}
+                onChange={e => setEditParamsText(e.target.value)}
+              />
+            </label>
+          )}
+          <div className="tool-edit-actions">
+            {editMode ? (
+              <>
+                <button onClick={reviewEditedCode} className="btn-secondary" disabled={loading}>
+                  Review Code
+                </button>
+                <button onClick={saveTool} className="btn-primary" disabled={loading}>
+                  Save Tool
+                </button>
+                <button onClick={() => setEditMode(false)} className="btn-ghost" disabled={loading}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <span className="tool-code-note">Saved tool code is loaded directly for execution.</span>
+            )}
+          </div>
+          {reviewStatus && <p className="tool-review-status">{reviewStatus}</p>}
+          {saveStatus && <p className="tool-review-status">{saveStatus}</p>}
         </Accordion>
       )}
 

@@ -45,7 +45,6 @@ export default function OrchestratorQuestions({ questions, answers, onChange }: 
             {questions.length} parameter{questions.length === 1 ? '' : 's'} detected from intent analysis
           </p>
         </div>
-        <span className="param-summary-badge">React UI</span>
       </div>
       {questions.map((q) => (
         <div key={q.slot} className="param-row">

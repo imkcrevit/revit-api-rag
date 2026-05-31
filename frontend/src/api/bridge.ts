@@ -8,6 +8,7 @@ import type {
   MatchToolResponse,
   ToolInfo,
   ToolChoiceItem,
+  ToolUpdatePayload,
   GenerateStreamDone,
   ParameterizeResponse,
   SolidifyResponse,
@@ -50,6 +51,15 @@ export const bridgeApi = {
     apiFetch(`${B}/tools/${name}`, { method: 'DELETE' }),
 
   getToolDetail: (name: string) => apiGet<ToolInfo & { code_template: string; source_query?: string }>(`${B}/tools/${name}`),
+
+  updateTool: (name: string, payload: ToolUpdatePayload) =>
+    apiFetch<ToolInfo & { code_template: string; source_query?: string }>(`${B}/tools/${name}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  reviewCode: (code: string) =>
+    apiPost<{ safe: boolean; warnings: string[] }>(`${B}/review-code`, { code }),
 
   getToolChoices: (name: string) =>
     apiGet<Record<string, ToolChoiceItem[]>>(`${B}/tools/${name}/choices`),

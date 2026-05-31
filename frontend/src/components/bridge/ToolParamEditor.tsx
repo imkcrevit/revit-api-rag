@@ -18,11 +18,12 @@ export default function ToolParamEditor({ params, choices, values, onChange }: P
     <div className="space-y-3">
       {params.map((p) => {
         const items = choices[p.name]
+        const description = stripDefaultUnitNote(p.description)
         if (items && items.length > 0) {
           return (
             <div key={p.name}>
               <label className="label-text">
-                {p.name}{p.description ? ` — ${p.description}` : ''}
+                {p.name}{description ? ` — ${description}` : ''}
               </label>
               <select
                 className="input-field"
@@ -40,7 +41,7 @@ export default function ToolParamEditor({ params, choices, values, onChange }: P
         return (
           <div key={p.name}>
             <label className="label-text">
-              {p.name}{p.description ? ` — ${p.description}` : ''}
+              {p.name}{description ? ` — ${description}` : ''}
             </label>
             <input
               type="text"
@@ -54,4 +55,12 @@ export default function ToolParamEditor({ params, choices, values, onChange }: P
       })}
     </div>
   )
+}
+
+function stripDefaultUnitNote(text?: string): string {
+  return (text || '')
+    .replace(/\s*[（(]\s*mm\s*[）)]\s*/gi, '')
+    .replace(/\bmillimetres?\b|\bmillimeters?\b|毫米/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
 }

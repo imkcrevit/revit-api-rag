@@ -111,6 +111,22 @@ class SolidifyRequest(BaseModel):
     source_query: str = ""
 
 
+class UpdateToolRequest(BaseModel):
+    display_name: str | None = None
+    description: str | None = None
+    code_template: str | None = None
+    parameters: list[dict] | None = None
+    tags: list[str] | None = None
+    source_query: str | None = None
+    preconditions: list[str] | None = None
+    applies_when: list[str] | None = None
+    not_for: list[str] | None = None
+
+
+class ReviewCodeRequest(BaseModel):
+    code: str
+
+
 class RunToolRequest(BaseModel):
     name: str
     params: dict = Field(default_factory=dict)
@@ -153,6 +169,63 @@ class ApiCodeGenRequest(BaseModel):
     api_name: str
     api_context: str
     user_hint: str = ""
+
+
+_intent_registry_cache: dict | None = None
+
+
+def _get_intent_registry() -> dict:
+    """Load intent registry for deterministic tool matching."""
+    global _intent_registry_cache
+    if _intent_registry_cache is None:
+        import yaml
+        from pathlib import Path
+
+        path = (
+            Path(__file__).resolve().parent.parent
+            / "intent_bridge" / "schemas" / "intent_registry.yaml"
+        )
+        if path.exists():
+            _intent_registry_cache = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        else:
+            _intent_registry_cache = {}
+    return _intent_registry_cache
+
+
+def _match_tool_from_intent_registry(query: str):
+    """Match saved tools by intent display names and mapped command names."""
+    q = query.strip().lower()
+    if not q:
+        return None
+
+    intents = _get_intent_registry().get("intents", {})
+
+    def close_match(phrase: str) -> bool:
+        p = phrase.strip().lower()
+        if not p:
+            return False
+        if q == p:
+            return True
+        return p in q and len(q) - len(p) <= 3
+
+    for intent_name, data in intents.items():
+        mapped_commands = data.get("mapped_commands") or []
+        phrases = [
+            intent_name,
+            data.get("display_name", ""),
+            data.get("display_name_en", ""),
+            data.get("description", ""),
+            *data.get("keywords", []),
+            *mapped_commands,
+        ]
+        if not any(close_match(str(p)) for p in phrases):
+            continue
+
+        for tool_name in [intent_name, *mapped_commands]:
+            tool = _tool_store.load(str(tool_name))
+            if tool:
+                return tool
+    return None
 
 
 @bridge_router.get("/unit")
@@ -521,6 +594,13 @@ async def execute_code(req: ExecuteRequest):
         raise HTTPException(500, str(e))
 
 
+@bridge_router.post("/review-code")
+async def review_code(req: ReviewCodeRequest):
+    """Run the same static security review used before Revit execution."""
+    safe, warnings = sandbox.review(req.code)
+    return {"safe": safe, "warnings": warnings}
+
+
 @bridge_router.post("/generate-and-execute")
 async def generate_and_execute(req: GenerateRequest):
     """Full pipeline: RAG generate -> security review -> send to Revit -> retry on compile error."""
@@ -673,6 +753,52 @@ async def get_tool(name: str):
     }
 
 
+@bridge_router.put("/tools/{name}")
+async def update_tool(name: str, req: UpdateToolRequest):
+    """Update editable metadata and code for an existing solidified tool."""
+    updates = req.model_dump(exclude_unset=True)
+    if "code_template" in updates:
+        safe, warnings = sandbox.review(updates["code_template"] or "")
+        if not safe:
+            raise HTTPException(
+                422,
+                f"Code review failed: {'; '.join(warnings)}",
+            )
+
+    tool = _tool_store.update(name, updates)
+    if not tool:
+        raise HTTPException(404, f"Tool '{name}' not found")
+
+    # Best-effort sync; the saved YAML remains the source of truth.
+    revit_synced = False
+    try:
+        client = await _get_revit_client()
+        resp = await client.send_command("manage_solidified_tools", {
+            "action": "register",
+            "name": tool.name,
+            "code_template": tool.code_template,
+            "description": tool.description,
+            "parameters": tool.parameters,
+            "source_query": tool.source_query,
+        })
+        revit_synced = resp.success
+    except Exception:
+        pass
+
+    return {
+        "status": "updated",
+        "name": tool.name,
+        "display_name": tool.display_name,
+        "description": tool.description,
+        "code_template": tool.code_template,
+        "parameters": tool.parameters,
+        "tags": tool.tags,
+        "source_query": tool.source_query,
+        "execution_count": tool.execution_count,
+        "revit_synced": revit_synced,
+    }
+
+
 @bridge_router.post("/tools/{name}/run")
 async def run_tool(name: str, req: RunToolRequest):
     """Execute a solidified tool with parameters."""
@@ -735,7 +861,7 @@ async def get_tool_choices(name: str):
                 levels = await executor.get_levels()
                 _logger.info(f"[choices] levels returned: {len(levels)} items, raw={levels[:2] if levels else 'EMPTY'}")
                 items = [
-                    {"label": f"{lv.get('Name', '?')} ({lv.get('ElevationMm', 0)}mm)",
+                    {"label": str(lv.get("Name", "?")),
                      "value": lv.get("Name", "")}
                     for lv in levels
                 ]
@@ -812,7 +938,7 @@ async def match_tool(req: ClassifyRequest):
 
     Returns matched tool info with parameter validation, or null if no match.
     """
-    tool = _tool_store.match_tool(req.query)
+    tool = _match_tool_from_intent_registry(req.query) or _tool_store.match_tool(req.query)
     if not tool:
         return {"matched": False}
     # Check if tool has usable parameters
@@ -1066,10 +1192,7 @@ async def _enrich_orch_questions(
             try:
                 levels = await executor.get_levels()
                 if levels:
-                    q["options"] = [
-                        f"{lv.get('Name', '?')} ({lv.get('ElevationMm', 0)}mm)"
-                        for lv in levels
-                    ]
+                    q["options"] = [str(lv.get("Name", "?")) for lv in levels]
                     q["values"] = [lv.get("Name", "") for lv in levels]
                     q["allow_custom"] = True
                     _orch_log.info(f"[enrich] slot={slot} → {len(levels)} levels from Revit")
