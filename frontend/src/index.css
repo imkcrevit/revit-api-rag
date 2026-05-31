@@ -215,6 +215,82 @@ button {
 .pipeline-log .done { color: var(--mid); }
 .pipeline-log .active { color: var(--accent); font-weight: 500; }
 
+.pipeline-tasks {
+  display: grid;
+  gap: 0;
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.pipeline-task {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--faint);
+}
+
+.pipeline-task:last-child {
+  border-bottom: 0;
+}
+
+.pipeline-task.active {
+  background: var(--bg2);
+  color: var(--accent);
+}
+
+.pipeline-task.done {
+  color: var(--mid);
+}
+
+.pipeline-task.error {
+  color: var(--accent);
+  background: rgba(217,119,87,0.06);
+}
+
+.pipeline-task.skipped {
+  color: var(--faint);
+}
+
+.pipeline-task-marker {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1;
+  margin-top: 1px;
+}
+
+.pipeline-task.active .pipeline-task-marker,
+.pipeline-task.done .pipeline-task-marker,
+.pipeline-task.error .pipeline-task-marker {
+  border-color: currentColor;
+}
+
+.pipeline-task-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: currentColor;
+}
+
+.pipeline-task-detail {
+  margin-top: 3px;
+  font-family: var(--serif);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--mid);
+}
+
 /* Thinking panel */
 .thinking-panel {
   border: 1px solid var(--line);

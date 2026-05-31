@@ -8,13 +8,57 @@ import { extractThinkingAndCode } from '../../utils/sse'
 import type { ClassifyIntentResponse, OrchestratorQuestion, OrchestrateResponse, ToolParam } from '../../types/api'
 import { getErrorMessage, isAbortError } from '../../utils/errors'
 import StepIndicator from '../shared/StepIndicator'
-import PipelineLog from '../shared/PipelineLog'
+import PipelineLog, { type PipelineTask } from '../shared/PipelineLog'
 import ThinkingPanel from '../shared/ThinkingPanel'
 import Accordion from '../shared/Accordion'
 import OrchestratorQuestions from '../bridge/OrchestratorQuestions'
 import ToolLibrary from '../bridge/ToolLibrary'
 
 const STEPS = ['Input', 'Select', 'Review Code', 'Execute', 'Solidify']
+
+const BRIDGE_PIPELINE_TEMPLATE: PipelineTask[] = [
+  { id: 'tool', label: 'Check saved tool library', status: 'pending' },
+  { id: 'classify', label: 'Classify request intent', status: 'pending' },
+  { id: 'analyze', label: 'Analyze missing model parameters', status: 'pending' },
+  { id: 'select', label: 'Confirm dynamic Revit choices', status: 'pending' },
+  { id: 'skills', label: 'Scan BIM standards and skills', status: 'pending' },
+  { id: 'rewrite', label: 'Rewrite query for retrieval', status: 'pending' },
+  { id: 'retrieve', label: 'Retrieve API docs and SDK examples', status: 'pending' },
+  { id: 'context', label: 'Assemble RAG context', status: 'pending' },
+  { id: 'prompt', label: 'Assemble guarded system prompt', status: 'pending' },
+  { id: 'generate', label: 'Stream LLM code generation', status: 'pending' },
+  { id: 'review', label: 'Extract code and run security review', status: 'pending' },
+]
+
+function createPipelineTasks(): PipelineTask[] {
+  return BRIDGE_PIPELINE_TEMPLATE.map(task => ({ ...task }))
+}
+
+function cleanStageMessage(message: string): string {
+  return message.replace(/\s+\(\d+(?:\.\d+)?s\)$/, '')
+}
+
+function explainStage(message: string): string {
+  const msg = cleanStageMessage(message)
+  if (msg.startsWith('LLM analyzing')) return 'Decode the request into intent, scope, required parameters, and dynamic Revit choices.'
+  if (msg.startsWith('Skills extraction')) return 'Check whether BIM standards or local skills should constrain the answer.'
+  if (msg.startsWith('No relevant') || msg.startsWith('Skills extracted')) return msg
+  if (msg.startsWith('Query Rewrite')) return 'Normalize the user request into search terms that match API docs and SDK examples.'
+  if (msg.startsWith('Embedding') || msg.startsWith('Vector Search') || msg.startsWith('Hydrating') || msg.startsWith('Retrieved')) return 'Ground the response in retrieved Revit API documentation and SDK code.'
+  if (msg.startsWith('Combining') || msg.startsWith('RAG context')) return 'Build the evidence packet that will be inserted into the code-generation prompt.'
+  if (msg.startsWith('Assembling') || msg.startsWith('System prompt')) return 'Combine execution rules, unit policy, selections, and retrieved evidence.'
+  if (msg.startsWith('LLM generating')) return 'Stream the model-visible generation notes first, then the C# method body.'
+  if (msg.startsWith('Extracting') || msg.startsWith('Security review') || msg.startsWith('Done')) return 'Separate code from the model response and check it before review.'
+  return msg
+}
+
+function buildStreamingThinking(messages: string[], generatedThinking = ''): string {
+  if (generatedThinking) return `**Thinking:**\n\n${generatedThinking}`
+  if (!messages.length) return ''
+  const current = cleanStageMessage(messages[messages.length - 1])
+  const recent = messages.slice(-5).map(msg => `- ${explainStage(msg)}`).join('\n')
+  return `**Current task**: ${current}\n\n**Visible analysis**\n${recent}`
+}
 
 /* --- Execution result renderer --- */
 function ExecResultDisplay({ result }: { result: { ok: boolean; data: unknown; error?: string } }) {
@@ -145,6 +189,7 @@ export default function BridgeTab() {
   const [step, setStep] = useState(1)
   const [query, setQuery] = useState('')
   const [pipelineLog, setPipelineLog] = useState<string[]>([])
+  const [pipelineTasks, setPipelineTasks] = useState<PipelineTask[]>([])
   const [elapsed, setElapsed] = useState('')
   const [thinking, setThinking] = useState('')
   const [code, setCode] = useState('')
@@ -196,6 +241,7 @@ export default function BridgeTab() {
   // --- Reset ---
   const reset = () => {
     setStep(1); setPipelineLog([]); setElapsed('')
+    setPipelineTasks([])
     setThinking(''); setCode(''); setSecurityStatus('')
     setRagContext(null); setExecResult(null); setSolidifyResult('')
     setSelections({}); setSelectOpen(false); setStatusMsg('')
@@ -203,6 +249,94 @@ export default function BridgeTab() {
     setOrchQuestions([]); setOrchAnswers({}); setOrchData(null)
     setMatchedTool('')
     setToolLibraryOpen(false)
+  }
+
+  const beginPipeline = () => setPipelineTasks(createPipelineTasks())
+
+  const updatePipelineTask = (
+    id: string,
+    status: PipelineTask['status'],
+    detail?: string,
+  ) => {
+    setPipelineTasks(prev => {
+      const base = prev.length ? prev : createPipelineTasks()
+      return base.map(task => {
+        if (task.id === id) return { ...task, status, detail: detail ?? task.detail }
+        if (status === 'active' && task.status === 'active') return { ...task, status: 'done' }
+        return task
+      })
+    })
+  }
+
+  const markTaskSkipped = (id: string, detail: string) => {
+    updatePipelineTask(id, 'skipped', detail)
+  }
+
+  const markPipelineError = (detail: string) => {
+    setPipelineTasks(prev => {
+      const base = prev.length ? prev : createPipelineTasks()
+      const activeIndex = base.findIndex(task => task.status === 'active')
+      const targetIndex = activeIndex >= 0 ? activeIndex : 0
+      return base.map((task, index) => index === targetIndex
+        ? { ...task, status: 'error', detail }
+        : task)
+    })
+  }
+
+  const updateTaskFromProgress = (message: string) => {
+    const msg = cleanStageMessage(message)
+    if (msg.startsWith('Skills extraction')) updatePipelineTask('skills', 'active', explainStage(msg))
+    else if (msg.startsWith('No relevant') || msg.startsWith('Skills extracted')) updatePipelineTask('skills', 'done', msg)
+    else if (msg.startsWith('Query Rewrite —')) updatePipelineTask('rewrite', 'active', explainStage(msg))
+    else if (msg.startsWith('Query Rewrite done')) updatePipelineTask('rewrite', 'done', msg)
+    else if (msg.startsWith('Embedding')) updatePipelineTask('retrieve', 'active', explainStage(msg))
+    else if (msg.startsWith('Vector Search') || msg.startsWith('Hydrating')) updatePipelineTask('retrieve', 'active', explainStage(msg))
+    else if (msg.startsWith('Retrieved')) updatePipelineTask('retrieve', 'done', msg)
+    else if (msg.startsWith('Combining') || msg.startsWith('RAG context')) updatePipelineTask(msg.startsWith('RAG context') ? 'context' : 'context', msg.startsWith('RAG context') ? 'done' : 'active', msg)
+    else if (msg.startsWith('Tool reference')) updatePipelineTask('context', 'done', msg)
+    else if (msg.startsWith('Assembling')) updatePipelineTask('prompt', 'active', explainStage(msg))
+    else if (msg.startsWith('System prompt')) updatePipelineTask('prompt', 'done', msg)
+    else if (msg.startsWith('LLM generating')) updatePipelineTask('generate', 'active', explainStage(msg))
+    else if (msg.startsWith('Extracting')) {
+      updatePipelineTask('generate', 'done', msg)
+      updatePipelineTask('review', 'active', explainStage(msg))
+    } else if (msg.startsWith('Security review')) updatePipelineTask('review', msg.startsWith('Security review done') ? 'done' : 'active', msg)
+    else if (msg.startsWith('Done')) updatePipelineTask('review', 'done', msg)
+  }
+
+  const runOrchestrateStream = async (input: string): Promise<OrchestrateResponse> => {
+    let result: OrchestrateResponse | null = null
+    updatePipelineTask('analyze', 'active', 'Decode request and prepare dynamic parameter questions.')
+
+    for await (const evt of sseStream('/api/v1/bridge/orchestrate-stream', { query: input })) {
+      if (evt.event === 'progress') {
+        const msg = JSON.parse(evt.data)
+        if (typeof msg === 'string' && msg.includes('complete')) {
+          updatePipelineTask('analyze', 'done', msg)
+        }
+      } else if (evt.event === 'thinking') {
+        const content = JSON.parse(evt.data)
+        if (typeof content === 'string') setThinking(content)
+      } else if (evt.event === 'done') {
+        result = JSON.parse(evt.data)
+      } else if (evt.event === 'error') {
+        const err = JSON.parse(evt.data)
+        const detail = err?.detail ? String(err.detail) : 'Intent analysis failed'
+        updatePipelineTask('analyze', 'error', detail)
+        throw new Error(detail)
+      }
+    }
+
+    if (!result) throw new Error('Intent analysis stream ended without a result')
+    const questions = result.questions || []
+    updatePipelineTask(
+      'analyze',
+      'done',
+      questions.length
+        ? `${questions.length} runtime parameter question${questions.length === 1 ? '' : 's'} prepared`
+        : 'No required runtime questions',
+    )
+    return result
   }
 
   // --- SSE Stream helper ---
@@ -234,6 +368,8 @@ export default function BridgeTab() {
             const msg = `${JSON.parse(evt.data)} (${el}s)`
             logs.push(msg)
             setPipelineLog([...logs])
+            updateTaskFromProgress(msg)
+            if (!finalThinking) setThinking(buildStreamingThinking(logs))
           } catch { /* skip */ }
         } else if (evt.event === 'token') {
           try {
@@ -247,10 +383,11 @@ export default function BridgeTab() {
             const { thinking: th, code: cd } = extractThinkingAndCode(fullBuf)
             finalThinking = th
             finalCode = cd
-            setThinking(th ? `**Thinking:**\n\n${th}` : '*Waiting for LLM response...*')
+            setThinking(buildStreamingThinking(logs, th) || '*Waiting for LLM response...*')
             setCode(cd)
 
             const codeLines = cd ? cd.split('\n').length : 0
+            updatePipelineTask('generate', 'active', `${codeLines} lines, ${tokenCount} tokens streamed`)
             const genLog = logs.filter(l => !l.startsWith('LLM generating'))
             genLog.push(`LLM generating... ${codeLines} lines, ${tokenCount} tokens (${el}s)`)
             setPipelineLog([...genLog])
@@ -269,6 +406,7 @@ export default function BridgeTab() {
       if (!isAbortError(e)) {
         logs.push(`Error: ${getErrorMessage(e)}`)
         setPipelineLog([...logs])
+        markPipelineError(getErrorMessage(e))
       }
     }
 
@@ -278,7 +416,9 @@ export default function BridgeTab() {
     finalLogs.push(`LLM generation complete -- ${codeLines} lines (${el}s)`)
     finalLogs.push(`Code extracted & security reviewed`)
     setPipelineLog(finalLogs)
-    setThinking(finalThinking ? `**Thinking:**\n\n${finalThinking}` : '')
+    updatePipelineTask('generate', 'done', `${codeLines} lines generated`)
+    updatePipelineTask('review', 'done', securityStatus || 'Code extracted and reviewed')
+    setThinking(finalThinking ? `**Thinking:**\n\n${finalThinking}` : buildStreamingThinking(finalLogs))
     setStep(3)
   }
 
@@ -288,18 +428,21 @@ export default function BridgeTab() {
     setToolLibraryOpen(false)
     setGenerating(true)
     startTimer()
+    beginPipeline()
+    updatePipelineTask('tool', 'skipped', 'Saved tool was skipped; generating fresh code.')
     setThinking('')
     setPipelineLog(['Skipping saved tool, generating new code from RAG...'])
 
     try {
       // Step 1: Classify intent
+      updatePipelineTask('classify', 'active', 'Classifying interaction type and candidate commands.')
       setPipelineLog(['Classifying intent...'])
       const intent = await bridgeApi.classifyIntent(query)
       let itype = intent.interaction_type
+      updatePipelineTask('classify', 'done', `Interaction type: ${itype}`)
 
       // Step 2: Orchestrate
-      setPipelineLog(prev => [...prev, 'LLM analyzing...'])
-      const orch = await bridgeApi.orchestrate(query)
+      const orch = await runOrchestrateStream(query)
       setOrchData(orch)
       const questions = orch.questions || []
       setOrchQuestions(questions)
@@ -309,11 +452,13 @@ export default function BridgeTab() {
       }
 
       if (itype === 'direct') {
+        markTaskSkipped('select', 'No dynamic user selection required.')
         setStep(2)
         await runStream(query, {})
       } else {
         setStep(2)
         setSelectOpen(true)
+        updatePipelineTask('select', 'active', `${questions.length} dynamic parameter question${questions.length === 1 ? '' : 's'} waiting for confirmation.`)
 
         const queries = intent.queries || []
         const cats = extractCategoryList(queries)
@@ -329,6 +474,7 @@ export default function BridgeTab() {
       }
     } catch (e: unknown) {
       setPipelineLog(prev => [...prev, `Error: ${getErrorMessage(e)}`])
+      markPipelineError(getErrorMessage(e))
     } finally {
       stopTimer()
       setGenerating(false)
@@ -341,12 +487,17 @@ export default function BridgeTab() {
     reset()
     setGenerating(true)
     startTimer()
+    beginPipeline()
 
     try {
       // Step 0: Check tool match
+      updatePipelineTask('tool', 'active', 'Searching solidified tools for a reusable workflow.')
       setPipelineLog(['Checking tool library...'])
       const matched = await bridgeApi.matchTool(query)
       if (matched.matched && matched.name) {
+        updatePipelineTask('tool', 'done', `Matched saved tool: ${matched.name}`)
+        ;['classify', 'analyze', 'select', 'skills', 'rewrite', 'retrieve', 'context', 'prompt', 'generate', 'review']
+          .forEach(id => markTaskSkipped(id, 'Saved tool path does not require this task.'))
         setMatchedTool(matched.name)
         setThinking(
           `**Tool application**: \`${matched.name}\` - ${matched.display_name}\n\n` +
@@ -368,15 +519,17 @@ export default function BridgeTab() {
         }, 100)
         return
       }
+      updatePipelineTask('tool', 'done', 'No saved tool matched; continuing to generation.')
 
       // Step 1: Classify intent
+      updatePipelineTask('classify', 'active', 'Classifying interaction type and candidate commands.')
       setPipelineLog(['Classifying intent...'])
       const intent = await bridgeApi.classifyIntent(query)
       let itype = intent.interaction_type
+      updatePipelineTask('classify', 'done', `Interaction type: ${itype}`)
 
       // Step 2: Orchestrate
-      setPipelineLog(prev => [...prev, 'LLM analyzing...'])
-      const orch = await bridgeApi.orchestrate(query)
+      const orch = await runOrchestrateStream(query)
       setOrchData(orch)
       const questions = orch.questions || []
       setOrchQuestions(questions)
@@ -387,12 +540,14 @@ export default function BridgeTab() {
       }
 
       if (itype === 'direct') {
+        markTaskSkipped('select', 'No dynamic user selection required.')
         setStep(2)
         await runStream(query, {})
       } else {
         // --- Interactive: all parameters come from orchestrator questions ---
         setStep(2)
         setSelectOpen(true)
+        updatePipelineTask('select', 'active', `${questions.length} dynamic parameter question${questions.length === 1 ? '' : 's'} waiting for confirmation.`)
 
         // Intent meta for code generation context
         const queries = intent.queries || []
@@ -411,6 +566,7 @@ export default function BridgeTab() {
       }
     } catch (e: unknown) {
       setPipelineLog(prev => [...prev, `Error: ${getErrorMessage(e)}`])
+      markPipelineError(getErrorMessage(e))
     } finally {
       stopTimer()
       setGenerating(false)
@@ -422,6 +578,7 @@ export default function BridgeTab() {
     setGenerating(true)
     startTimer()
     try {
+      updatePipelineTask('select', 'done', 'User selections confirmed for code generation.')
       const sels: Record<string, unknown> = {}
 
       // All selections come from orchestrator answers
@@ -621,7 +778,7 @@ export default function BridgeTab() {
       <ThinkingPanel content={thinking} title={matchedTool ? 'Tool Application' : 'Process'} />
 
       {/* Pipeline log */}
-      <PipelineLog messages={pipelineLog} />
+      <PipelineLog messages={pipelineLog} tasks={pipelineTasks} />
 
       {/* Step 2: Selections — fully dynamic from orchestrator */}
       <Accordion title="Step 2: Select Options" open={selectOpen} onToggle={setSelectOpen}>

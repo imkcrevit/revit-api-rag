@@ -54,6 +54,78 @@ def _get_bridge_config() -> dict:
         return {}
 
 
+def _sse(event: str, data: Any) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def _iterate_sync_stream(factory):
+    """Run a blocking token generator in a worker thread and yield tokens async."""
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def _put(kind: str, payload: Any = None):
+        loop.call_soon_threadsafe(queue.put_nowait, (kind, payload))
+
+    def _producer():
+        try:
+            for item in factory():
+                _put("item", item)
+        except BaseException as exc:  # propagate to the SSE generator
+            _put("error", exc)
+        finally:
+            _put("done")
+
+    worker = asyncio.create_task(asyncio.to_thread(_producer))
+    try:
+        while True:
+            kind, payload = await queue.get()
+            if kind == "item":
+                yield payload
+            elif kind == "error":
+                raise payload
+            else:
+                break
+    finally:
+        if not worker.done():
+            worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
+
+
+def _orchestrate_thinking_markdown(
+    query: str,
+    *,
+    elapsed: float | None = None,
+    result: dict | None = None,
+) -> str:
+    """Visible, user-facing analysis trace for the Intent Bridge stage."""
+    elapsed_text = f" ({elapsed:.1f}s)" if elapsed is not None else ""
+    lines = [
+        f"**Current stage**: LLM analyzing request{elapsed_text}",
+        "",
+        "**Visible analysis**",
+        "- Decode the action, target Revit category, quantity, scope, and geometry intent.",
+        "- Keep model-specific values as runtime questions instead of guessing defaults.",
+        "- Ground the intent and required parameters against Revit API docs, skills, and tool rules.",
+    ]
+    if result:
+        questions = result.get("questions") or []
+        action_plan = result.get("action_plan") or []
+        intent = result.get("intent") or {}
+        if isinstance(intent, dict) and intent.get("name"):
+            lines.append(f"- Intent selected: `{intent.get('name')}`.")
+        if action_plan:
+            lines.append(f"- Composite plan prepared with {len(action_plan)} step(s).")
+        if questions:
+            slots = ", ".join(str(q.get("slot", "")) for q in questions if isinstance(q, dict))
+            lines.append(f"- Runtime questions prepared: {slots}.")
+        elif result.get("summary"):
+            lines.append(f"- No blocking questions remain: {result.get('summary')}.")
+    return "\n".join(lines)
+
+
 async def _get_revit_client():
     """Get Revit client — WebSocket slot if available, else TCP fallback."""
     slot_id = _request_slot_id.get(None)
@@ -433,37 +505,49 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
     _req_ua = request.headers.get("user-agent", "")
 
     async def event_stream():
-        def _p(msg: str):
-            return f"event: progress\ndata: {json.dumps(msg)}\n\n"
-
         # ── Phase 0: Skills Extraction (Gemini Flash) ──
-        yield _p("Skills extraction — scanning BIM standards with Gemini Flash...")
-        skills_ctx = gen._build_skills_context(req.query)
+        yield _sse("progress", "Skills extraction — scanning BIM standards with Gemini Flash...")
+        await asyncio.sleep(0)
+        skills_ctx = await asyncio.to_thread(gen._build_skills_context, req.query)
         if skills_ctx:
-            yield _p(f"Skills extracted — {len(skills_ctx)} chars of relevant BIM standards")
+            yield _sse("progress", f"Skills extracted — {len(skills_ctx)} chars of relevant BIM standards")
         else:
-            yield _p("No relevant BIM standards found")
+            yield _sse("progress", "No relevant BIM standards found")
+        await asyncio.sleep(0)
 
         # ── Phase 1: RAG Retrieval ──
-        yield _p("Query Rewrite — optimizing search keywords...")
+        yield _sse("progress", "Query Rewrite — optimizing search keywords...")
+        await asyncio.sleep(0)
 
-        search_query = retriever.rewrite_query(req.query)
-        yield _p(f"Query Rewrite done → \"{search_query[:60]}\"")
+        search_query = await asyncio.to_thread(retriever.rewrite_query, req.query)
+        yield _sse("progress", f"Query Rewrite done → \"{search_query[:60]}\"")
+        await asyncio.sleep(0)
 
-        yield _p("Embedding — vectorizing query...")
-        query_embedding = retriever._embedder.embed_query(search_query)
+        yield _sse("progress", "Embedding — vectorizing query...")
+        await asyncio.sleep(0)
+        query_embedding = await asyncio.to_thread(retriever._embedder.embed_query, search_query)
 
-        yield _p("Vector Search — querying API docs & SDK examples...")
-        api_raw = retriever._api_collection.query(
-            query_embeddings=[query_embedding], n_results=req.api_top_k,
+        yield _sse("progress", "Vector Search — querying API docs & SDK examples...")
+        await asyncio.sleep(0)
+        api_raw, code_raw = await asyncio.gather(
+            asyncio.to_thread(
+                retriever._api_collection.query,
+                query_embeddings=[query_embedding],
+                n_results=req.api_top_k,
+            ),
+            asyncio.to_thread(
+                retriever._code_collection.query,
+                query_embeddings=[query_embedding],
+                n_results=req.code_top_k,
+            ),
         )
-        code_raw = retriever._code_collection.query(
-            query_embeddings=[query_embedding], n_results=req.code_top_k,
-        )
 
-        yield _p("Hydrating — fetching full records from database...")
-        api_items = retriever._hydrate_api(api_raw)
-        sdk_items = retriever._hydrate_sdk(code_raw)
+        yield _sse("progress", "Hydrating — fetching full records from database...")
+        await asyncio.sleep(0)
+        api_items, sdk_items = await asyncio.gather(
+            asyncio.to_thread(retriever._hydrate_api, api_raw),
+            asyncio.to_thread(retriever._hydrate_sdk, code_raw),
+        )
 
         from pipeline.retriever import SearchResults
         results = SearchResults(
@@ -471,15 +555,19 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
             api_items=api_items, sdk_items=sdk_items,
         )
 
-        yield _p(f"Retrieved {len(api_items)} API docs + {len(sdk_items)} SDK examples")
-        yield f"event: rag\ndata: {json.dumps(f'Found {len(api_items)} API + {len(sdk_items)} SDK')}\n\n"
+        yield _sse("progress", f"Retrieved {len(api_items)} API docs + {len(sdk_items)} SDK examples")
+        await asyncio.sleep(0)
+        yield _sse("rag", f"Found {len(api_items)} API + {len(sdk_items)} SDK")
+        await asyncio.sleep(0)
 
         # ── Phase 2: Context Assembly ──
-        yield _p("Combining API docs + SDK code into RAG context...")
-        ctx = retriever.build_context(results)
+        yield _sse("progress", "Combining API docs + SDK code into RAG context...")
+        await asyncio.sleep(0)
+        ctx = await asyncio.to_thread(retriever.build_context, results)
         api_ctx_len = len(ctx.get("api_context", ""))
         code_ctx_len = len(ctx.get("code_context", ""))
-        yield _p(f"RAG context ready — API: {api_ctx_len} chars, SDK: {code_ctx_len} chars")
+        yield _sse("progress", f"RAG context ready — API: {api_ctx_len} chars, SDK: {code_ctx_len} chars")
+        await asyncio.sleep(0)
 
         # ── Phase 2.5: Tool context (reference from matched tool) ──
         tool_ref_ctx = ""
@@ -496,9 +584,11 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
                 tool_ref_ctx += "Tool parameters:\n"
                 for p in tc["parameters"]:
                     tool_ref_ctx += f"  - {p.get('name')}: {p.get('type', 'string')} — {p.get('description', '')}\n"
-            yield _p(f"Tool reference loaded — {tc.get('name', '?')} ({len(tool_ref_ctx)} chars)")
+            yield _sse("progress", f"Tool reference loaded — {tc.get('name', '?')} ({len(tool_ref_ctx)} chars)")
+            await asyncio.sleep(0)
 
-        yield _p("Assembling system prompt (rules + context + unit config + skills)...")
+        yield _sse("progress", "Assembling system prompt (rules + context + unit config + skills)...")
+        await asyncio.sleep(0)
         from mcp_bridge.code_generator import SYSTEM_EXECUTE, CodeGenerator as CG
         selections_ctx = CG._build_selections_context(selections) if selections else ""
         system = SYSTEM_EXECUTE.format(
@@ -509,24 +599,33 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
             unit_context=CG.UNIT_CONTEXTS.get(gen.user_unit, CG.UNIT_CONTEXTS["mm"]),
             skills_context=skills_ctx,
         )
-        yield _p(f"System prompt assembled — {len(system)} chars total")
+        yield _sse("progress", f"System prompt assembled — {len(system)} chars total")
+        await asyncio.sleep(0)
 
         # ── Phase 3: LLM Generation (streaming) ──
-        yield _p("LLM generating C# code (streaming)...")
+        yield _sse("progress", "LLM generating C# code (streaming)...")
+        await asyncio.sleep(0)
         accumulated = ""
-        for token in llm.generate_stream(req.query, system_prompt=system):
+        async for token in _iterate_sync_stream(
+            lambda: llm.generate_stream(req.query, system_prompt=system)
+        ):
             accumulated += token
-            yield f"event: token\ndata: {json.dumps(token)}\n\n"
+            yield _sse("token", token)
+            await asyncio.sleep(0)
 
         # ── Phase 4: Post-processing ──
-        yield _p("Extracting code from LLM response...")
-        code = gen._extract_code(accumulated)
+        yield _sse("progress", "Extracting code from LLM response...")
+        await asyncio.sleep(0)
+        code = await asyncio.to_thread(gen._extract_code, accumulated)
 
-        yield _p("Security review — scanning for unsafe patterns...")
-        safe, warnings = sandbox.review(code)
-        yield _p(f"Security review done — {'Safe' if safe else 'WARNING: ' + '; '.join(warnings)}")
+        yield _sse("progress", "Security review — scanning for unsafe patterns...")
+        await asyncio.sleep(0)
+        safe, warnings = await asyncio.to_thread(sandbox.review, code)
+        yield _sse("progress", f"Security review done — {'Safe' if safe else 'WARNING: ' + '; '.join(warnings)}")
+        await asyncio.sleep(0)
 
-        yield _p("Done — code ready for review")
+        yield _sse("progress", "Done — code ready for review")
+        await asyncio.sleep(0)
         done_data = {
             "code": code,
             "rag_context": {
@@ -538,7 +637,8 @@ async def generate_code_stream(req: GenerateWithSelectionsRequest, request: Requ
             "safe": safe,
             "warnings": warnings,
         }
-        yield f"event: done\ndata: {json.dumps(done_data)}\n\n"
+        yield _sse("done", done_data)
+        await asyncio.sleep(0)
 
         # Log the interaction
         get_log_store().log(
@@ -1346,6 +1446,41 @@ async def orchestrate(req: OrchestrateRequest):
     finally:
         if entry.lock.locked():
             entry.lock.release()
+
+
+@bridge_router.post("/orchestrate-stream")
+async def orchestrate_stream(req: OrchestrateRequest):
+    """SSE wrapper for Intent Bridge analysis with visible progress updates."""
+
+    async def event_stream():
+        start = time.monotonic()
+        yield _sse("progress", "LLM analyzing request...")
+        yield _sse("thinking", _orchestrate_thinking_markdown(req.query, elapsed=0.0))
+        await asyncio.sleep(0)
+
+        task = asyncio.create_task(orchestrate(req))
+        try:
+            while not task.done():
+                await asyncio.sleep(1.5)
+                if task.done():
+                    break
+                elapsed = time.monotonic() - start
+                yield _sse("thinking", _orchestrate_thinking_markdown(req.query, elapsed=elapsed))
+                await asyncio.sleep(0)
+
+            result = await task
+            elapsed = time.monotonic() - start
+            yield _sse("thinking", _orchestrate_thinking_markdown(req.query, elapsed=elapsed, result=result))
+            yield _sse("progress", "LLM analysis complete")
+            yield _sse("done", result)
+            await asyncio.sleep(0)
+        except HTTPException as exc:
+            yield _sse("error", {"status": exc.status_code, "detail": exc.detail})
+        except Exception as exc:
+            _orch_log.error("[orchestrate-stream] failed: %s", exc)
+            yield _sse("error", {"status": 500, "detail": str(exc)})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @bridge_router.post("/query-revit")
