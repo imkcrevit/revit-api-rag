@@ -75,7 +75,7 @@ export default function ChatPanel({ endpoint, placeholder, showFullOption = fals
             <div
               className="max-w-[80%] px-4 py-2"
               style={{
-                borderRadius: 2,
+                borderRadius: 'var(--radius-sm)',
                 fontFamily: m.role === 'user' ? 'var(--mono)' : 'var(--serif)',
                 fontSize: m.role === 'user' ? 13 : 14,
                 background: m.role === 'user' ? 'var(--accent)' : 'var(--bg2)',

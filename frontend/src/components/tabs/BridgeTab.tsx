@@ -64,8 +64,8 @@ function buildStreamingThinking(messages: string[], generatedThinking = ''): str
 function ExecResultDisplay({ result }: { result: { ok: boolean; data: unknown; error?: string } }) {
   if (!result.ok) {
     return (
-      <div style={{ marginTop: 8, padding: 12, background: 'rgba(217,119,87,0.08)', border: '1px solid var(--accent)', borderRadius: 2 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--accent)' }}>
+      <div style={{ marginTop: 8, padding: 12, background: 'rgba(179, 59, 46, 0.1)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)' }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--danger)' }}>
           Failed: {result.error}
         </span>
       </div>
@@ -81,7 +81,7 @@ function ExecResultDisplay({ result }: { result: { ok: boolean; data: unknown; e
   if (typeof data === 'object' && !Array.isArray(data)) {
     const entries = Object.entries(data as Record<string, unknown>)
     return (
-      <div style={{ marginTop: 8, border: '1px solid var(--line)', borderRadius: 2, overflow: 'hidden' }}>
+      <div style={{ marginTop: 8, border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 12 }}>
           <tbody>
             {entries.map(([key, val]) => (
@@ -102,7 +102,7 @@ function ExecResultDisplay({ result }: { result: { ok: boolean; data: unknown; e
 
   // Fallback: raw JSON
   return (
-    <pre style={{ marginTop: 8, background: 'var(--bg2)', padding: 12, borderRadius: 2, fontFamily: 'var(--mono)', fontSize: 12, whiteSpace: 'pre-wrap', border: '1px solid var(--line)' }}>
+    <pre style={{ marginTop: 8, background: 'var(--bg2)', padding: 12, borderRadius: 'var(--radius-sm)', fontFamily: 'var(--mono)', fontSize: 12, whiteSpace: 'pre-wrap', border: '1px solid var(--line)' }}>
       {JSON.stringify(data, null, 2)}
     </pre>
   )
@@ -706,7 +706,7 @@ export default function BridgeTab() {
         <div className="flex-1 px-3 py-2" style={{
           background: 'var(--bg2)',
           border: '1px solid var(--line)',
-          borderRadius: 2,
+          borderRadius: 'var(--radius-sm)',
           fontFamily: 'var(--mono)',
           fontSize: 12,
           color: 'var(--mid)',
@@ -719,7 +719,7 @@ export default function BridgeTab() {
           style={{
             fontFamily: 'var(--mono)', fontSize: 11, padding: '6px 8px',
             border: '1px solid var(--line)', background: 'var(--bg)',
-            borderRadius: 2, color: 'var(--dark)', cursor: 'pointer', minWidth: 110,
+            borderRadius: 'var(--radius-sm)', color: 'var(--dark)', cursor: 'pointer', minWidth: 110,
           }}
         >
           <option value="">TCP Direct</option>
@@ -835,7 +835,7 @@ export default function BridgeTab() {
             fontSize: 12,
             background: 'var(--bg2)',
             padding: '8px 12px',
-            borderRadius: 2,
+            borderRadius: 'var(--radius-sm)',
             marginBottom: 12,
             whiteSpace: 'pre-line',
             color: 'var(--mid)',
@@ -873,7 +873,7 @@ export default function BridgeTab() {
             background: 'var(--bg2)',
             color: 'var(--dark)',
             border: '1px solid var(--line)',
-            borderRadius: 2,
+            borderRadius: 'var(--radius-sm)',
             resize: 'vertical',
           }}
           value={code}
@@ -925,7 +925,7 @@ export default function BridgeTab() {
             fontSize: 12,
             background: 'var(--bg2)',
             padding: 12,
-            borderRadius: 2,
+            borderRadius: 'var(--radius-sm)',
             overflow: 'auto',
           }}>{JSON.stringify(ragContext, null, 2)}</pre>
         </Accordion>

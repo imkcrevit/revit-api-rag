@@ -351,7 +351,7 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
               background: 'var(--bg2)',
               color: 'var(--dark)',
               border: '1px solid var(--line)',
-              borderRadius: 2,
+              borderRadius: 'var(--radius-sm)',
               resize: 'vertical',
             }}
             readOnly={!editMode}
@@ -369,7 +369,7 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
                   background: 'var(--panel)',
                   color: 'var(--dark)',
                   border: '1px solid var(--line)',
-                  borderRadius: 2,
+                  borderRadius: 'var(--radius-sm)',
                   resize: 'vertical',
                 }}
                 value={editParamsText}
@@ -421,7 +421,7 @@ export default function ToolLibrary({ autoSelectTool, onSkipToGenerate }: Props)
           background: 'var(--bg2)',
           border: '1px solid var(--line)',
           padding: 12,
-          borderRadius: 2,
+          borderRadius: 'var(--radius-sm)',
           fontFamily: 'var(--mono)',
           fontSize: 12,
           whiteSpace: 'pre-wrap',

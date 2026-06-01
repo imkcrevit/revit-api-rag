@@ -116,7 +116,7 @@ export default function ApiExplorerTab() {
           whiteSpace: 'pre-line',
           background: 'var(--bg2)',
           padding: '8px 12px',
-          borderRadius: 2,
+          borderRadius: 'var(--radius-sm)',
         }}>{status}</div>
       )}
 
@@ -182,7 +182,7 @@ export default function ApiExplorerTab() {
                   <pre style={{
                     background: 'var(--bg2)',
                     padding: 8,
-                    borderRadius: 2,
+                    borderRadius: 'var(--radius-sm)',
                     fontFamily: 'var(--mono)',
                     fontSize: 12,
                     overflowX: 'auto',
@@ -205,7 +205,7 @@ export default function ApiExplorerTab() {
           <pre style={{
             background: 'var(--bg2)',
             padding: 12,
-            borderRadius: 2,
+            borderRadius: 'var(--radius-sm)',
             fontFamily: 'var(--mono)',
             fontSize: 12,
             overflowX: 'auto',
@@ -230,7 +230,7 @@ export default function ApiExplorerTab() {
           background: 'var(--bg2)',
           color: 'var(--dark)',
           padding: 16,
-          borderRadius: 2,
+          borderRadius: 'var(--radius-sm)',
           fontFamily: 'var(--mono)',
           fontSize: 12,
           overflowX: 'auto',

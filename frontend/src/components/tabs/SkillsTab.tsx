@@ -37,11 +37,11 @@ const MODULE_LABELS: Record<string, string> = {
 
 const MODULE_COLORS: Record<string, string> = {
   global: '#6b6860',
-  code_gen: '#3498db',
-  prompt_bridge: '#9b59b6',
-  text_studio: '#27ae60',
-  mcp_bridge: '#e67e22',
-  intent_bridge: '#2980b9',
+  code_gen: '#164241',
+  prompt_bridge: '#873a24',
+  text_studio: '#2f6f55',
+  mcp_bridge: '#9a5a16',
+  intent_bridge: '#244b6a',
 }
 
 /* ── Source badge labels & colors ── */
@@ -52,9 +52,9 @@ const SOURCE_LABELS: Record<string, string> = {
 }
 
 const SOURCE_COLORS: Record<string, string> = {
-  intent_bridge: '#2c3e50',
-  prompt_bridge: '#8e44ad',
-  custom: '#27ae60',
+  intent_bridge: '#164241',
+  prompt_bridge: '#873a24',
+  custom: '#2f6f55',
 }
 
 const LAYER_LABELS: Record<string, string> = {
@@ -176,7 +176,7 @@ export default function SkillsTab() {
               fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
               letterSpacing: '.06em', textTransform: 'uppercase',
               padding: '8px 18px', border: '1px solid var(--line)',
-              borderRadius: '2px 0 0 2px', cursor: 'pointer',
+              borderRadius: 'var(--radius-sm) 0 0 var(--radius-sm)', cursor: 'pointer',
               background: activeView === 'skills' ? 'var(--accent)' : 'var(--bg)',
               color: activeView === 'skills' ? '#fff' : 'var(--mid)',
               transition: 'all .15s',
@@ -190,7 +190,7 @@ export default function SkillsTab() {
               fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
               letterSpacing: '.06em', textTransform: 'uppercase',
               padding: '8px 18px', border: '1px solid var(--line)', borderLeft: 'none',
-              borderRadius: '0 2px 2px 0', cursor: 'pointer',
+              borderRadius: '0 var(--radius-sm) var(--radius-sm) 0', cursor: 'pointer',
               background: activeView === 'tools' ? 'var(--accent)' : 'var(--bg)',
               color: activeView === 'tools' ? '#fff' : 'var(--mid)',
               transition: 'all .15s',
@@ -398,7 +398,7 @@ function SkillCard({ skill, onToggle, onView }: {
         padding: '16px 18px',
         background: skill.enabled ? 'var(--bg)' : 'var(--bg2)',
         border: `1px solid ${skill.enabled ? 'var(--subtle)' : 'var(--line)'}`,
-        borderRadius: 2,
+        borderRadius: 'var(--radius-sm)',
         cursor: 'pointer',
         transition: 'all .15s',
         opacity: skill.enabled ? 1 : 0.6,
@@ -429,7 +429,7 @@ function SkillCard({ skill, onToggle, onView }: {
         <span style={{
           position: 'absolute', top: 14, right: 14,
           fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--faint)',
-          padding: '2px 6px', border: '1px solid var(--line)', borderRadius: 2,
+          padding: '2px 6px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)',
         }}>
           BUILT-IN
         </span>
@@ -445,21 +445,21 @@ function SkillCard({ skill, onToggle, onView }: {
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{
-          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 8px', borderRadius: 2,
+          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 8px', borderRadius: 'var(--radius-sm)',
           background: srcColor + '12', color: srcColor, textTransform: 'uppercase', fontWeight: 600, letterSpacing: '.04em',
         }}>
           {SOURCE_LABELS[skill.source || 'custom'] || skill.source}
         </span>
         {skill.layer && (
           <span style={{
-            fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 7px', borderRadius: 2,
+            fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 7px', borderRadius: 'var(--radius-sm)',
             background: 'var(--line)', color: 'var(--mid)', textTransform: 'uppercase', fontWeight: 500, letterSpacing: '.03em',
           }}>
             {LAYER_LABELS[skill.layer] || skill.layer}
           </span>
         )}
         <span style={{
-          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 8px', borderRadius: 2,
+          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 8px', borderRadius: 'var(--radius-sm)',
           background: modColor + '15', color: modColor, textTransform: 'uppercase', fontWeight: 600, letterSpacing: '.04em',
         }}>
           {MODULE_LABELS[skill.module] || skill.module}
@@ -488,7 +488,7 @@ function ToolCard({ tool, onView, onDelete }: {
         padding: '16px 18px',
         background: 'var(--bg)',
         border: '1px solid var(--subtle)',
-        borderRadius: 2,
+        borderRadius: 'var(--radius-sm)',
         cursor: 'pointer',
         transition: 'all .15s',
         position: 'relative',
@@ -502,11 +502,11 @@ function ToolCard({ tool, onView, onDelete }: {
         style={{
           position: 'absolute', top: 12, right: 14,
           fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 8px',
-          border: '1px solid rgba(231,76,60,.2)', borderRadius: 2,
-          background: 'transparent', color: '#c0392b', cursor: 'pointer',
+          border: '1px solid rgba(179, 59, 46, 0.32)', borderRadius: 'var(--radius-sm)',
+          background: 'transparent', color: 'var(--danger)', cursor: 'pointer',
           transition: 'all .15s',
         }}
-        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(231,76,60,.08)' }}
+        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(179, 59, 46, 0.1)' }}
         onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
       >
         DELETE
@@ -522,8 +522,8 @@ function ToolCard({ tool, onView, onDelete }: {
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{
-          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 8px', borderRadius: 2,
-          background: '#e67e2215', color: '#e67e22', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '.04em',
+          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 8px', borderRadius: 'var(--radius-sm)',
+          background: 'rgba(154, 90, 22, 0.12)', color: 'var(--warning)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '.04em',
         }}>
           SOLIDIFIED
         </span>
@@ -567,8 +567,8 @@ function SkillViewModal({ skill, onClose, onDelete }: {
           <div style={{ display: 'flex', gap: 8 }}>
             {!isBuiltin && (
               <button onClick={() => onDelete(skill.id)} style={{
-                fontFamily: 'var(--mono)', fontSize: 10, padding: '4px 10px', border: '1px solid rgba(231,76,60,.3)',
-                background: 'transparent', color: '#e74c3c', cursor: 'pointer', transition: 'all .15s',
+                fontFamily: 'var(--mono)', fontSize: 10, padding: '4px 10px', border: '1px solid rgba(179, 59, 46, 0.34)',
+                background: 'transparent', color: 'var(--danger)', cursor: 'pointer', transition: 'all .15s',
               }}>Delete</button>
             )}
             <button onClick={onClose} style={{
@@ -591,7 +591,7 @@ function SkillViewModal({ skill, onClose, onDelete }: {
         )}
 
         <div style={{
-          background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: 2,
+          background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)',
           padding: '16px 20px', maxHeight: 500, overflow: 'auto',
           fontFamily: 'var(--serif)', fontSize: 14, lineHeight: 1.7, color: 'var(--dark)',
         }}>
@@ -623,8 +623,8 @@ function ToolViewModal({ tool, onClose, onDelete }: {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onDelete(tool.name)} style={{
-              fontFamily: 'var(--mono)', fontSize: 10, padding: '4px 10px', border: '1px solid rgba(231,76,60,.3)',
-              background: 'transparent', color: '#e74c3c', cursor: 'pointer', transition: 'all .15s',
+              fontFamily: 'var(--mono)', fontSize: 10, padding: '4px 10px', border: '1px solid rgba(179, 59, 46, 0.34)',
+              background: 'transparent', color: 'var(--danger)', cursor: 'pointer', transition: 'all .15s',
             }}>Delete</button>
             <button onClick={onClose} style={{
               fontFamily: 'var(--mono)', fontSize: 10, padding: '4px 10px', border: '1px solid var(--subtle)',
@@ -651,7 +651,7 @@ function ToolViewModal({ tool, onClose, onDelete }: {
             <h4 style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--faint)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
               Parameters
             </h4>
-            <div style={{ border: '1px solid var(--line)', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg2)' }}>
@@ -683,7 +683,7 @@ function ToolViewModal({ tool, onClose, onDelete }: {
               Code Template
             </h4>
             <pre style={{
-              background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: 2,
+              background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)',
               padding: '16px 20px', maxHeight: 400, overflow: 'auto',
               fontFamily: 'var(--mono)', fontSize: 12, lineHeight: 1.6, color: 'var(--dark)',
               whiteSpace: 'pre-wrap',
@@ -837,7 +837,7 @@ function SkillImportModal({ onClose, onImported }: { onClose: () => void; onImpo
             </div>
 
             {error && (
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#c0392b', marginBottom: 12, padding: '8px 12px', background: 'rgba(231,76,60,.06)', border: '1px solid rgba(231,76,60,.15)', borderRadius: 2 }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--danger)', marginBottom: 12, padding: '8px 12px', background: 'rgba(179, 59, 46, 0.1)', border: '1px solid rgba(179, 59, 46, 0.22)', borderRadius: 'var(--radius-sm)' }}>
                 {error}
               </div>
             )}
@@ -852,7 +852,7 @@ function SkillImportModal({ onClose, onImported }: { onClose: () => void; onImpo
         ) : (
           <>
             <div style={{
-              padding: 16, background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: 2, marginBottom: 16,
+              padding: 16, background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', marginBottom: 16,
             }}>
               <div style={{ fontFamily: 'var(--display)', fontSize: 14, marginBottom: 4 }}>{result.name}</div>
               <div style={{ fontFamily: 'var(--serif)', fontSize: 13, color: 'var(--mid)', marginBottom: 8 }}>
@@ -880,7 +880,7 @@ const overlayStyle: React.CSSProperties = {
 }
 
 const modalStyle: React.CSSProperties = {
-  background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 2,
+  background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)',
   padding: '24px 28px', width: '100%', maxHeight: '85vh', overflow: 'auto',
   boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
 }

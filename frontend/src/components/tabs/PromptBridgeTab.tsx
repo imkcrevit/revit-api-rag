@@ -50,7 +50,7 @@ const cardBase: React.CSSProperties = {
   padding: '14px 14px 10px',
   background: 'var(--bg)',
   border: '1px solid var(--subtle)',
-  borderRadius: 2,
+  borderRadius: 'var(--radius-sm)',
   textAlign: 'left',
   transition: 'all 0.2s',
   color: 'var(--dark)',
@@ -64,7 +64,7 @@ const copyBtnStyle: React.CSSProperties = {
   padding: '3px 10px',
   background: 'var(--accent)',
   border: 'none',
-  borderRadius: 2,
+  borderRadius: 'var(--radius-sm)',
   cursor: 'pointer',
   color: '#fff',
   letterSpacing: '0.05em',
@@ -175,7 +175,7 @@ export default function PromptBridgeTab() {
           if (!isBlock) {
             return <code style={{
               fontFamily: 'var(--mono)', fontSize: 12,
-              background: 'var(--bg3)', padding: '1px 4px', borderRadius: 2,
+              background: 'var(--bg3)', padding: '1px 4px', borderRadius: 'var(--radius-sm)',
             }}>{children}</code>
           }
           const text = String(children).replace(/\n$/, '')
@@ -183,7 +183,7 @@ export default function PromptBridgeTab() {
             <div style={{ position: 'relative', margin: '8px 0' }}>
               <pre style={{
                 fontFamily: 'var(--mono)', fontSize: 12, background: 'var(--bg3)',
-                border: '1px solid var(--line)', borderRadius: 2,
+                border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)',
                 padding: '12px 14px', overflowX: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.6,
               }}><code>{text}</code></pre>
               <button onClick={() => copyToClipboard(text)}
@@ -298,20 +298,20 @@ export default function PromptBridgeTab() {
       {/* Correction styling: ~~wrong~~**right** */}
       <style>{`
         .pb-response del {
-          color: #c0392b;
-          background: rgba(231, 76, 60, 0.08);
+          color: var(--danger);
+          background: rgba(179, 59, 46, 0.1);
           text-decoration: line-through;
           padding: 1px 3px;
-          border-radius: 2px;
+          border-radius: var(--radius-xs);
         }
         .pb-response del + strong,
         .pb-response del + em {
-          color: #27ae60;
-          background: rgba(39, 174, 96, 0.08);
+          color: var(--success);
+          background: rgba(47, 111, 85, 0.12);
           text-decoration: none;
-          border-bottom: 2px solid rgba(39, 174, 96, 0.4);
+          border-bottom: 2px solid rgba(47, 111, 85, 0.5);
           padding: 1px 3px;
-          border-radius: 2px;
+          border-radius: var(--radius-xs);
           font-weight: 500;
           font-style: normal;
         }
@@ -356,7 +356,7 @@ export default function PromptBridgeTab() {
                     padding: '14px 12px',
                     background: 'var(--bg)',
                     border: '1px solid var(--subtle)',
-                    borderRadius: 2,
+                    borderRadius: 'var(--radius-sm)',
                     cursor: 'pointer',
                     textAlign: 'left',
                     transition: 'all 0.2s',
@@ -393,7 +393,7 @@ export default function PromptBridgeTab() {
                 <div
                   className={`max-w-[85%] px-4 py-2 group relative ${m.role === 'assistant' ? 'pb-response' : ''}`}
                   style={{
-                    borderRadius: 2,
+                    borderRadius: 'var(--radius-sm)',
                     fontFamily: m.role === 'user' ? 'var(--mono)' : 'var(--serif)',
                     fontSize: m.role === 'user' ? 13 : 14,
                     background: m.role === 'user' ? 'var(--accent)' : 'var(--bg2)',

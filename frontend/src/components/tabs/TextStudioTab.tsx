@@ -42,7 +42,7 @@ const copyBtnStyle: React.CSSProperties = {
   padding: '3px 10px',
   background: 'var(--accent)',
   border: 'none',
-  borderRadius: 2,
+  borderRadius: 'var(--radius-sm)',
   cursor: 'pointer',
   color: '#fff',
   letterSpacing: '0.05em',
@@ -198,7 +198,7 @@ export default function TextStudioTab() {
           if (!isBlock) {
             return <code style={{
               fontFamily: 'var(--mono)', fontSize: 12,
-              background: 'var(--bg3)', padding: '1px 4px', borderRadius: 2,
+              background: 'var(--bg3)', padding: '1px 4px', borderRadius: 'var(--radius-sm)',
             }}>{children}</code>
           }
           const codeText = String(children).replace(/\n$/, '')
@@ -206,7 +206,7 @@ export default function TextStudioTab() {
             <div style={{ position: 'relative', margin: '8px 0' }}>
               <pre style={{
                 fontFamily: 'var(--mono)', fontSize: 12, background: 'var(--bg3)',
-                border: '1px solid var(--line)', borderRadius: 2,
+                border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)',
                 padding: '12px 14px', overflowX: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.6,
               }}><code>{codeText}</code></pre>
               <button onClick={() => copyToClipboard(codeText)}
@@ -231,8 +231,8 @@ export default function TextStudioTab() {
             display: 'inline-block', padding: '3px 12px', marginBottom: 16,
             fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
             letterSpacing: '0.08em', textTransform: 'uppercase',
-            background: 'rgba(230, 126, 34, 0.1)', color: '#e67e22',
-            border: '1px solid rgba(230, 126, 34, 0.25)', borderRadius: 2,
+            background: 'rgba(154, 90, 22, 0.12)', color: 'var(--warning)',
+            border: '1px solid rgba(154, 90, 22, 0.32)', borderRadius: 'var(--radius-sm)',
           }}>
             Experimental
           </div>
@@ -283,17 +283,17 @@ export default function TextStudioTab() {
       {isInterrupted && (
         <div style={{
           padding: '10px 20px',
-          background: 'rgba(231, 76, 60, 0.08)',
-          borderBottom: '1px solid rgba(231, 76, 60, 0.2)',
+          background: 'rgba(179, 59, 46, 0.1)',
+          borderBottom: '1px solid rgba(179, 59, 46, 0.24)',
           display: 'flex',
           alignItems: 'center',
           gap: 10,
         }}>
           <span style={{
             display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-            background: '#e74c3c', flexShrink: 0,
+            background: 'var(--danger)', flexShrink: 0,
           }} />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: '#c0392b' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--danger)' }}>
             SERVICE INTERRUPTED — Daily cost limit (${costStatus?.limit_usd.toFixed(2)}) exceeded.
             Today: ${costStatus?.cost_usd.toFixed(4)} / {costStatus?.requests} requests.
             Awaiting manual reset.
@@ -311,8 +311,8 @@ export default function TextStudioTab() {
         {isExperimental && (
           <span style={{
             fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 700,
-            padding: '2px 8px', borderRadius: 2, marginRight: 4,
-            background: 'rgba(230, 126, 34, 0.1)', color: '#e67e22',
+            padding: '2px 8px', borderRadius: 'var(--radius-sm)', marginRight: 4,
+            background: 'rgba(154, 90, 22, 0.12)', color: 'var(--warning)',
             letterSpacing: '0.06em', textTransform: 'uppercase',
           }}>
             EXP
@@ -335,7 +335,7 @@ export default function TextStudioTab() {
           style={{
             fontFamily: 'var(--mono)', fontSize: 14,
             padding: '4px 10px', border: '1px solid var(--line)',
-            background: 'var(--bg)', borderRadius: 2, cursor: sourceLang === 'auto' ? 'default' : 'pointer',
+            background: 'var(--bg)', borderRadius: 'var(--radius-sm)', cursor: sourceLang === 'auto' ? 'default' : 'pointer',
             color: sourceLang === 'auto' ? 'var(--faint)' : 'var(--dark)',
             transition: 'all .15s',
           }}
@@ -358,12 +358,12 @@ export default function TextStudioTab() {
           <div className="cost-indicator" style={{
             marginLeft: 'auto',
             fontFamily: 'var(--mono)', fontSize: 10,
-            color: isInterrupted ? '#e74c3c' : 'var(--faint)',
+            color: isInterrupted ? 'var(--danger)' : 'var(--mid)',
             display: 'flex', alignItems: 'center', gap: 6,
           }}>
             <span style={{
               display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-              background: isInterrupted ? '#e74c3c' : '#27ae60',
+              background: isInterrupted ? 'var(--danger)' : 'var(--success)',
             }} />
             ${costStatus.cost_usd.toFixed(4)} / ${costStatus.limit_usd.toFixed(2)}
           </div>
@@ -413,7 +413,7 @@ export default function TextStudioTab() {
                     padding: '14px 12px',
                     background: 'var(--bg)',
                     border: '1px solid var(--subtle)',
-                    borderRadius: 2,
+                    borderRadius: 'var(--radius-sm)',
                     cursor: isInterrupted ? 'not-allowed' : 'pointer',
                     textAlign: 'left',
                     transition: 'all 0.2s',
@@ -453,7 +453,7 @@ export default function TextStudioTab() {
                 <div
                   className="max-w-[85%] px-4 py-2 group relative"
                   style={{
-                    borderRadius: 2,
+                    borderRadius: 'var(--radius-sm)',
                     fontFamily: m.role === 'user' ? 'var(--mono)' : 'var(--serif)',
                     fontSize: m.role === 'user' ? 13 : 14,
                     background: m.role === 'user' ? 'var(--accent)' : 'var(--bg2)',
@@ -541,7 +541,7 @@ const selectStyle: React.CSSProperties = {
   padding: '6px 12px',
   border: '1px solid var(--line)',
   background: 'var(--bg)',
-  borderRadius: 2,
+  borderRadius: 'var(--radius-sm)',
   color: 'var(--dark)',
   cursor: 'pointer',
   minWidth: 130,
