@@ -73,6 +73,8 @@ class SkillStore:
         return re.sub(r"-+", "-", s).strip("-") or "unnamed"
 
     def _file_for(self, skill_id: str) -> Path:
+        if not re.fullmatch(r"[\w\-]+", skill_id):
+            raise ValueError(f"Invalid skill id: {skill_id}")
         return self._dir / f"{skill_id}.md"
 
     # ── List ─────────────────────────────────────────────────────────
@@ -337,13 +339,19 @@ def get_builtin_skill_content(skill_id: str) -> str | None:
     """Read the content of a built-in skill by its compound id (e.g. 'ib:patterns/point_based')."""
     if skill_id.startswith("ib:"):
         rel = skill_id[3:]  # e.g. '_base' or 'patterns/point_based'
-        path = _PROJECT_ROOT / "intent_bridge" / "schemas" / "skills" / (rel + ".md")
-        if path.is_file():
+        if ".." in rel or rel.startswith(("/", "\\")):
+            return None
+        base = _PROJECT_ROOT / "intent_bridge" / "schemas" / "skills"
+        path = base / (rel + ".md")
+        if path.is_file() and path.resolve().is_relative_to(base.resolve()):
             return path.read_text(encoding="utf-8")
     elif skill_id.startswith("pb:"):
         rel = skill_id[3:]
-        path = _PROJECT_ROOT / "prompt_bridge" / "scenarios" / (rel + ".md")
-        if path.is_file():
+        if ".." in rel or rel.startswith(("/", "\\")):
+            return None
+        base = _PROJECT_ROOT / "prompt_bridge" / "scenarios"
+        path = base / (rel + ".md")
+        if path.is_file() and path.resolve().is_relative_to(base.resolve()):
             return path.read_text(encoding="utf-8")
     return None
 

@@ -114,8 +114,7 @@ prompt_bridge:
   max_tokens: 4096
 
 # --- 管理员密码（用于日志查看等管理功能） ---
-admin:
-  password: "revit2026admin"
+# 密码通过环境变量 ADMIN_PASSWORD 注入，不再写入配置文件。
 
 # --- TextStudio (多语言翻译 & 文本优化) ---
 text_studio:
@@ -145,4 +144,4 @@ server:
   host: "0.0.0.0"
   port: 8000
   gradio_port: 7860
-  cors_origins: ["*"]
+  cors_origins: ["https://demo.graptolite.ai", "https://graptolite.ai"]

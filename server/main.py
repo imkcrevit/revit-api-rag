@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +49,15 @@ except ImportError:
     text_studio_router = None
 
 
+async def _bridge_auth(request):  # noqa: ANN001
+    """Unified auth dependency placeholder for the three bridge routers (P1-5).
+
+    Framework hook — currently a no-op so behavior is unchanged. Enforce
+    X-App-Token / admin auth here to lock down intent/mcp/prompt bridges.
+    """
+    return None
+
+
 def create_app() -> FastAPI:
     config = get_config()
     server_cfg = config.get("server", {})
@@ -58,7 +67,10 @@ def create_app() -> FastAPI:
     # CORS
     fastapi_app.add_middleware(
         CORSMiddleware,
-        allow_origins=server_cfg.get("cors_origins", ["*"]),
+        allow_origins=server_cfg.get(
+            "cors_origins",
+            ["http://localhost:7860", "http://127.0.0.1:7860"],
+        ),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -69,17 +81,20 @@ def create_app() -> FastAPI:
     fastapi_app.include_router(log_router)
     fastapi_app.include_router(skill_router)
 
+    # Bridge routers share a unified auth dependency placeholder (P1-5)
+    _bridge_deps = [Depends(_bridge_auth)]
+
     # Intent Bridge routes
     if intent_router is not None:
-        fastapi_app.include_router(intent_router)
+        fastapi_app.include_router(intent_router, dependencies=_bridge_deps)
 
     # MCP Bridge routes (code generation + execution + tool solidification)
     if bridge_router is not None:
-        fastapi_app.include_router(bridge_router)
+        fastapi_app.include_router(bridge_router, dependencies=_bridge_deps)
 
     # PromptBridge routes (designer prompt optimization)
     if prompt_bridge_router is not None:
-        fastapi_app.include_router(prompt_bridge_router)
+        fastapi_app.include_router(prompt_bridge_router, dependencies=_bridge_deps)
 
     # TextStudio routes (personal text polishing & translation)
     if text_studio_router is not None:
@@ -112,8 +127,8 @@ def create_app() -> FastAPI:
         @fastapi_app.get("/{rest:path}")
         async def serve_react_spa(rest: str = ""):
             # Serve static files if they exist, otherwise SPA fallback
-            file_path = react_dist / rest
-            if rest and file_path.is_file():
+            file_path = (react_dist / rest).resolve()
+            if rest and file_path.is_file() and file_path.is_relative_to(react_dist.resolve()):
                 return FileResponse(file_path)
             return FileResponse(react_dist / "index.html")
 
@@ -161,7 +176,7 @@ def main():
         host=host,
         port=port,
         reload=False,
-        forwarded_allow_ips="*",
+        forwarded_allow_ips="127.0.0.1",
         proxy_headers=True,
     )
 

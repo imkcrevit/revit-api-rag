@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -24,13 +26,52 @@ from mcp_bridge.tool_store import ToolStore
 from mcp_bridge.interactive import IntentClassifier, RevitQueryExecutor
 from mcp_bridge import sandbox
 
+_slot_log = logging.getLogger("mcp_bridge.slot")
+
+# Category values interpolated into C# must match this exact shape (P0-4)
+_CATEGORY_RE = re.compile(r"OST_[A-Za-z]+")
+
+
+def _get_slot_tokens() -> dict:
+    """Pre-shared slot tokens from config (mcp_bridge.slot_tokens). Empty = unconfigured."""
+    return _get_bridge_config().get("slot_tokens", {}) or {}
+
+
+def _escape_param_value(v) -> str:
+    """Escape a parameter value before substituting it into C# code (P0-3)."""
+    if isinstance(v, str):
+        return (v.replace("\\", "\\\\")
+                 .replace('"', '\\"')
+                 .replace("\r", "\\r")
+                 .replace("\n", "\\n"))
+    return str(v)
+
+
 # ── Slot context — set per-request by router dependency ──────────────────
 _request_slot_id: ContextVar[str | None] = ContextVar("slot_id", default=None)
 
 
 async def _set_slot_ctx(request: Request):
-    """Extract X-Slot-Id from request header and store in ContextVar."""
-    _request_slot_id.set(request.headers.get("x-slot-id"))
+    """Extract X-Slot-Id from request header and store in ContextVar.
+
+    When slot tokens are configured (mcp_bridge.slot_tokens), the request must
+    carry a matching X-Slot-Token header for that slot, else 403. If tokens are
+    not configured, a warning is logged and the request is allowed (backward
+    compatible framework — see P0-5)."""
+    slot_id = request.headers.get("x-slot-id")
+    _request_slot_id.set(slot_id)
+    if not slot_id:
+        return
+    tokens = _get_slot_tokens()
+    if not tokens:
+        _slot_log.warning(
+            "mcp_bridge.slot_tokens not configured — X-Slot-Token check skipped (insecure)"
+        )
+        return
+    expected = tokens.get(str(slot_id))
+    provided = request.headers.get("x-slot-token")
+    if not expected or provided != expected:
+        raise HTTPException(403, "Invalid or missing X-Slot-Token")
 
 
 bridge_router = APIRouter(
@@ -171,7 +212,6 @@ class GenerateWithSelectionsRequest(BaseModel):
 class ExecuteRequest(BaseModel):
     code: str
     parameters: list | None = None
-    skip_review: bool = False
 
 
 class SolidifyRequest(BaseModel):
@@ -684,11 +724,10 @@ async def generate_with_selections(req: GenerateWithSelectionsRequest):
 @bridge_router.post("/execute")
 async def execute_code(req: ExecuteRequest):
     """Send C# code to Revit via TCP socket."""
-    # Security review unless explicitly skipped
-    if not req.skip_review:
-        safe, warnings = sandbox.review(req.code)
-        if not safe:
-            return {"success": False, "error": "Security review failed", "warnings": warnings}
+    # Security review — always enforced, unsafe code is rejected (P0-1)
+    safe, warnings = sandbox.review(req.code)
+    if not safe:
+        raise HTTPException(400, detail={"error": "blocked", "warnings": warnings})
 
     try:
         client = await _get_revit_client()
@@ -920,7 +959,12 @@ async def run_tool(name: str, req: RunToolRequest):
 
     code = tool.code_template
     for k, v in filled.items():
-        code = code.replace(f"{{{k}}}", str(v))
+        code = code.replace(f"{{{k}}}", _escape_param_value(v))
+
+    # Security review of the fully rendered code before dispatch (P0-3)
+    safe, warnings = sandbox.review(code)
+    if not safe:
+        raise HTTPException(400, detail={"error": "blocked", "warnings": warnings})
 
     try:
         client = await _get_revit_client()
@@ -1000,6 +1044,8 @@ async def get_tool_choices(name: str):
                     ]
             elif source.startswith("elements:"):
                 category = source.split(":", 1)[1]
+                if not _CATEGORY_RE.fullmatch(category):
+                    raise HTTPException(400, "invalid category")
                 code = (
                     f'var elems = new FilteredElementCollector(document)\n'
                     f'    .OfCategory(BuiltInCategory.{category})\n'
@@ -1632,6 +1678,29 @@ async def revit_ws_endpoint(ws: WebSocket, slot_id: str):
         return
 
     await ws.accept()
+
+    # ── Pre-shared token handshake (P0-5) ──
+    # When slot tokens are configured, the plugin's FIRST message must be a JSON
+    # object carrying the matching token, else the connection is refused. If not
+    # configured, log a warning and skip (backward compatible framework).
+    tokens = _get_slot_tokens()
+    if tokens:
+        expected = tokens.get(str(slot_id))
+        provided = None
+        try:
+            first = await ws.receive_text()
+            payload = json.loads(first)
+            if isinstance(payload, dict):
+                provided = payload.get("token")
+        except Exception:
+            provided = None
+        if not expected or provided != expected:
+            await ws.close(code=4003, reason="Invalid slot token")
+            return
+    else:
+        _ws_log.warning(
+            "mcp_bridge.slot_tokens not configured — WebSocket slot auth skipped (insecure)"
+        )
 
     if not mgr.register(slot_id, ws):
         await ws.send_text(json.dumps({"error": f"Slot {slot_id} already occupied"}))

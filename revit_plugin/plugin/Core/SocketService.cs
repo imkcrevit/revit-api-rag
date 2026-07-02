@@ -25,6 +25,8 @@ namespace revit_mcp_plugin.Core
         private ICommandRegistry _commandRegistry;
         private ILogger _logger;
         private CommandExecutor _commandExecutor;
+        private string _authToken;
+        private bool _tokenWarningLogged;
 
         public static SocketService Instance
         {
@@ -76,7 +78,11 @@ namespace revit_mcp_plugin.Core
             // Load configuration and register commands.
             ConfigurationManager configManager = new ConfigurationManager(_logger);
             configManager.LoadConfiguration();
-            
+
+            // 读取预共享鉴权 token（可选增强，缺失时向后兼容放行）
+            // Read the pre-shared auth token (optional; missing token stays backward compatible).
+            _authToken = configManager.Config?.Settings?.Token;
+
 
             //// 从配置中读取服务端口
             //// Read the service port from the configuration.
@@ -102,7 +108,9 @@ namespace revit_mcp_plugin.Core
             try
             {
                 _isRunning = true;
-                _listener = new TcpListener(IPAddress.Any, _port);
+                // 仅监听本地回环地址，避免同网段主机直连未鉴权端口
+                // Bind to loopback only so other hosts on the LAN cannot reach the port.
+                _listener = new TcpListener(IPAddress.Loopback, _port);
                 _listener.Start();
 
                 _listenerThread = new Thread(ListenForClients)
@@ -239,6 +247,15 @@ namespace revit_mcp_plugin.Core
                     );
                 }
 
+                // 校验鉴权 token（未配置时向后兼容放行，仅记录一次警告）
+                // Validate the auth token (backward-compatible when unset; warns once).
+                if (!IsAuthorized(requestJson))
+                {
+                    return CreateErrorResponse(request.Id,
+                        JsonRPCErrorCodes.InvalidRequest,
+                        "Unauthorized: invalid or missing token");
+                }
+
                 // 查找命令
                 // Search for the command in the registry.
                 if (!_commandRegistry.TryGetCommand(request.Method, out var command))
@@ -279,6 +296,37 @@ namespace revit_mcp_plugin.Core
                     JsonRPCErrorCodes.InternalError,
                     $"Internal error: {ex.Message}"
                 );
+            }
+        }
+
+        /// <summary>
+        /// 校验请求中的 token 字段是否与用户配置密钥一致。
+        /// 配置里若无 token 则记录一次 warning 并放行（向后兼容）。
+        /// Validate the request's token field against the configured secret.
+        /// If no token is configured, log a warning once and allow (backward compatible).
+        /// </summary>
+        private bool IsAuthorized(string requestJson)
+        {
+            if (string.IsNullOrEmpty(_authToken))
+            {
+                if (!_tokenWarningLogged)
+                {
+                    _logger.Warning("未配置鉴权 token，已放行 socket 请求（向后兼容）\nNo auth token configured; allowing socket requests (backward compatible).");
+                    _tokenWarningLogged = true;
+                }
+                return true;
+            }
+
+            try
+            {
+                var obj = JObject.Parse(requestJson);
+                string reqToken = obj.Value<string>("token")
+                    ?? obj["params"]?.Value<string>("token");
+                return string.Equals(reqToken, _authToken, StringComparison.Ordinal);
+            }
+            catch
+            {
+                return false;
             }
         }
 

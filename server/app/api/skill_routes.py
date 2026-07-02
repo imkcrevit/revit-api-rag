@@ -12,11 +12,14 @@ Skill 管理路由 — CRUD + GitHub 导入
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
+
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from server.app.skill_store import get_skill_store, scan_builtin_skills, get_builtin_skill_content
+from server.app.api.log_routes import verify_admin
 
 skill_router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -89,7 +92,9 @@ async def get_skill(skill_id: str):
                 return {**s, "content": content, "raw": content}
         return {"id": skill_id, "content": content, "raw": content, "readonly": True}
 
-    # Custom skill
+    # Custom skill — validate id to prevent path traversal
+    if not re.fullmatch(r"[\w\-]+", skill_id):
+        raise HTTPException(400, f"Invalid skill id: {skill_id}")
     store = get_skill_store()
     skill = store.get(skill_id)
     if not skill:
@@ -99,7 +104,7 @@ async def get_skill(skill_id: str):
     return skill
 
 
-@skill_router.post("")
+@skill_router.post("", dependencies=[Depends(verify_admin)])
 async def create_skill(req: SkillCreateRequest):
     """Create a new skill from provided content."""
     store = get_skill_store()
@@ -115,7 +120,7 @@ async def create_skill(req: SkillCreateRequest):
     return result
 
 
-@skill_router.put("/{skill_id}")
+@skill_router.put("/{skill_id}", dependencies=[Depends(verify_admin)])
 async def update_skill(skill_id: str, req: SkillUpdateRequest):
     """Update an existing skill."""
     store = get_skill_store()
@@ -131,7 +136,7 @@ async def update_skill(skill_id: str, req: SkillUpdateRequest):
     return result
 
 
-@skill_router.patch("/{skill_id}")
+@skill_router.patch("/{skill_id}", dependencies=[Depends(verify_admin)])
 async def toggle_skill(skill_id: str, req: SkillToggleRequest):
     """Enable or disable a skill."""
     store = get_skill_store()
@@ -141,7 +146,7 @@ async def toggle_skill(skill_id: str, req: SkillToggleRequest):
     return result
 
 
-@skill_router.delete("/{skill_id}")
+@skill_router.delete("/{skill_id}", dependencies=[Depends(verify_admin)])
 async def delete_skill(skill_id: str):
     """Delete a skill."""
     store = get_skill_store()
@@ -157,7 +162,7 @@ def _resolve_github_raw_url(url: str) -> str:
     url = url.strip().rstrip("/")
 
     # Already a raw URL
-    if "raw.githubusercontent.com" in url:
+    if urlparse(url).hostname == "raw.githubusercontent.com":
         return url
 
     # github.com/user/repo/blob/branch/path → raw
@@ -173,12 +178,16 @@ def _resolve_github_raw_url(url: str) -> str:
         # PUA-style: skills/{repo}/SKILL.md, then root SKILL.md, then README.md
         return f"https://raw.githubusercontent.com/{user}/{repo}/main/skills/{repo}/SKILL.md"
 
-    return url
+    raise HTTPException(400, "Only GitHub URLs are allowed")
 
 
-@skill_router.post("/import")
+@skill_router.post("/import", dependencies=[Depends(verify_admin)])
 async def import_skill(req: SkillImportRequest):
     """Import a skill from a GitHub URL."""
+    parsed = urlparse(req.url.strip())
+    if parsed.scheme != "https" or parsed.hostname not in ("github.com", "raw.githubusercontent.com"):
+        raise HTTPException(400, "Only GitHub URLs are allowed")
+
     raw_url = _resolve_github_raw_url(req.url)
 
     # Try multiple paths if the first fails (for repo-level URLs)

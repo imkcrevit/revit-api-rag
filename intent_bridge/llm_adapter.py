@@ -95,7 +95,7 @@ class LLMAdapter:
         if not self._api_key:
             logger.error("OPENROUTER_API_KEY is empty! Check .env file.")
         else:
-            logger.info("API key loaded: %s...%s (len=%d)", self._api_key[:8], self._api_key[-4:], len(self._api_key))
+            logger.info("API key loaded (len=%d)", len(self._api_key))
 
         # Proxy: env var > config/config.yaml proxy setting
         self._proxy = (

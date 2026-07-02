@@ -444,20 +444,26 @@ def run_quality_agent(
         print(f"  Proxy  : {proxy_status}")
         print(f"  API    : {api_status}")
 
-        if not conn["api_ok"] and config.get("proxy", {}).get("enabled", False):
+    # 降级重试与连通性校验必须无条件执行（不能被 verbose 包裹，否则静默模式下
+    # 会带着不可用的 API 继续跑并耗费额度）。仅打印语句保留 verbose 判断。
+    if not conn["api_ok"] and config.get("proxy", {}).get("enabled", False):
+        if verbose:
             print("  Proxy unreachable — retrying without proxy...")
-            config["proxy"]["enabled"] = False
-            conn = check_connectivity(config)
+        config["proxy"]["enabled"] = False
+        conn = check_connectivity(config)
+        if verbose:
             api_status = "OK" if conn["api_ok"] else f"FAILED ({conn['error']})"
             print(f"  API (direct) : {api_status}")
 
-        if not conn["api_ok"]:
-            raise RuntimeError(
-                f"OpenRouter API is not reachable.\n"
-                f"Error: {conn['error']}\n"
-                f"Proxy : {conn['proxy_addr']}\n"
-                "Fix: ensure proxy is running, or set proxy.enabled=false in config.yaml"
-            )
+    if not conn["api_ok"]:
+        raise RuntimeError(
+            f"OpenRouter API is not reachable.\n"
+            f"Error: {conn['error']}\n"
+            f"Proxy : {conn['proxy_addr']}\n"
+            "Fix: ensure proxy is running, or set proxy.enabled=false in config.yaml"
+        )
+
+    if verbose:
         print()
 
     gemini = create_llm_client(config, provider_override="gemini")

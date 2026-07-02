@@ -11,6 +11,7 @@ Session 状态机：
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, AsyncGenerator
 
@@ -90,7 +91,7 @@ async def process_t2r_chat(
         from server.app.text2revit.actions import get_action
         action = get_action(t2r["action_intent"])
         if action:
-            result = recognizer.recognize(message)
+            result = await asyncio.to_thread(recognizer.recognize, message)
             new_params = result.get("extracted_params", {})
             t2r["params"].update(new_params)
 
@@ -114,7 +115,7 @@ async def process_t2r_chat(
                 return
 
     # Fresh message — recognize intent
-    result = recognizer.recognize(message)
+    result = await asyncio.to_thread(recognizer.recognize, message)
     intent = result["intent"]
     action: RevitAction | None = result["action"]
     extracted = result["extracted_params"]

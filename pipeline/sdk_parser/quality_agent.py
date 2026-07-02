@@ -359,11 +359,13 @@ def save_enriched_to_sqlite(enriched_data: list[dict[str, Any]], db_path: str):
     db = Path(db_path)
     db.parent.mkdir(parents=True, exist_ok=True)
 
-    if db.exists():
-        db.unlink()
-        print(f"Removed old DB: {db}")
+    # 原子替换：先写入 .db.tmp，成功后 os.replace 覆盖旧库，
+    # 避免中途失败留下损坏/半空的数据库。
+    tmp = db.with_suffix(".db.tmp")
+    if tmp.exists():
+        tmp.unlink()
 
-    conn   = sqlite3.connect(str(db))
+    conn   = sqlite3.connect(str(tmp))
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -431,6 +433,7 @@ def save_enriched_to_sqlite(enriched_data: list[dict[str, Any]], db_path: str):
         pbar.close()
 
     conn.close()
+    os.replace(tmp, db)
     print(f"Saved {len(enriched_data)} records to {db}")
 
 

@@ -168,7 +168,7 @@ namespace revit_mcp_plugin.Core
                             if (command.CommandName == config.CommandName)
                             {
                                 _commandRegistry.RegisterCommand(command);
-                                _logger.Info("创建命令实例失败 [{0}]: {1}\nFailed to create command instance [{0}]: {1}",
+                                _logger.Info("成功注册命令 [{0}] 来自 {1}\nRegistered command [{0}] from {1}",
                                     command.CommandName, Path.GetFileName(assemblyPath));
                                 break; // 找到匹配的命令后退出循环 - Exit the loop after finding a matching command.
                             }

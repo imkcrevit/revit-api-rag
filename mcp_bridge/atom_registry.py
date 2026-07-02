@@ -448,6 +448,10 @@ class AtomResolver:
         """Parameterized: elements:OST_Walls → get instances of that category."""
         if not category:
             return []
+        # Category is interpolated into C#; enforce a strict whitelist (P0-4)
+        if not re.fullmatch(r"OST_[A-Za-z]+", category):
+            _log.warning(f"[_q_elements] rejected invalid category: {category!r}")
+            return []
         code = (
             f'var elems = new FilteredElementCollector(document)\n'
             f'    .OfCategory(BuiltInCategory.{category})\n'

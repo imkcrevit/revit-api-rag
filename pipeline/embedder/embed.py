@@ -54,13 +54,23 @@ def embed_api_data(config: dict, api_db_path: str, chromadb_dir: str, batch_size
     print(f"从 {api_db_path} 读取 {len(rows)} 条 API 数据")
 
     client = chromadb.PersistentClient(path=chromadb_dir)
+    # 全量重建：先删除旧 collection，保证与 SQLite 完全对齐
+    try:
+        client.delete_collection("revit_api")
+    except Exception:
+        pass
     collection = client.get_or_create_collection(
         name="revit_api",
         metadata={"description": "Revit API documentation embeddings"}
     )
 
+    # 断点续传：已存在的 id 直接跳过（upsert 幂等，重复运行安全）
+    existing = set(collection.get(include=[])["ids"])
+
     for i in range(0, len(rows), batch_size):
-        batch = rows[i:i + batch_size]
+        batch = [row for row in rows[i:i + batch_size] if str(row[0]) not in existing]
+        if not batch:
+            continue
         ids = [str(row[0]) for row in batch]
 
         texts = []
@@ -91,7 +101,7 @@ def embed_api_data(config: dict, api_db_path: str, chromadb_dir: str, batch_size
 
         embeddings = embedder.embed_texts(texts)
 
-        collection.add(
+        collection.upsert(
             ids=ids,
             documents=texts,
             embeddings=embeddings,
@@ -148,13 +158,23 @@ def embed_code_data(config: dict, sdk_db_path: str, chromadb_dir: str, batch_siz
     print(f"从 {sdk_db_path} 读取 {len(rows)} 条 SDK 数据 [{schema_label}]")
 
     client = chromadb.PersistentClient(path=chromadb_dir)
+    # 全量重建：先删除旧 collection，保证与 SQLite 完全对齐
+    try:
+        client.delete_collection("revit_sdk")
+    except Exception:
+        pass
     collection = client.get_or_create_collection(
         name="revit_sdk",
         metadata={"description": "Revit SDK sample code embeddings"}
     )
 
+    # 断点续传：已存在的 id 直接跳过（upsert 幂等，重复运行安全）
+    existing = set(collection.get(include=[])["ids"])
+
     for i in range(0, len(rows), batch_size):
-        batch = rows[i:i + batch_size]
+        batch = [row for row in rows[i:i + batch_size] if str(row[0]) not in existing]
+        if not batch:
+            continue
         ids = [str(row[0]) for row in batch]
 
         texts = []
@@ -187,7 +207,7 @@ def embed_code_data(config: dict, sdk_db_path: str, chromadb_dir: str, batch_siz
 
         embeddings = embedder.embed_texts(texts)
 
-        collection.add(
+        collection.upsert(
             ids=ids,
             documents=texts,
             embeddings=embeddings,

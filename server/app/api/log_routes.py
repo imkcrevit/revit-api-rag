@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import hmac
+import os
 from fastapi import APIRouter, Query, Header, HTTPException, Depends
 from fastapi.responses import JSONResponse
 
@@ -21,8 +22,7 @@ log_router = APIRouter(prefix="/api/logs", tags=["logs"])
 
 
 def _get_admin_password() -> str:
-    config = get_config()
-    return config.get("admin", {}).get("password", "")
+    return os.getenv("ADMIN_PASSWORD", "")
 
 
 async def verify_admin(

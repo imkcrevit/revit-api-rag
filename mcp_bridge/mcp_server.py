@@ -31,6 +31,10 @@ from mcp.server.fastmcp import FastMCP
 
 from mcp_bridge.tool_store import ToolStore
 from mcp_bridge.client_pool import RevitClientPool
+from mcp_bridge import sandbox
+
+# Category values interpolated into C# must match this exact shape (P0-4)
+_CATEGORY_RE = re.compile(r"OST_[A-Za-z]+")
 
 # Lazy-loaded singletons
 _retriever = None
@@ -185,6 +189,10 @@ def generate_code(user_request: str) -> str:
 async def execute_code(code: str, parameters: list | None = None) -> str:
     """Send C# code to Revit for execution via TCP socket (port 18080).
     Returns execution result or error message."""
+    # Security review — always enforced before dispatch (P0-2)
+    safe, warnings = sandbox.review(code)
+    if not safe:
+        return json.dumps({"success": False, "error": "blocked", "warnings": warnings})
     try:
         client = await RevitClientPool.get_client()
         resp = await client.send_code(code, parameters)
@@ -283,6 +291,9 @@ async def get_tool_choices(name: str) -> str:
                               "value": ft.get("Name", str(ft))} for ft in data]
             elif source.startswith("elements:"):
                 category = source.split(":", 1)[1]
+                if not _CATEGORY_RE.fullmatch(category):
+                    choices[p["name"]] = []
+                    continue
                 code = (f'var elems = new FilteredElementCollector(document)\n'
                         f'    .OfCategory(BuiltInCategory.{category})\n'
                         f'    .WhereElementIsNotElementType()\n'
@@ -331,6 +342,11 @@ async def run_tool(name: str, params: str = "{}") -> str:
             "success": False,
             "error": f"Parameter validation failed: {'; '.join(errors)}",
         }, ensure_ascii=False, indent=2)
+
+    # Security review of the fully rendered code before dispatch (P0-2)
+    safe, warnings = sandbox.review(code)
+    if not safe:
+        return json.dumps({"success": False, "error": "blocked", "warnings": warnings})
 
     # Execute via client pool
     try:

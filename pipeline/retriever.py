@@ -109,6 +109,25 @@ class RAGRetriever:
         self._api_db = api_db_path
         self._sdk_db = sdk_db_path
 
+        # 双库一致性校验：ChromaDB meta.json 的 record_count 应与
+        # SQLite revit_api 表行数一致，不一致则说明两库不同步（需重建）。
+        try:
+            meta_path = os.path.join(chromadb_api_dir, "meta.json")
+            if os.path.exists(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta_count = json.load(f).get("record_count")
+                conn = sqlite3.connect(api_db_path)
+                sqlite_count = conn.execute("SELECT COUNT(*) FROM revit_api").fetchone()[0]
+                conn.close()
+                if meta_count is not None and meta_count != sqlite_count:
+                    self._log.error(
+                        "双库不一致：ChromaDB meta.record_count=%s 但 SQLite revit_api=%s 行，"
+                        "请重建 ChromaDB（parse_chm 重建 SQLite 后必须重新 embedding）",
+                        meta_count, sqlite_count,
+                    )
+        except Exception as e:
+            self._log.error(f"双库一致性校验失败: {e}")
+
         # Detect SDK schema
         self._sdk_new_schema = self._detect_sdk_schema()
 

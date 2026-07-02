@@ -10,6 +10,7 @@ prompt for custom input and the RIGHT-SIDE custom textbox + submit button appear
 """
 from __future__ import annotations
 
+import html
 import json
 
 import httpx
@@ -39,7 +40,7 @@ def _render_card_header(card_data: dict) -> str:
     return (
         f'<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;'
         f'background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">'
-        f'<span style="font-weight:600;">🎯 {name}</span>'
+        f'<span style="font-weight:600;">🎯 {html.escape(str(name))}</span>'
         f'<span style="background:{c};color:white;padding:2px 8px;border-radius:10px;font-size:11px;">{pct}</span>'
         f'</div>'
     )
@@ -57,7 +58,7 @@ def _render_slots_status(card_data: dict) -> str:
         parts.append(
             f'<span style="font-size:12px;display:inline-flex;align-items:center;'
             f'background:white;padding:2px 6px;border-radius:4px;border:1px solid #d1fae5;">'
-            f'{icon} <b>{name}</b>: {val}</span>'
+            f'{icon} <b>{html.escape(str(name))}</b>: {html.escape(str(val))}</span>'
         )
     return (
         f'<div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;margin:6px 0;'

@@ -8,6 +8,7 @@ process_chat() 是核心入口：
 """
 from __future__ import annotations
 
+import asyncio
 from typing import AsyncGenerator
 
 from server.app.session import Session
@@ -41,7 +42,9 @@ async def process_chat(
         retrieval_cfg = config.get("retrieval", {})
         api_top_k = retrieval_cfg.get("api", {}).get("rerank_top_n", 15)
         code_top_k = retrieval_cfg.get("code", {}).get("rerank_top_n", 3)
-        results = retriever.search(message, api_top_k=api_top_k, code_top_k=code_top_k)
+        results = await asyncio.to_thread(
+            retriever.search, message, api_top_k=api_top_k, code_top_k=code_top_k
+        )
         session.last_search_results = results
 
     # Build context
@@ -87,7 +90,9 @@ def _build_prompt(message: str, session: Session) -> str:
 async def process_search(query: str, api_top_k: int = 15, code_top_k: int = 5) -> dict:
     """Pure search without generation — returns formatted results."""
     retriever = get_retriever()
-    results = retriever.search(query, api_top_k=api_top_k, code_top_k=code_top_k)
+    results = await asyncio.to_thread(
+        retriever.search, query, api_top_k=api_top_k, code_top_k=code_top_k
+    )
     return {
         "query": results.query,
         "rewritten_query": results.rewritten_query,

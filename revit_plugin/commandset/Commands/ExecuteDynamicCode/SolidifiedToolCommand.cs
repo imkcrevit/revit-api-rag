@@ -4,6 +4,7 @@ using Newtonsoft.Json.Linq;
 using RevitMCPSDK.API.Base;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 
@@ -70,6 +71,26 @@ namespace RevitMCPCommandSet.Commands.ExecuteDynamicCode
             var toolParams = parameters["parameters"]?.ToObject<List<ToolParameter>>()
                 ?? new List<ToolParameter>();
 
+            // 落盘前人工确认（register 会把远程下发的 code_template 写入本地文件）
+            // Manual confirmation before persisting: register writes a remotely supplied
+            // code_template to a local file, so require the Revit user to approve it.
+            var codePreview = codeTemplate.Length > 4000
+                ? codeTemplate.Substring(0, 4000) + "\n... (truncated)"
+                : codeTemplate;
+            var confirmDialog = new TaskDialog("确认注册固化工具 / Confirm tool registration")
+            {
+                MainInstruction = $"即将注册/更新固化工具 '{name}' 并写入本地文件，是否继续？\n" +
+                                  $"Register/update solidified tool '{name}' and write it to disk. Continue?",
+                MainContent = codePreview,
+                CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
+                DefaultButton = TaskDialogResult.No
+            };
+            if (confirmDialog.Show() != TaskDialogResult.Yes)
+            {
+                throw new OperationCanceledException(
+                    "用户取消了固化工具注册 / User cancelled tool registration");
+            }
+
             var tools = LoadToolsFile();
 
             // Update or add
@@ -112,14 +133,28 @@ namespace RevitMCPCommandSet.Commands.ExecuteDynamicCode
             var tool = tools.FirstOrDefault(t => t.Name == name)
                 ?? throw new ArgumentException($"Tool '{name}' not found");
 
-            // Render code template
+            // Render code template.
+            // 只替换工具中预声明的参数名，数字参数经 TryParse 校验，字符串转义，
+            // 防止通过参数值注入任意 C# 代码。
+            // Only substitute parameter names declared on the tool. Numeric params are
+            // validated via TryParse; string params are escaped — this prevents arbitrary
+            // C# injection through parameter values.
             string code = tool.CodeTemplate;
-            foreach (var kvp in toolParams)
+            foreach (var paramDef in tool.Parameters)
             {
-                code = code.Replace($"{{{kvp.Key}}}", kvp.Value);
+                if (paramDef?.Name == null)
+                    continue;
+                if (!toolParams.TryGetValue(paramDef.Name, out var rawValue))
+                    continue;
+
+                string safeValue = SanitizeParamValue(paramDef, rawValue);
+                code = code.Replace($"{{{paramDef.Name}}}", safeValue);
             }
 
-            // Execute via Roslyn (same as send_code_to_revit)
+            // Execute via Roslyn (same as send_code_to_revit).
+            // 人工确认弹窗由 ExecuteCodeEventHandler.Execute 在 UI 线程统一展示渲染后代码。
+            // The manual confirmation dialog is shown by ExecuteCodeEventHandler.Execute
+            // on the UI thread, displaying the fully rendered code.
             _handler.SetExecutionParameters(code, Array.Empty<object>());
             if (RaiseAndWaitForCompletion(60000))
             {
@@ -133,6 +168,46 @@ namespace RevitMCPCommandSet.Commands.ExecuteDynamicCode
             else
             {
                 throw new TimeoutException("Tool execution timed out");
+            }
+        }
+
+        /// <summary>
+        /// 校验并转义单个模板参数值，防止代码注入。
+        /// Validate and escape a single template parameter value to prevent injection.
+        /// </summary>
+        private static string SanitizeParamValue(ToolParameter def, string value)
+        {
+            value = value ?? "";
+            string type = (def.Type ?? "string").ToLowerInvariant();
+
+            switch (type)
+            {
+                case "int":
+                case "integer":
+                case "long":
+                    if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var l))
+                        throw new ArgumentException(
+                            $"参数 '{def.Name}' 需要整数，实际值: '{value}'");
+                    return l.ToString(CultureInfo.InvariantCulture);
+
+                case "double":
+                case "float":
+                case "number":
+                case "decimal":
+                    if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+                        throw new ArgumentException(
+                            $"参数 '{def.Name}' 需要数字，实际值: '{value}'");
+                    return d.ToString(CultureInfo.InvariantCulture);
+
+                default:
+                    // 字符串：转义反斜杠、双引号、换行，防止跳出字符串字面量
+                    // String: escape backslashes, double quotes and newlines so the value
+                    // cannot break out of a string literal in the template.
+                    return value
+                        .Replace("\\", "\\\\")
+                        .Replace("\"", "\\\"")
+                        .Replace("\r", "\\r")
+                        .Replace("\n", "\\n");
             }
         }
 

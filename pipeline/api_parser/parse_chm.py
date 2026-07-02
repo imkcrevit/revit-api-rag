@@ -409,7 +409,12 @@ def _peek_title_and_fullid(html_file: Path) -> tuple[str, str]:
 
 
 def save_to_sqlite(api_data: list[dict], db_path: str, batch_size: int = 500):
-    """Save parsed API data to SQLite with a tqdm progress bar."""
+    """Save parsed API data to SQLite with a tqdm progress bar.
+
+    重建 SQLite 后必须重建 ChromaDB：本函数会清空并重写 revit_api 表且重置
+    自增主键 id，SQLite 主键即 ChromaDB 的文档 id。因此每次调用后必须重新运行
+    embedding 流程重建 ChromaDB，否则两库 id 将错位、双库不同步。
+    """
     try:
         from tqdm.auto import tqdm as _tqdm
     except ImportError:
@@ -442,6 +447,8 @@ def save_to_sqlite(api_data: list[dict], db_path: str, batch_size: int = 500):
         )
     """)
     cursor.execute("DELETE FROM revit_api")
+    # 重置自增主键，避免 id 漂移导致与 ChromaDB 文档 id 错位（双库不同步根因）
+    cursor.execute("DELETE FROM sqlite_sequence WHERE name='revit_api'")
 
     total = len(api_data)
     pbar = _tqdm(total=total, desc="Saving to SQLite", unit="rec",
@@ -469,7 +476,6 @@ def save_to_sqlite(api_data: list[dict], db_path: str, batch_size: int = 500):
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 batch,
             )
-            conn.commit()
             if pbar:
                 pbar.update(len(batch))
             batch = []
@@ -483,12 +489,13 @@ def save_to_sqlite(api_data: list[dict], db_path: str, batch_size: int = 500):
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             batch,
         )
-        conn.commit()
         if pbar:
             pbar.update(len(batch))
 
     if pbar:
         pbar.close()
 
+    # 单次提交：避免循环内分批 commit 在中途失败时留下半空库
+    conn.commit()
     conn.close()
     print(f"Saved {total} records to {db_path}")

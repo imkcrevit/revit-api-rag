@@ -50,7 +50,9 @@ class SessionStore:
                 s = self._sessions[session_id]
                 s.touch()
                 return s
-            new_id = session_id or uuid.uuid4().hex
+            # Unknown / missing id → always mint a fresh server-side id.
+            # Never reuse a client-supplied unknown id (prevents session fixation).
+            new_id = uuid.uuid4().hex
             s = Session(session_id=new_id)
             self._sessions[new_id] = s
             return s

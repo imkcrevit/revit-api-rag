@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -40,6 +41,16 @@ namespace revit_mcp_plugin.Core
         private ICommandRegistry _commandRegistry;
         private ILogger _logger;
         private CommandExecutor _commandExecutor;
+        private string _authToken;
+        private bool _allowRemoteCodeExecution;
+
+        // 代码执行类高危方法白名单（默认关闭，除非配置显式允许）
+        // Code-execution class of high-risk methods (disabled by default unless config allows).
+        private static readonly HashSet<string> CodeExecutionMethods = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "send_code_to_revit",
+            "manage_solidified_tools",
+        };
 
         public static WebSocketService Instance
         {
@@ -79,6 +90,12 @@ namespace revit_mcp_plugin.Core
 
             ConfigurationManager configManager = new ConfigurationManager(_logger);
             configManager.LoadConfiguration();
+
+            // 读取鉴权 token 与代码执行开关（可选增强，缺失时向后兼容）
+            // Read auth token and code-execution switch (optional; backward compatible).
+            _authToken = configManager.Config?.Settings?.Token;
+            _allowRemoteCodeExecution =
+                configManager.Config?.Settings?.AllowRemoteCodeExecution ?? false;
 
             CommandManager commandManager = new CommandManager(
                 _commandRegistry, _logger, configManager, _uiApp);
@@ -178,6 +195,26 @@ namespace revit_mcp_plugin.Core
             await _ws.ConnectAsync(uri, _cts.Token);
             _logger.Info($"Connected to slot {_slotId}");
 
+            // 连接后发送鉴权 token 完成握手（仅在配置了 token 时发送，向后兼容）
+            // Send auth token after connecting to complete the handshake.
+            // Only sent when a token is configured, keeping the protocol backward compatible.
+            if (!string.IsNullOrEmpty(_authToken))
+            {
+                string authMsg = JsonConvert.SerializeObject(new
+                {
+                    type = "auth",
+                    slot_id = _slotId,
+                    token = _authToken
+                });
+                byte[] authBytes = Encoding.UTF8.GetBytes(authMsg);
+                await _ws.SendAsync(
+                    new ArraySegment<byte>(authBytes),
+                    WebSocketMessageType.Text,
+                    endOfMessage: true,
+                    cancellationToken: _cts.Token);
+                _logger.Info("已发送鉴权握手 / Auth handshake sent");
+            }
+
             // Receive loop
             var buffer = new byte[65536];
             var messageBuffer = new StringBuilder();
@@ -238,6 +275,17 @@ namespace revit_mcp_plugin.Core
                     return CreateErrorResponse(null,
                         JsonRPCErrorCodes.InvalidRequest,
                         "Invalid JSON-RPC request");
+                }
+
+                // 代码执行类高危方法白名单开关：默认关闭，防止远程直接下发代码执行。
+                // Gate code-execution class methods: disabled by default so a remote peer
+                // cannot trigger arbitrary code execution without explicit opt-in.
+                if (!_allowRemoteCodeExecution && CodeExecutionMethods.Contains(request.Method))
+                {
+                    _logger.Warning("已拦截代码执行类方法 {0}（allowRemoteCodeExecution=false）\nBlocked code-execution method {0} (allowRemoteCodeExecution=false).", request.Method);
+                    return CreateErrorResponse(request.Id,
+                        JsonRPCErrorCodes.InvalidRequest,
+                        $"Method '{request.Method}' is disabled. Set 'allowRemoteCodeExecution' to enable.");
                 }
 
                 if (!_commandRegistry.TryGetCommand(request.Method, out var command))
