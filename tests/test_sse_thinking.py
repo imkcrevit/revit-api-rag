@@ -3,10 +3,18 @@ import re
 import json
 
 
-# ── Reproduce _parse_sse_stream from app.py ──
+# ── Reproduce _parse_sse_stream logic ──
+#
+# NOTE (P2-48): the real `_parse_sse_stream` lives as a *nested closure* inside
+# `create_bridge_tab()` in mcp_bridge/frontend/app.py, so it is not importable at
+# module scope. It also consumes a live response object (`resp.iter_lines()`)
+# rather than a list of lines, which a unit test cannot easily supply. Until that
+# function is lifted to module level, this test validates a faithful line-for-line
+# reproduction of its token/thinking/code-splitting logic (kept in sync manually).
 
 def parse_sse_stream(lines: list[str]):
-    """Reproduce _parse_sse_stream logic exactly from app.py."""
+    """Faithful reproduction of the nested `_parse_sse_stream` logic in
+    mcp_bridge/frontend/app.py (see module NOTE — the real one is not importable)."""
     thinking_buf = ""
     code_buf = ""
     full_buf = ""

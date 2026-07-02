@@ -36,23 +36,27 @@ public class DeleteWarningSuperUtils : IFailuresPreprocessor
             foreach (var failure in failList)
             {
                 var s = failure.GetSeverity();
-                var failureDefinitionId = failure.GetFailureDefinitionId();
 
                 if (s == FailureSeverity.Warning)
                 {
-                    if (failureDefinitionId == BuiltInFailures.GeneralFailures.DuplicateValue)
-                        failuresAccessor.DeleteWarning(failure);
-                    else
-                        failuresAccessor.DeleteWarning(failure);
+                    // 警告级别统一删除（原 if/else 两分支行为完全相同，合并为单句）
+                    // Warnings are always deleted (both original branches were identical).
+                    failuresAccessor.DeleteWarning(failure);
                 }
                 else if (s == FailureSeverity.Error)
                 {
-                    failuresAccessor.ResolveFailure(failure);
+                    // Error 级别不自动 ResolveFailure（可能静默改动模型），仅计数并在下方回滚，交由用户处理
+                    // Do not auto-resolve errors (that can silently alter the model); count them
+                    // and roll the transaction back below so the user can handle them.
                     NumberErr += 1;
                 }
             }
 
-            failureProcessingResult = FailureProcessingResult.ProceedWithCommit;
+            // 存在未处理的 Error 时回滚，否则提交
+            // Roll back when unresolved errors exist; otherwise commit.
+            failureProcessingResult = NumberErr > 0
+                ? FailureProcessingResult.ProceedWithRollBack
+                : FailureProcessingResult.ProceedWithCommit;
         }
         else
         {

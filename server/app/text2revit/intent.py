@@ -8,7 +8,9 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import re
 import sqlite3
 from typing import Any
@@ -18,6 +20,8 @@ from prompts import load_prompt
 from server.app.text2revit.actions import (
     ACTIONS, RevitAction, ParamDef, get_action, get_actions_summary,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -156,12 +160,11 @@ class IntentRecognizer:
         if not self._db_path or not action.sql_pattern:
             return None
         try:
-            conn = sqlite3.connect(self._db_path)
-            row = conn.execute(
-                "SELECT syntax, parameters, remark FROM revit_api WHERE full_id LIKE ? LIMIT 1",
-                (action.sql_pattern,),
-            ).fetchone()
-            conn.close()
+            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
+                row = conn.execute(
+                    "SELECT syntax, parameters, remark FROM revit_api WHERE full_id LIKE ? LIMIT 1",
+                    (action.sql_pattern,),
+                ).fetchone()
             if row:
                 parts = []
                 if row[0]:
@@ -171,6 +174,6 @@ class IntentRecognizer:
                 if row[2]:
                     parts.append(f"Remarks: {row[2]}")
                 return "\n".join(parts)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("enrich_from_db query failed for %s: %s", action.sql_pattern, e)
         return None

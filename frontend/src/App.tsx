@@ -1,6 +1,6 @@
 /* Main App — Tab layout */
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useSettingsStore } from './store'
 import { settingsApi } from './api/settings'
 import Accordion from './components/shared/Accordion'
@@ -21,8 +21,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(3) // Default to MCP Bridge
   const { apiKey, setApiKey, model, setModel, showFull, setShowFull, sessionId } = useSettingsStore()
 
+  const settingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /* Debounce settings sync so we don't POST on every keystroke of the API key. */
   const handleSettingsChange = (key: string, m: string) => {
-    settingsApi.update(key, m, sessionId).catch(() => {})
+    if (settingsDebounceRef.current) clearTimeout(settingsDebounceRef.current)
+    settingsDebounceRef.current = setTimeout(() => {
+      settingsApi.update(key, m, sessionId).catch(() => {})
+    }, 500)
   }
 
   return (

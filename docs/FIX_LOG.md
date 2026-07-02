@@ -92,6 +92,41 @@
 
 ---
 
+---
+
+## 五、第二轮：P2 / P3 修复（Fable 更新，续）
+
+> commit 2（分支同上）。范围：P2 中危 + P3 低危，共约 70 项，跨 server / bridge / pipeline / 前端 / C# / 基础设施。
+> 按用户指示：OpenRouter 已设终端限额，**费用滥用类加固不再作为重点**（相关代码改动仍保留，如限流已在 P1-2 完成）。
+
+### P2 —— 中（已完成）
+- **server**：P2-1 admin token 去 Query 仅留 Header；P2-10 log_store 连接 `contextlib.closing` 关闭；P2-11 同步写库 `to_thread`；P2-12 `get_client_ip` 可信代理白名单；P2-13 `enrich_from_db` 关闭+记日志；P2-14 streaming 断连停止事件（防队列无界）；P2-15 启动预热 retriever；P2-38 Gradio 挂载移到 catch-all 前（`/app` 不再被遮蔽）；P2-39 `ChatRequest.message`/`api_key` 长度上限；P2-40 会话越权核查（P1-3 已缓解，无需改）。
+- **bridge**：P2-2 sandbox 黑名单补 9 项；P2-3 orchestrate 会话 TTL + 完整 uuid；P2-4 solidify 落盘前审查；P2-5 交互 atom prompt 转义 C#；P2-7 前端 HTML 转义 + traceback 只进日志；P2-8 prompt_bridge 改结构化 messages + 异常泛化（附带向后兼容改 `llm_client.py`/`streaming.py` 的 messages 参数）；P2-16 LLM 客户端单例 + `to_thread`；P2-18 slot_engine 连接关闭 + LIKE 转义；P2-26 `SolidifiedTool` 字段过滤；P2-27 ws_relay 校验 JSON-RPC id；P2-28 重试模型选择重构；P2-29 `use_skills` 改参数传入消除单例竞态。
+- **pipeline**：P2-17 httpx 客户端可关闭；P2-19 审核失败存 NULL 不给满分；P2-20 metadata None 保护；P2-21 embedding 退避重试 + 空文本回退；P2-22 rglob 改一次性字典索引；P2-23 403 熔断；P2-24 schema 探测精确异常 + FileNotFound；P2-25 LIKE 转义 ESCAPE；P2-47 notebook 脚本去删 hooks/去 `git add -A`；P2-48/49 测试说明 + skipif。
+- **C#**：P2-6 删除加确认 + 显式回滚；P2-9 DeleteWarning 去冗余 + Error 不自动放行；P2-30 TCP 循环读完整帧；P2-31 恢复端口读配置。
+- **基础设施**：P2-41 Docker 非 root + HEALTHCHECK；P2-42 compose 绑 `127.0.0.1:7860`；P2-43 停止追踪 184MB 旧库（`data/legacy_db/` 等，`--cached` + gitignore）；P2-44 requirements 版本锁定（server 全锁，pipeline 4 个未装包保留下限）；P2-45 `.dockerignore` 补 node_modules/大数据目录；P2-46 Dockerfile 去 SQLite/ChromaDB 烘焙（改依赖 volume）。
+
+### P3 —— 低（已完成 / 部分标注人工）
+- **已完成**：P3-1 后端地址硬编码 4 处抽 `INTERNAL_API_BASE`；P3-2 SDK 路径改 env；P3-3 `_load_dotenv` 三份合并到 `config/`；P3-4 init_packages.sh 相对路径；P3-6~P3-14 死代码/未用 import/弃用 API/history 上限/日志滚动清理；P3-18 空 catch 加日志；P3-19 atom_registry 双花括号 bug 修正；P3-20 URL encodeURIComponent；P3-21 `[DONE]` break 层级；P3-22 受控组件 state；P3-23 npm 冗余依赖清理 + tailwind 移 devDeps；P3-25 key 掩码；P3-26 compose 去 version + mem_limit；P3-27 Dockerfile purge build-essential；P3-28 pipeline 其余低危一批。
+- **标注需人工完成（未强行改）**：
+  - **P3-15**（79 处 `FilteredElementCollector` 未 Dispose）：核查后无「明确安全」子集——多为内联表达式或变量实为 `IEnumerable`（非 IDisposable），逐处包 `using` 会编译失败或错误释放。保留待人工逐点评估。
+  - **P3-16**（JSON-RPC 三方法复用 `CommandExecutor`）：重构风险高易破坏协议，建议人工重构。
+  - **P3-17**（`.First()` 改「让用户选择」）：本轮仅做崩溃防护（`CreateLineElementEventHandler.cs` 空层 null 检查）；完整用户选择改造需 JSON-RPC 协议配合，建议人工完成。
+  - **P3-24**（`SkillsTab`/`BridgeTab` 巨型组件拆分）：纯重构无法自动测试，建议人工完成。
+
+### 第二轮验证
+- Python：全部改动模块 `ast.parse` 通过；`import server.main` + 全部 bridge/intent/prompt/pipeline 关键模块导入 OK（含交叉编辑的 `streaming.py`/`llm_client.py`）。
+- 前端：`npm run build`（tsc -b + vite build）通过，产物无 AdSense。
+- C#：`commandset` + `plugin` 两项目 `dotnet build` 通过（0 引入错误；仅既有 warning）。
+
+### 遗留提醒
+- `pipeline/demo_*.py`（6 个）本就是未跟踪的本地 WIP，P3-2/P3-3/P3-28 的改动已写入磁盘但**保持未跟踪状态**（未纳入提交），符合其原始状态。
+- P2-8 的结构化 messages 依赖 `llm_client.py`/`streaming.py` 的新增可选 `messages` 参数（向后兼容，不影响既有调用）。
+- Docker 非 root：volume 挂载的 data 目录需对 uid 1000 可写，否则日志库写入失败（已在 Dockerfile 注释标注）。
+- P3-23 把 tailwind 移入 devDependencies：若用 `npm install --omit=dev` 构建镜像会缺构建插件；当前 Dockerfile 用 `npm ci`（含 devDeps）不受影响。
+
+---
+
 ## 四、上线前检查清单
 1. [ ] 服务器环境设置 `ADMIN_PASSWORD`（强随机），确认 admin 页可登录。
 2. [ ] 轮换 OpenRouter 密钥并清理 git 历史中的旧管理员密码。

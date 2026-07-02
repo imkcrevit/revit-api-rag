@@ -111,16 +111,18 @@ export default function SkillsTab() {
   const handleToggle = async (id: string, enabled: boolean) => {
     const skill = skills.find(s => s.id === id)
     if (skill?.readonly) return
-    await fetch(`/api/skills/${id}`, {
+    const resp = await fetch(`/api/skills/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
     })
+    if (!resp.ok) { alert(`Failed to update skill (${resp.status})`); return }
     setSkills(prev => prev.map(s => s.id === id ? { ...s, enabled } : s))
   }
 
   const handleDeleteSkill = async (id: string) => {
-    await fetch(`/api/skills/${id}`, { method: 'DELETE' })
+    const resp = await fetch(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (!resp.ok) { alert(`Failed to delete skill (${resp.status})`); return }
     setSkills(prev => prev.filter(s => s.id !== id))
     setViewSkill(null)
   }
@@ -274,7 +276,7 @@ function SkillsView({ skills, loading, onToggle, onView, onAdd, onImport, onRefr
     }
 
     try {
-      await fetch('/api/skills', {
+      const resp = await fetch('/api/skills', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -287,7 +289,8 @@ function SkillsView({ skills, loading, onToggle, onView, onAdd, onImport, onRefr
           content,
         }),
       })
-      onRefresh()
+      if (!resp.ok) alert(`Failed to upload skill (${resp.status})`)
+      else onRefresh()
     } catch { /* ignore */ }
 
     if (fileRef.current) fileRef.current.value = ''

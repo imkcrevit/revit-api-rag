@@ -153,7 +153,7 @@ print(f"\n[2] API Key  ({key_env})")
 if not api_key:
     print(f"  {ERR} Not set — add {key_env}=sk-... to .env or environment variables")
     sys.exit(1)
-print(f"  Key prefix  : {api_key[:8]}...{api_key[-4:]}")
+print(f"  Key         : len={len(api_key)}, ...{api_key[-4:]}")
 
 client = _client(proxy_url if proxy_ok else None)
 key_valid = check_openrouter_key(client, api_key)

@@ -59,15 +59,52 @@ namespace RevitMCPCommandSet.Services
                 // 如果有可删除的元素，则执行删除
                 if (elementIdsToDelete.Count > 0)
                 {
+                    // 破坏性操作前弹窗确认，展示删除数量与涉及类别
+                    // Confirm before this destructive operation; show count and categories.
+                    var categoryNames = new HashSet<string>();
+                    foreach (var eid in elementIdsToDelete)
+                    {
+                        string catName = doc.GetElement(eid)?.Category?.Name;
+                        if (!string.IsNullOrEmpty(catName))
+                            categoryNames.Add(catName);
+                    }
+                    string catSummary = categoryNames.Count > 0
+                        ? string.Join(", ", categoryNames)
+                        : "未知类别 / unknown";
+
+                    TaskDialogResult confirm = TaskDialog.Show(
+                        "确认删除 / Confirm Delete",
+                        $"即将删除 {elementIdsToDelete.Count} 个元素。\n涉及类别：{catSummary}\n此操作不可撤销，是否继续？\n\n" +
+                        $"About to delete {elementIdsToDelete.Count} element(s).\nCategories: {catSummary}\nThis cannot be undone. Continue?",
+                        TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
+                        TaskDialogResult.No);
+
+                    if (confirm != TaskDialogResult.Yes)
+                    {
+                        IsSuccess = false;
+                        return;
+                    }
+
                     using (var transaction = new Transaction(doc, "Delete Elements"))
                     {
-                        transaction.Start();
+                        try
+                        {
+                            transaction.Start();
 
-                        // 批量删除元素
-                        ICollection<ElementId> deletedIds = doc.Delete(elementIdsToDelete);
-                        DeletedCount = deletedIds.Count;
+                            // 批量删除元素
+                            ICollection<ElementId> deletedIds = doc.Delete(elementIdsToDelete);
+                            DeletedCount = deletedIds.Count;
 
-                        transaction.Commit();
+                            transaction.Commit();
+                        }
+                        catch
+                        {
+                            // 异常时显式回滚，避免事务处于未结束状态
+                            // Roll back explicitly on error so the transaction is not left open.
+                            if (transaction.HasStarted() && !transaction.HasEnded())
+                                transaction.RollBack();
+                            throw;
+                        }
                     }
                     IsSuccess = true;
                 }

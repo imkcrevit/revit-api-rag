@@ -5,12 +5,14 @@
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -39,6 +41,17 @@ class InteractionLogStore:
         self._db_path = db_path or _get_db_path()
         self._lock = threading.Lock()
         self._init_db()
+        self._purge_old(retention_days=90)
+
+    def _purge_old(self, retention_days: int = 90):
+        """Best-effort cleanup of logs older than retention_days (called at startup)."""
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            deleted = self.delete_before(cutoff.strftime("%Y-%m-%d %H:%M:%S"))
+            if deleted:
+                logger.info("Purged %d interaction log(s) older than %d days", deleted, retention_days)
+        except Exception as e:
+            logger.warning("Log retention purge failed: %s", e)
 
     def _get_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path, timeout=10)
@@ -46,7 +59,7 @@ class InteractionLogStore:
         return conn
 
     def _init_db(self):
-        with self._get_conn() as conn:
+        with contextlib.closing(self._get_conn()) as conn, conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS interaction_logs (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,10 +102,15 @@ class InteractionLogStore:
         status: str = "ok",
     ):
         """Insert one interaction log record (thread-safe)."""
-        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        # Bound stored text size to avoid unbounded row growth
+        if user_input is not None:
+            user_input = user_input[:10000]
+        if assistant_output is not None:
+            assistant_output = assistant_output[:10000]
         with self._lock:
             try:
-                with self._get_conn() as conn:
+                with contextlib.closing(self._get_conn()) as conn, conn:
                     conn.execute(
                         """INSERT INTO interaction_logs
                            (timestamp, module, session_id, client_ip, user_agent,
@@ -143,7 +161,7 @@ class InteractionLogStore:
 
         where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
-        with self._get_conn() as conn:
+        with contextlib.closing(self._get_conn()) as conn:
             total = conn.execute(
                 f"SELECT COUNT(*) FROM interaction_logs{where_sql}", params
             ).fetchone()[0]
@@ -158,7 +176,7 @@ class InteractionLogStore:
 
     def stats(self) -> dict:
         """Aggregate stats: per-module counts, recent IPs, daily volume."""
-        with self._get_conn() as conn:
+        with contextlib.closing(self._get_conn()) as conn:
             # Per-module counts
             module_rows = conn.execute(
                 "SELECT module, COUNT(*) as count FROM interaction_logs GROUP BY module ORDER BY count DESC"
@@ -201,7 +219,7 @@ class InteractionLogStore:
     def delete_before(self, date_str: str) -> int:
         """Delete logs before a given date. Returns count deleted."""
         with self._lock:
-            with self._get_conn() as conn:
+            with contextlib.closing(self._get_conn()) as conn, conn:
                 cursor = conn.execute(
                     "DELETE FROM interaction_logs WHERE timestamp < ?", (date_str,)
                 )
@@ -217,17 +235,25 @@ def get_log_store() -> InteractionLogStore:
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
+# Direct-connection IPs allowed to set X-Forwarded-For / X-Real-IP.
+# Only when the immediate peer is a trusted reverse proxy do we honour the
+# forwarded headers; otherwise XFF is attacker-controlled and must be ignored.
+_TRUSTED_PROXIES = {"127.0.0.1", "::1"}
+
+
 def get_client_ip(request) -> str:
-    """Extract client IP from request, respecting reverse proxy headers."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip
-    if request.client:
-        return request.client.host
-    return "unknown"
+    """Extract client IP, trusting proxy headers only from a known reverse proxy."""
+    peer = request.client.host if request.client else None
+
+    if peer in _TRUSTED_PROXIES:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip
+
+    return peer or "unknown"
 
 
 async def log_and_stream(
@@ -267,7 +293,9 @@ async def log_and_stream(
     finally:
         duration_ms = int((time.time() - start) * 1000)
         output = "".join(tokens)
-        store.log(
+        # Offload the synchronous SQLite write off the event loop
+        await asyncio.to_thread(
+            store.log,
             module=module,
             session_id=session_id,
             client_ip=client_ip,

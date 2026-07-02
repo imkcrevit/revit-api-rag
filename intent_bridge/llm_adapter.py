@@ -174,109 +174,105 @@ class LLMAdapter:
     # -------------------------------------------------------------------
 
     def complete(self, prompt: str, temperature: float = 0.1) -> str:
-        """Synchronous completion with primary → fallback → retry."""
-        models = [self._primary, self._fallback]
+        """Synchronous completion: try each model in order, retrying transient errors.
+
+        Iterates [primary, fallback] explicitly. A fallback-worthy HTTP status
+        moves on to the next model immediately; timeouts/exceptions retry the
+        same model up to max_retries before moving on. (P2-28)
+        """
+        url = f"{self._base_url}/chat/completions"
         last_error: str | Exception = ""
 
-        for attempt in range(self._max_retries + 1):
-            model_cfg = models[0] if attempt < self._max_retries else models[-1]
-            payload = self._build_payload(model_cfg, prompt, temperature)
-            url = f"{self._base_url}/chat/completions"
-            start = time.time()
+        for model_cfg in (self._primary, self._fallback):
+            for attempt in range(self._max_retries + 1):
+                payload = self._build_payload(model_cfg, prompt, temperature)
+                start = time.time()
+                try:
+                    client = self._get_sync_client()
+                    resp = client.post(url, json=payload, headers=self._headers())
+                    duration_ms = (time.time() - start) * 1000
 
-            try:
-                client = self._get_sync_client()
-                resp = client.post(url, json=payload, headers=self._headers())
-                duration_ms = (time.time() - start) * 1000
+                    if self._should_fallback(resp.status_code):
+                        logger.warning(
+                            "Model %s returned %d, moving to next model",
+                            model_cfg["model"], resp.status_code,
+                        )
+                        last_error = f"HTTP {resp.status_code}"
+                        break  # next model
 
-                if self._should_fallback(resp.status_code) and model_cfg is models[0]:
-                    logger.warning("Primary %s returned %d, switching to fallback", model_cfg["model"], resp.status_code)
-                    models[0], models[-1] = models[-1], models[0]
-                    last_error = f"HTTP {resp.status_code}"
-                    continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                    self._log_call(model_cfg["model"], len(prompt), len(content), duration_ms, True)
+                    return content
 
-                resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                self._log_call(model_cfg["model"], len(prompt), len(content), duration_ms, True)
-                return content
+                except httpx.TimeoutException as e:
+                    duration_ms = (time.time() - start) * 1000
+                    err_msg = f"Timeout after {duration_ms:.0f}ms"
+                    self._log_call(model_cfg["model"], len(prompt), 0, duration_ms, False, err_msg)
+                    last_error = e
+                    continue  # retry same model
 
-            except httpx.TimeoutException as e:
-                duration_ms = (time.time() - start) * 1000
-                err_msg = f"Timeout after {duration_ms:.0f}ms"
-                self._log_call(model_cfg["model"], len(prompt), 0, duration_ms, False, err_msg)
-                last_error = e
-                # Timeout → try fallback model (might be faster)
-                if model_cfg is models[0] and len(models) > 1:
-                    models[0], models[-1] = models[-1], models[0]
-                continue
+                except Exception as e:
+                    duration_ms = (time.time() - start) * 1000
+                    self._log_call(model_cfg["model"], len(prompt), 0, duration_ms, False, str(e))
+                    last_error = e
+                    continue  # retry same model
 
-            except Exception as e:
-                duration_ms = (time.time() - start) * 1000
-                self._log_call(model_cfg["model"], len(prompt), 0, duration_ms, False, str(e))
-                last_error = e
-                if model_cfg is models[0] and len(models) > 1:
-                    models[0], models[-1] = models[-1], models[0]
-                continue
-
-        raise RuntimeError(f"LLM call failed after {self._max_retries + 1} attempts: {last_error}")
+        raise RuntimeError(f"LLM call failed for all models: {last_error}")
 
     # -------------------------------------------------------------------
     # Async complete
     # -------------------------------------------------------------------
 
     async def complete_async(self, prompt: str, temperature: float = 0.1) -> str:
-        """Async completion with primary → fallback → retry."""
-        models = [self._primary, self._fallback]
+        """Async completion: try each model in order, retrying transient errors.
+
+        Explicit [primary, fallback] iteration; fallback-worthy status advances
+        to the next model, timeouts/exceptions retry the same model. (P2-28)
+        """
+        url = f"{self._base_url}/chat/completions"
         last_error: str | Exception = ""
 
-        for attempt in range(self._max_retries + 1):
-            model_cfg = models[0] if attempt < self._max_retries else models[-1]
-            payload = self._build_payload(model_cfg, prompt, temperature)
-            url = f"{self._base_url}/chat/completions"
-            start = time.time()
+        for model_cfg in (self._primary, self._fallback):
+            for attempt in range(self._max_retries + 1):
+                payload = self._build_payload(model_cfg, prompt, temperature)
+                start = time.time()
+                try:
+                    client = self._get_async_client()
+                    resp = await client.post(url, json=payload, headers=self._headers())
+                    duration_ms = (time.time() - start) * 1000
 
-            try:
-                client = self._get_async_client()
-                resp = await client.post(url, json=payload, headers=self._headers())
-                duration_ms = (time.time() - start) * 1000
+                    if self._should_fallback(resp.status_code):
+                        body_preview = resp.text[:300] if resp.text else "(empty)"
+                        logger.warning(
+                            "Model %s returned %d (attempt %d/%d): %s",
+                            model_cfg["model"], resp.status_code, attempt + 1,
+                            self._max_retries + 1, body_preview,
+                        )
+                        last_error = f"HTTP {resp.status_code}: {body_preview}"
+                        break  # next model
 
-                if self._should_fallback(resp.status_code):
-                    body_preview = resp.text[:300] if resp.text else "(empty)"
-                    logger.warning(
-                        "Model %s returned %d (attempt %d/%d): %s",
-                        model_cfg["model"], resp.status_code, attempt + 1,
-                        self._max_retries + 1, body_preview,
-                    )
-                    if model_cfg is models[0] and len(models) > 1:
-                        models[0], models[-1] = models[-1], models[0]
-                    last_error = f"HTTP {resp.status_code}: {body_preview}"
-                    continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                    self._log_call(model_cfg["model"], len(prompt), len(content), duration_ms, True)
+                    return content
 
-                resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                self._log_call(model_cfg["model"], len(prompt), len(content), duration_ms, True)
-                return content
+                except httpx.TimeoutException as e:
+                    duration_ms = (time.time() - start) * 1000
+                    err_msg = f"Timeout after {duration_ms:.0f}ms"
+                    self._log_call(model_cfg["model"], len(prompt), 0, duration_ms, False, err_msg)
+                    last_error = e
+                    continue  # retry same model
 
-            except httpx.TimeoutException as e:
-                duration_ms = (time.time() - start) * 1000
-                err_msg = f"Timeout after {duration_ms:.0f}ms"
-                self._log_call(model_cfg["model"], len(prompt), 0, duration_ms, False, err_msg)
-                last_error = e
-                if model_cfg is models[0] and len(models) > 1:
-                    models[0], models[-1] = models[-1], models[0]
-                continue
+                except Exception as e:
+                    duration_ms = (time.time() - start) * 1000
+                    self._log_call(model_cfg["model"], len(prompt), 0, duration_ms, False, str(e))
+                    last_error = e
+                    continue  # retry same model
 
-            except Exception as e:
-                duration_ms = (time.time() - start) * 1000
-                self._log_call(model_cfg["model"], len(prompt), 0, duration_ms, False, str(e))
-                last_error = e
-                if model_cfg is models[0] and len(models) > 1:
-                    models[0], models[-1] = models[-1], models[0]
-                continue
-
-        raise RuntimeError(f"LLM async call failed after {self._max_retries + 1} attempts: {last_error}")
+        raise RuntimeError(f"LLM async call failed for all models: {last_error}")
 
     # -------------------------------------------------------------------
     # Async stream

@@ -1,19 +1,20 @@
-version: "3.8"
-
 services:
   revit-api-rag:
     build: .
     container_name: revit-rag
     ports:
-      - "7860:7860"
+      # Bind to loopback only; nginx/Cloudflare reverse-proxies to it.
+      - "127.0.0.1:7860:7860"
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - DATA_DIR=/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data/sqlite:/app/data/sqlite
       - ./data/chromadb:/app/data/chromadb
+    mem_limit: 2g
     restart: unless-stopped
 
   homepage:

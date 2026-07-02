@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 
 import httpx
 import gradio as gr
@@ -22,7 +23,7 @@ _MAX_OPTIONS = 8
 
 
 def _api_base() -> str:
-    return "http://127.0.0.1:7860"
+    return os.getenv("INTERNAL_API_BASE", "http://127.0.0.1:7860")
 
 
 # ---------------------------------------------------------------------------

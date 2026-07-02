@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=8000)
     session_id: str | None = None
     show_full: bool = Field(default=False, description="Show full plugin code instead of brief mode")
 
@@ -19,7 +19,7 @@ class SearchRequest(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, max_length=200)
     model: str | None = None
 
 

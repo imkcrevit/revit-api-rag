@@ -15,7 +15,7 @@ import re
 import yaml
 from datetime import datetime
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 
 TOOLS_DIR = Path(__file__).parent / "tools"
@@ -47,6 +47,10 @@ class SolidifiedTool:
     preconditions: list[str] = field(default_factory=list)   # when this tool can be used
     applies_when: list[str] = field(default_factory=list)    # trigger phrases
     not_for: list[str] = field(default_factory=list)         # explicitly excluded scenarios
+
+
+# Now that SolidifiedTool exists, capture its field names for safe loading (P2-26)
+KNOWN_FIELDS = {f.name for f in fields(SolidifiedTool)}
 
 
 class ToolStore:
@@ -110,20 +114,29 @@ class ToolStore:
         return tool
 
     def load(self, name: str) -> SolidifiedTool | None:
-        """Load a tool by name."""
+        """Load a tool by name.
+
+        Filters YAML to only known fields and swallows malformed files so a
+        stale/corrupt tool definition can't crash the caller. (P2-26)
+        """
         path = self._tool_path(name)
         if not path.exists():
             return None
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        return SolidifiedTool(**data)
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            filtered = {k: data[k] for k in KNOWN_FIELDS if k in data}
+            return SolidifiedTool(**filtered)
+        except Exception:
+            return None
 
     def list_tools(self) -> list[SolidifiedTool]:
         """List all solidified tools."""
         tools = []
         for p in sorted(self.tools_dir.glob("*.yaml")):
             try:
-                data = yaml.safe_load(p.read_text(encoding="utf-8"))
-                tools.append(SolidifiedTool(**data))
+                data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+                filtered = {k: data[k] for k in KNOWN_FIELDS if k in data}
+                tools.append(SolidifiedTool(**filtered))
             except Exception:
                 continue
         return tools

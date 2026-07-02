@@ -420,7 +420,9 @@ def save_to_sqlite(api_data: list[dict], db_path: str, batch_size: int = 500):
     except ImportError:
         _tqdm = None  # type: ignore[assignment]
 
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    _db_dir = os.path.dirname(db_path)
+    if _db_dir:  # 相对文件名（无目录部分）时 dirname 为空，makedirs("") 会抛错
+        os.makedirs(_db_dir, exist_ok=True)
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()

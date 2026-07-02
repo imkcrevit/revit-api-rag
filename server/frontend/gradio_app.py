@@ -90,11 +90,6 @@ def create_gradio_app() -> gr.Blocks:
     default_model = _get_default_model()
     has_sys_key = _has_system_key()
 
-    # Use graptolite icon as Gradio favicon
-    from pathlib import Path
-    _favicon = Path(__file__).resolve().parent.parent.parent / "images" / "graptolite-icon.svg"
-    favicon_path = str(_favicon) if _favicon.is_file() else None
-
     with gr.Blocks(title="Revit API Assistant", fill_height=True) as app:
         # State
         session_id = gr.State(lambda: uuid.uuid4().hex)
@@ -229,7 +224,7 @@ def create_gradio_app() -> gr.Blocks:
 
             # Update status indicator
             if api_key.strip():
-                masked = api_key[:5] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+                masked = "***" + api_key[-4:] if len(api_key) > 8 else "***"
                 return f"*Using custom key: `{masked}`*"
             elif has_sys_key:
                 return "*Using system API key*"

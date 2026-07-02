@@ -29,6 +29,24 @@ def load_config(config_path: str = None) -> dict:
     return config
 
 
+def load_dotenv(root: str | Path | None = None) -> None:
+    """手动读取项目根目录的 .env（项目未装 python-dotenv），把键值注入 os.environ。
+
+    已存在的环境变量不覆盖（os.environ.setdefault）。多个 demo 脚本共用此实现。
+    """
+    if root is None:
+        root = Path(__file__).resolve().parent.parent
+    env = Path(root) / ".env"
+    if not env.exists():
+        return
+    for line in env.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
 def get_api_key(env_name: str) -> str:
     """从环境变量获取 API Key"""
     key = os.getenv(env_name)

@@ -243,3 +243,9 @@ h/
 *.code-workspace
 .claude/settings.local.json
 images/
+
+# Large legacy data / notebooks (kept locally, excluded from VCS to avoid bloat)
+data/legacy_db/
+legacy/*.ipynb
+legacy/full_api.txt
+legacy/deepseek_tokenizer_v3/

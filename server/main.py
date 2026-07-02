@@ -105,10 +105,42 @@ def create_app() -> FastAPI:
     async def health():
         return {"status": "ok"}
 
-    # Mount React SPA at / (primary frontend)
-    import os
+    # Warm the retriever off the event loop so the first real request doesn't
+    # pay the cold-start cost (P2-15).
+    @fastapi_app.on_event("startup")
+    async def _warm_retriever():
+        import asyncio
+        from server.app.deps import get_retriever
+        try:
+            await asyncio.to_thread(get_retriever)
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger(__name__).warning("Retriever warm-up failed: %s", e)
+
     from pathlib import Path
     react_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+    # Gradio is optional and disabled by default; the React UI is primary.
+    # When enabled it must be mounted BEFORE the React SPA catch-all route,
+    # otherwise the catch-all shadows /app (P2-38). favicon_path is omitted
+    # because mount_gradio_app ignores it when path != "/" (avoids the startup
+    # UserWarning, P3-8).
+    enable_gradio = (
+        os.getenv("ENABLE_GRADIO", "").lower() in {"1", "true", "yes"}
+        or bool(server_cfg.get("enable_gradio", False))
+    )
+    if enable_gradio:
+        try:
+            import gradio as gr
+            from server.frontend.gradio_app import create_gradio_app
+            gradio_app = create_gradio_app()
+            fastapi_app = gr.mount_gradio_app(fastapi_app, gradio_app, path="/app")
+            print("Gradio frontend mounted at /app")
+        except ImportError:
+            print("Gradio not installed — /app not available")
+    else:
+        print("Gradio disabled — React frontend is primary")
+
+    # Mount React SPA at / (primary frontend) — catch-all registered last
     if react_dist.is_dir():
         from fastapi.staticfiles import StaticFiles
         from fastapi.responses import FileResponse
@@ -135,29 +167,6 @@ def create_app() -> FastAPI:
         print(f"React frontend mounted at / (from {react_dist})")
     else:
         print(f"React frontend not found at {react_dist} — / not available")
-
-    # Gradio is intentionally disabled by default. The React UI is the primary,
-    # flexible frontend for dynamic parameters and thinking-chain display.
-    enable_gradio = (
-        os.getenv("ENABLE_GRADIO", "").lower() in {"1", "true", "yes"}
-        or bool(server_cfg.get("enable_gradio", False))
-    )
-    if enable_gradio:
-        try:
-            import gradio as gr
-            from pathlib import Path as _Path
-            from server.frontend.gradio_app import create_gradio_app
-            gradio_app = create_gradio_app()
-            _favicon = _Path(__file__).resolve().parent.parent / "images" / "graptolite-icon.svg"
-            fastapi_app = gr.mount_gradio_app(
-                fastapi_app, gradio_app, path="/app",
-                favicon_path=str(_favicon) if _favicon.is_file() else None,
-            )
-            print("Gradio frontend mounted at /app")
-        except ImportError:
-            print("Gradio not installed — /app not available")
-    else:
-        print("Gradio disabled — React frontend is primary")
 
     return fastapi_app
 

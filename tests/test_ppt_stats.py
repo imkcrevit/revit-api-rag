@@ -9,12 +9,19 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 API_DB = ROOT / "data" / "sqlite" / "revit_api.db"
 SDK_DB = ROOT / "data" / "sqlite" / "revit_sdk.db"
 CONFIG = ROOT / "config" / "config.yaml"
+
+# 依赖真实构建的数据库，缺失时跳过（保证 CI 可重复、不误报失败）
+pytestmark = pytest.mark.skipif(
+    not (API_DB.exists() and SDK_DB.exists() and CONFIG.exists()),
+    reason="requires built data/sqlite/revit_api.db & revit_sdk.db",
+)
 
 # ── 大分类规则 ─────────────────────────────────────────────────────
 # namespace → group，按前缀匹配，顺序敏感（先匹配的优先）

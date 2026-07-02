@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../types/api'
+import { tokenStream } from '../../api/client'
 import { useSettingsStore } from '../../store'
 import { getErrorMessage, isAbortError } from '../../utils/errors'
 
@@ -85,6 +86,9 @@ export default function PromptBridgeTab() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Abort in-flight stream on unmount
+  useEffect(() => () => { abortRef.current?.abort() }, [])
+
   const send = useCallback(async (text?: string) => {
     const msg = (text ?? input).trim()
     if (!msg || streaming) return
@@ -96,44 +100,22 @@ export default function PromptBridgeTab() {
     abortRef.current = abort
 
     try {
-      const resp = await fetch('/api/prompt-bridge/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, session_id: sessionId }),
-        signal: abort.signal,
-      })
-      if (!resp.ok) throw new Error(`Error ${resp.status}`)
-      const reader = resp.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
       let content = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop()!
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) continue
-          if (!line.startsWith('data: ')) continue
-          const dataStr = line.slice(6)
-          if (dataStr.trim() === '[DONE]') break
-          try {
-            const token = JSON.parse(dataStr)
-            content += token
-            setMessages(prev => {
-              const copy = [...prev]
-              if (copy.length && copy[copy.length - 1].role === 'assistant') {
-                copy[copy.length - 1] = { role: 'assistant', content }
-              } else {
-                copy.push({ role: 'assistant', content })
-              }
-              return copy
-            })
-          } catch { /* skip */ }
-        }
+      for await (const token of tokenStream(
+        '/api/prompt-bridge/chat',
+        { message: msg, session_id: sessionId },
+        abort.signal,
+      )) {
+        content += token
+        setMessages(prev => {
+          const copy = [...prev]
+          if (copy.length && copy[copy.length - 1].role === 'assistant') {
+            copy[copy.length - 1] = { role: 'assistant', content }
+          } else {
+            copy.push({ role: 'assistant', content })
+          }
+          return copy
+        })
       }
 
       if (!content) {

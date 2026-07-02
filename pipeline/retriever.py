@@ -18,6 +18,7 @@ Public API:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -25,6 +26,11 @@ from typing import Any
 
 import chromadb
 from prompts import load_prompt
+
+
+def _escape_like(s: str) -> str:
+    """转义 LIKE 通配符 % 和 _（配合 ESCAPE '\\' 使用），\\ 自身也需转义。"""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 @dataclass
@@ -140,13 +146,17 @@ class RAGRetriever:
 
     def _detect_sdk_schema(self) -> bool:
         """Check if sdk_db uses the new sdk_info table."""
+        if not os.path.exists(self._sdk_db):
+            raise FileNotFoundError(f"SDK DB not found: {self._sdk_db}")
+        conn = sqlite3.connect(self._sdk_db)
         try:
-            conn = sqlite3.connect(self._sdk_db)
             conn.execute("SELECT id FROM sdk_info LIMIT 1")
-            conn.close()
             return True
-        except Exception:
+        except sqlite3.OperationalError:
+            # 表不存在/schema 不匹配 → 走 legacy schema
             return False
+        finally:
+            conn.close()
 
     def _get_reranker(self):
         """Lazy-init reranker from config."""
@@ -500,13 +510,10 @@ class RAGRetriever:
             # Stem verbs first
             stemmed = self._VERB_STEMS.get(token, token)
 
-            # Skip stop words (check both original and stemmed)
+            # Skip stop words only when BOTH the original token and its stem are
+            # stop words (so verb forms like "gets"→"get" that are also action
+            # stems can survive if the stem is meaningful elsewhere).
             if token in self._STOP_WORDS and stemmed in self._STOP_WORDS:
-                continue
-
-            # If original was a stop word but stem is not (e.g. "gets"→"get" is
-            # stop, but we keep it only if it's also an action verb stem)
-            if stemmed in self._STOP_WORDS and token in self._STOP_WORDS:
                 continue
 
             if stemmed in seen:
@@ -552,9 +559,9 @@ class RAGRetriever:
         all_conditions = []
         all_params = []
         for token in tokens:
-            like = f"%{token}%"
+            like = f"%{_escape_like(token)}%"
             all_conditions.append(
-                "(LOWER(name) LIKE ? OR LOWER(full_id) LIKE ?)"
+                "(LOWER(name) LIKE ? ESCAPE '\\' OR LOWER(full_id) LIKE ? ESCAPE '\\')"
             )
             all_params.extend([like, like])
         all_where = " AND ".join(all_conditions)
@@ -569,9 +576,9 @@ class RAGRetriever:
         any_conditions = []
         any_params = []
         for token in tokens:
-            like = f"%{token}%"
+            like = f"%{_escape_like(token)}%"
             any_conditions.append(
-                "(LOWER(name) LIKE ? OR LOWER(full_id) LIKE ? OR LOWER(summary) LIKE ?)"
+                "(LOWER(name) LIKE ? ESCAPE '\\' OR LOWER(full_id) LIKE ? ESCAPE '\\' OR LOWER(summary) LIKE ? ESCAPE '\\')"
             )
             any_params.extend([like, like, like])
         any_where = " OR ".join(any_conditions)

@@ -46,11 +46,10 @@ intent_router = APIRouter(prefix="/api/v1/intent", tags=["Intent Bridge"])
 # ---------------------------------------------------------------------------
 
 class IntentSessionStore:
-    def __init__(self, timeout_seconds: int = 600, max_turns: int = 10):
+    def __init__(self, timeout_seconds: int = 600):
         self._sessions: dict[str, SessionState] = {}
         self._lock = asyncio.Lock()
         self._timeout = timeout_seconds
-        self._max_turns = max_turns
 
     async def create(self) -> SessionState:
         async with self._lock:
@@ -92,18 +91,16 @@ def _get_orchestrator() -> ConversationOrchestrator:
 @intent_router.post("/parse")
 async def parse_intent(req: ParseRequest, skills: bool = True):
     orchestrator = _get_orchestrator()
-    # Allow per-request skill toggle for A/B testing
-    original = orchestrator._use_skills
-    orchestrator._use_skills = skills
     session = SessionState()
     try:
-        response = await orchestrator.process_turn(req.user_input, session)
+        # Per-request skill toggle passed explicitly — no shared-state mutation (P2-29)
+        response = await orchestrator.process_turn(
+            req.user_input, session, use_skills=skills,
+        )
         return response.model_dump()
     except RuntimeError as e:
         logger.error("Parse failed: %s", e)
         raise HTTPException(status_code=504, detail=f"LLM call failed: {e}")
-    finally:
-        orchestrator._use_skills = original
 
 
 @intent_router.post("/session")

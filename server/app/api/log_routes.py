@@ -1,7 +1,7 @@
 """
 日志查询路由 — 读取交互日志、统计摘要
 
-所有端点需要管理员密码验证（Header: X-Admin-Token 或 Query: token）
+所有端点需要管理员密码验证（Header: X-Admin-Token）
 
 - GET  /api/logs       — 查询日志（支持筛选）
 - GET  /api/logs/stats — 聚合统计
@@ -27,14 +27,13 @@ def _get_admin_password() -> str:
 
 async def verify_admin(
     x_admin_token: str | None = Header(None),
-    token: str | None = Query(None),
 ):
     """Dependency: reject request if admin password doesn't match."""
     password = _get_admin_password()
     if not password:
         raise HTTPException(503, "Admin password not configured")
 
-    provided = x_admin_token or token or ""
+    provided = x_admin_token or ""
     if not provided or not hmac.compare_digest(provided, password):
         raise HTTPException(403, "Unauthorized")
 
@@ -42,13 +41,12 @@ async def verify_admin(
 @log_router.get("/verify")
 async def verify_token(
     x_admin_token: str | None = Header(None),
-    token: str | None = Query(None),
 ):
     """Check if the provided admin token is valid."""
     password = _get_admin_password()
     if not password:
         return JSONResponse(status_code=503, content={"valid": False})
-    provided = x_admin_token or token or ""
+    provided = x_admin_token or ""
     valid = bool(provided) and hmac.compare_digest(provided, password)
     if not valid:
         return JSONResponse(status_code=403, content={"valid": False})

@@ -29,6 +29,7 @@ _DEFAULT_TIMEOUT = 120.0
 _RETRYABLE_STATUS = frozenset({403, 408, 409, 429, 500, 502, 503, 504, 529})
 _MAX_RETRIES = 4          # 总尝试次数 = 1 + 重试
 _BACKOFF_BASE = 1.5       # 退避基数（秒）：1.5, 3.0, 4.5 …
+_MAX_403_RETRIES = 1      # 403 视为持久权限/额度问题：最多重试 1 次即熔断，不浪费退避时间
 
 
 class LLMClient:
@@ -57,13 +58,32 @@ class LLMClient:
         else:
             self._client = httpx.Client(timeout=timeout)
 
+    def close(self) -> None:
+        """关闭底层 httpx.Client，释放连接池。"""
+        try:
+            self._client.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "LLMClient":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     def _build_request(
         self,
         prompt: str,
         system_prompt: str | None = None,
         stream: bool = False,
+        messages: list[dict] | None = None,
     ) -> tuple[str, dict, dict]:
-        """Build request URL, headers, and payload."""
+        """Build request URL, headers, and payload.
+
+        If `messages` is provided it is used verbatim as the chat messages array
+        (structured multi-turn: system + per-role turns). Otherwise a simple
+        [system, user] pair is built from `system_prompt` / `prompt`.
+        """
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -71,17 +91,21 @@ class LLMClient:
             "X-Title": "revit-api-rag",
         }
 
-        _system = system_prompt or (
-            "You are an expert assistant for summarizing Revit SDK C# sample code. "
-            "Always respond in English."
-        )
+        if messages is not None:
+            msgs = messages
+        else:
+            _system = system_prompt or (
+                "You are an expert assistant for summarizing Revit SDK C# sample code. "
+                "Always respond in English."
+            )
+            msgs = [
+                {"role": "system", "content": _system},
+                {"role": "user", "content": prompt},
+            ]
 
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": _system},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": msgs,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "stream": stream,
@@ -101,10 +125,23 @@ class LLMClient:
 
         resp = None
         last_err: Exception | None = None
+        consecutive_403 = 0
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 resp = self._client.post(url, headers=headers, json=payload)
                 if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
+                    # 403 熔断：连续 403 超过 _MAX_403_RETRIES 次就停止重试，
+                    # 避免把持久的权限/额度错误当成瞬时错误反复退避。
+                    if resp.status_code == 403:
+                        consecutive_403 += 1
+                        if consecutive_403 > _MAX_403_RETRIES:
+                            _llm_log.warning(
+                                f"[generate_text] {self.model} HTTP 403 x{consecutive_403} "
+                                "— circuit break, no more retries."
+                            )
+                            resp.raise_for_status()
+                    else:
+                        consecutive_403 = 0
                     body = resp.text[:300].replace("\n", " ")
                     wait = _BACKOFF_BASE * attempt
                     _llm_log.warning(
@@ -162,13 +199,17 @@ class LLMClient:
         return str(content)
 
     def generate_stream(
-        self, prompt: str, system_prompt: str | None = None
+        self, prompt: str, system_prompt: str | None = None,
+        messages: list[dict] | None = None,
     ) -> Generator[str, None, None]:
         """
         流式生成文本，逐 token yield。
         使用 SSE (Server-Sent Events) 协议解析。
+        `messages` 可传入结构化多轮消息（system + 逐条 role）。
         """
-        url, headers, payload = self._build_request(prompt, system_prompt, stream=True)
+        url, headers, payload = self._build_request(
+            prompt, system_prompt, stream=True, messages=messages,
+        )
 
         with self._client.stream("POST", url, headers=headers, json=payload) as resp:
             resp.raise_for_status()

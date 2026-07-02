@@ -22,14 +22,8 @@ from server.app.text2revit.actions import RevitAction, get_actions_summary
 from server.app.api.streaming import format_sse_event, format_sse_done
 
 
-# Session keys for Text2Revit state
-_T2R_STATE = "_t2r_state"      # "IDLE" | "COLLECTING" | "COMPLETE"
-_T2R_ACTION = "_t2r_action"    # current RevitAction.intent
-_T2R_PARAMS = "_t2r_params"    # collected params dict
-
-
 def _get_state(session: Session) -> dict[str, Any]:
-    """Read Text2Revit state from session, using a dict on last_search_results."""
+    """Read Text2Revit state from session, stored as a dict on session._t2r."""
     if not hasattr(session, "_t2r"):
         session._t2r = {
             "state": "IDLE",

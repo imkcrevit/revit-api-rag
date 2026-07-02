@@ -17,6 +17,7 @@ import re
 from pipeline.retriever import RAGRetriever
 from pipeline.llm_client import LLMClient, create_llm_client
 from prompts import load_prompt
+from mcp_bridge import sandbox
 
 _log = logging.getLogger("mcp_bridge.code_generator")
 
@@ -376,7 +377,16 @@ Return ONLY valid JSON (no markdown fences):
             for p in parameters:
                 p.setdefault("type", "string")
                 p.setdefault("description", f"Parameter: {p.get('name', '?')}")
-            return param_code, parameters
         except (json.JSONDecodeError, KeyError):
             # Fallback: return original code with regex-extracted params
-            return code, self.extract_parameters(code)
+            param_code, parameters = code, self.extract_parameters(code)
+
+        # Security review before this template can be solidified / persisted (P2-4).
+        # The sandbox is only defense-in-depth, but an unsafe template must never
+        # be handed back for solidification.
+        safe, warnings = sandbox.review(param_code)
+        if not safe:
+            raise ValueError(
+                "Parameterized template failed security review: " + "; ".join(warnings)
+            )
+        return param_code, parameters

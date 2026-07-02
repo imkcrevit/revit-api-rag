@@ -45,6 +45,17 @@ pipeline/cleaner/
 !prompts/*.md
 !data/skills/*.md
 
+# Frontend build artifacts (rebuilt in stage 1)
+frontend/node_modules
+frontend/dist
+
+# Large data / non-runtime dirs (keep build context small)
+data/legacy_db/
+h/
+scratch/
+images/
+tests/
+
 # Misc
 .env
 .claude/

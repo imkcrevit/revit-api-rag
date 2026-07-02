@@ -35,6 +35,9 @@ class Session:
 
     def add_message(self, role: str, content: str):
         self.history.append({"role": role, "content": content})
+        # Cap history growth — keep only the most recent 40 messages.
+        if len(self.history) > 40:
+            self.history = self.history[-40:]
         self.touch()
 
 

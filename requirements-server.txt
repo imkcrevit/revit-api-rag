@@ -1,27 +1,31 @@
 # ============================================================
 # Server 阶段依赖（GCP 服务器安装）
 # pip install -r requirements-server.txt
+# 版本已锁定到当前验证可运行的版本（构建可复现）。
+# 升级时请手动改 == 版本并重新验证。
 # ============================================================
 
 # Web 框架
-fastapi>=0.100
-uvicorn[standard]>=0.22
-pydantic>=2.0
-sse-starlette>=1.0
+fastapi==0.135.1
+uvicorn[standard]==0.41.0
+pydantic==2.12.5
+sse-starlette==3.3.2
+
+# 前端 Gradio 为可选依赖（服务端默认禁用、懒加载）；如需启用 ENABLE_GRADIO 请单独安装 gradio。
 
 # LLM API
-google-genai>=1.0
-openai>=1.0
+google-genai==1.66.0
+openai==2.26.0
 
 # Rerank API
-cohere>=5.0
+cohere==5.20.7
 
 # 向量数据库
-chromadb>=1.0
+chromadb==1.5.5
 
 # 基础工具
-numpy>=1.26
-pyyaml>=6.0
-python-dotenv>=1.0
-httpx>=0.28
-jinja2>=3.1
+numpy==2.4.3
+pyyaml==6.0.3
+python-dotenv==1.2.2
+httpx==0.28.1
+jinja2==3.1.6

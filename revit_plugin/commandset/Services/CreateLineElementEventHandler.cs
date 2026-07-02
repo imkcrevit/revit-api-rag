@@ -322,8 +322,16 @@ namespace RevitMCPCommandSet.Services
             CompoundStructure cs = newWallType.GetCompoundStructure();
             if (cs != null)
             {
-                // 获取原始层的材料ID
-                ElementId materialId = cs.GetLayers().First().MaterialId;
+                // 获取原始层的材料ID（原 .First() 在无层时会抛 InvalidOperationException，改为空值防护）
+                // Get the source layer's material id; guard against an empty layer list
+                // (the previous .First() would throw InvalidOperationException).
+                // 注：完整的「多候选让用户选择」改造需协议配合，此处仅做崩溃防护。
+                var firstLayer = cs.GetLayers().FirstOrDefault();
+                if (firstLayer == null)
+                    throw new InvalidOperationException(
+                        "基础墙类型的复合结构不含任何构造层，无法获取材料，无法复制墙类型。\n" +
+                        "The base wall type has no compound-structure layers; cannot read a material to duplicate the wall type.");
+                ElementId materialId = firstLayer.MaterialId;
 
                 // 创建新的单层结构
                 CompoundStructureLayer newLayer = new CompoundStructureLayer(

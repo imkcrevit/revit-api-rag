@@ -32,7 +32,7 @@ namespace revit_mcp_plugin.UI
                         var s = config.Settings;
 
                         PortTextBox.Text = s.Port.ToString();
-                        WsUrlTextBox.Text = s.WsUrl ?? "wss://graptolite.ai/api/v1/bridge/ws";
+                        WsUrlTextBox.Text = s.WsUrl ?? ServiceSettings.DefaultWsUrl;
 
                         // Set slot combo
                         int slotIndex;
@@ -47,9 +47,12 @@ namespace revit_mcp_plugin.UI
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Use defaults
+                // 读取配置失败时回退到默认值，并记录原因便于排障
+                // Fall back to defaults on read failure, logging the cause for diagnostics.
+                System.Diagnostics.Trace.WriteLine(
+                    $"加载连接设置失败，使用默认值 / Failed to load connection settings, using defaults: {ex.Message}");
             }
         }
 

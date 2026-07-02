@@ -1,32 +1,34 @@
 # ============================================================
 # Pipeline 阶段依赖（Colab 中安装）
 # pip install -r requirements-pipeline.txt
+# 已安装并验证的包锁定到 == 版本；未在当前环境安装的包保留 >=
+# 下限（Colab 侧首次安装后建议 pip freeze 补齐 == 版本）。
 # ============================================================
 
 # 数据解析
-beautifulsoup4>=4.12
-lxml
+beautifulsoup4==4.14.3
+lxml>=5.0            # 未在当前环境安装，保留下限；Colab 安装后请锁定 ==
 
 # Embedding API
-google-genai>=1.0
-openai>=1.0
+google-genai==1.66.0
+openai==2.26.0
 
 # 向量数据库
-chromadb>=1.0
+chromadb==1.5.5
 
 # 数据处理
-pandas>=2.0
-numpy>=1.26
-tqdm>=4.60
-pyyaml>=6.0
-python-dotenv>=1.0
+pandas==3.0.1
+numpy==2.4.3
+tqdm==4.67.3
+pyyaml==6.0.3
+python-dotenv==1.2.2
 
 # LLM API（数据清洗阶段调用）
-httpx>=0.28
+httpx==0.28.1
 
 # 代码解析（SDK 清洗用 - P2）
-tree-sitter>=0.20
-tree-sitter-c-sharp>=0.20
+tree-sitter>=0.20            # 未在当前环境安装，保留下限
+tree-sitter-c-sharp>=0.20    # 未在当前环境安装，保留下限
 
 # RTF 解析（SDK ReadMe 转文本）
-striprtf>=0.0.26
+striprtf>=0.0.26             # 未在当前环境安装，保留下限

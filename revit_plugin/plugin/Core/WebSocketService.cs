@@ -151,9 +151,11 @@ namespace revit_mcp_plugin.Core
                 if (_workerThread != null && _workerThread.IsAlive)
                     _workerThread.Join(2000);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Swallow shutdown errors
+                // 停止过程中的异常仅记录，不影响关闭流程
+                // Log shutdown errors instead of swallowing them silently.
+                _logger.Warning("WebSocket 停止时异常 / Error stopping WebSocket service: {0}", ex.Message);
             }
 
             _logger.Info("WebSocket service stopped");

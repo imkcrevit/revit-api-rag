@@ -37,14 +37,22 @@ namespace revit_mcp_plugin.Core
                 if (SocketService.Instance.IsRunning)
                     SocketService.Instance.Stop();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine(
+                    $"停止 SocketService 失败 / Failed to stop SocketService: {ex.Message}");
+            }
 
             try
             {
                 if (WebSocketService.Instance.IsRunning)
                     WebSocketService.Instance.Stop();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine(
+                    $"停止 WebSocketService 失败 / Failed to stop WebSocketService: {ex.Message}");
+            }
 
             return Result.Succeeded;
         }

@@ -9,10 +9,15 @@ Flow:
 from __future__ import annotations
 
 import logging
+import os
 import httpx
 import gradio as gr
 
 logger = logging.getLogger("mcp_bridge.api_explorer")
+
+
+def _api_base() -> str:
+    return os.getenv("INTERNAL_API_BASE", "http://127.0.0.1:7860")
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +71,7 @@ def _generate_example(api_name: str, api_context: str, hint: str = "") -> dict:
     """Code generation uses HTTP (long-running LLM call, won't deadlock)."""
     try:
         resp = httpx.post(
-            "http://127.0.0.1:7860/api/v1/bridge/api-codegen",
+            f"{_api_base()}/api/v1/bridge/api-codegen",
             json={"api_name": api_name,
                   "api_context": api_context,
                   "user_hint": hint},

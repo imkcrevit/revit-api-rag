@@ -18,6 +18,7 @@ API 数据质量检查 Agent（两阶段，多线程）
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import threading
@@ -133,11 +134,29 @@ def _html_to_clean_text(raw_html: str, max_chars: int = 2000) -> str:
     return text.strip()[:max_chars]
 
 
-def _load_html_excerpt(item: dict[str, Any], html_dir: str | None, max_chars: int = 2000) -> str:
+def _build_name_index(html_dir: str | None) -> dict[str, Path]:
+    """一次性建立 {文件名小写: 路径} 索引，避免每条记录都对整个目录 rglob。"""
+    index: dict[str, Path] = {}
+    if not html_dir:
+        return index
+    root = Path(html_dir)
+    if not root.is_dir():
+        return index
+    for p in root.rglob("*.htm*"):
+        index.setdefault(p.name.lower(), p)
+    return index
+
+
+def _load_html_excerpt(
+    item: dict[str, Any],
+    html_dir: str | None,
+    max_chars: int = 2000,
+    name_index: dict[str, Path] | None = None,
+) -> str:
     """
     读取原始 HTML 并返回干净的纯文本（已去除标签和控制字符）。
     优先使用 parse_single_html 存储的 _source_file 精确路径；
-    若无则按 full_id / name 做名称猜测。
+    若无则按 full_id / name 在预建的 name_index 里做 O(1) 字典查找。
     """
     raw = ""
 
@@ -151,8 +170,8 @@ def _load_html_excerpt(item: dict[str, Any], html_dir: str | None, max_chars: in
             except Exception:
                 pass
 
-    # 回退：按名称在 html_dir 里搜索
-    if not raw and html_dir:
+    # 回退：按名称在预建索引里查找（O(1)，取代 O(N×M) 的 rglob）
+    if not raw and name_index:
         full_id = item.get("full_id") or ""
         name    = item.get("name") or ""
 
@@ -168,12 +187,11 @@ def _load_html_excerpt(item: dict[str, Any], html_dir: str | None, max_chars: in
             candidates.append(safe_name + ".htm")
             candidates.append(safe_name + ".html")
 
-        root = Path(html_dir)
         for cand in candidates:
-            found = list(root.rglob(cand))
+            found = name_index.get(cand.lower())
             if found:
                 try:
-                    raw = found[0].read_text(encoding="utf-8", errors="ignore")
+                    raw = found.read_text(encoding="utf-8", errors="ignore")
                     break
                 except Exception:
                     pass
@@ -197,11 +215,12 @@ def _stage1_audit(
     item: dict[str, Any],
     gemini: LLMClient,
     html_dir: str | None = None,
+    name_index: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     """
     用 Gemini 对单条记录做结构化质量审核（含原始 HTML 对比）。
     """
-    html_excerpt = _load_html_excerpt(item, html_dir, max_chars=2500)
+    html_excerpt = _load_html_excerpt(item, html_dir, max_chars=2500, name_index=name_index)
 
     if html_excerpt:
         # 压缩连续空白，减少 token
@@ -240,10 +259,11 @@ def _stage1_audit(
     except Exception as e:
         err_str = str(e)
         is_403 = "403" in err_str
-        # 403 means the record was NOT audited — treat as unknown quality
-        # and send to Stage-2 so Claude can attempt a rewrite.
+        # 审核失败 = 记录未被审核，绝不能伪装成满分 1.0。
+        # 403：视为可重试，给 0.0 送 Stage-2 让 Claude 尝试重写；
+        # 其它失败：返回 None 哨兵 → 落库 quality_score 存 NULL（未知质量）。
         return {
-            "quality_score": 0.0 if is_403 else 1.0,
+            "quality_score": 0.0 if is_403 else None,
             "issues": [f"audit_failed: {err_str}"],
             "needs_rewrite": is_403,
             "_html_found": bool(html_excerpt),
@@ -263,11 +283,12 @@ def _stage2_rewrite(
     issues: list[str],
     html_dir: str | None,
     claude: LLMClient,
+    name_index: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     """
     用 Claude Sonnet 对低质量条目做字段级修复（以原始 HTML 为依据）。
     """
-    html_excerpt = _load_html_excerpt(item, html_dir, max_chars=5000) or "(HTML not available)"
+    html_excerpt = _load_html_excerpt(item, html_dir, max_chars=5000, name_index=name_index) or "(HTML not available)"
 
     prompt = _STAGE2_PROMPT_TPL.format(
         issues="\n".join(f"- {i}" for i in issues) if issues else "- general quality below threshold",
@@ -304,6 +325,7 @@ def _stage1_worker(
     item: dict[str, Any],
     gemini: LLMClient,
     html_dir: str | None,
+    name_index: dict[str, Path] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     单条记录的 Stage-1 处理（在线程中执行）：pre-check + Gemini 审核。
@@ -315,7 +337,7 @@ def _stage1_worker(
     info    = item.get("info") or ""
     params  = item.get("parameters") or ""
 
-    html_preview = _load_html_excerpt(item, html_dir, max_chars=500)
+    html_preview = _load_html_excerpt(item, html_dir, max_chars=500, name_index=name_index)
 
     if not summary.strip() and not info.strip() and html_preview:
         pre_issues.append("summary and info are both empty (HTML has content)")
@@ -335,17 +357,18 @@ def _stage1_worker(
     pre_score = round(1.0 - pre_deduction, 2) if pre_issues else None
 
     # ── Gemini audit ────────────────────────────────────────
-    audit = _stage1_audit(item, gemini, html_dir=html_dir)
-    score         = audit.get("quality_score", 1.0)
+    audit = _stage1_audit(item, gemini, html_dir=html_dir, name_index=name_index)
+    score         = audit.get("quality_score", 1.0)  # 可能为 None（审核失败哨兵）
     issues        = list(audit.get("issues", []))
     needs_rewrite = audit.get("needs_rewrite", False)
     html_found    = audit.get("_html_found", False)
 
     if pre_score is not None:
-        if pre_score < score:
+        # score 为 None（审核失败）时，用 pre-check 的确定性扣分作为得分
+        if score is None or pre_score < score:
             score = pre_score
         issues = pre_issues + [iss for iss in issues if iss not in pre_issues]
-        if score < _QUALITY_THRESHOLD:
+        if score is not None and score < _QUALITY_THRESHOLD:
             needs_rewrite = True
 
     new_item = dict(item)
@@ -364,6 +387,7 @@ def _stage2_worker(
     html_dir: str | None,
     claude: LLMClient,
     failed_403_log: list[str] | None = None,
+    name_index: dict[str, Path] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     单条记录的 Stage-2 处理（在线程中执行）：Claude 重写。
@@ -371,7 +395,7 @@ def _stage2_worker(
     若 Claude 也返回 403，将 source_file / full_id 追加到 failed_403_log。
     """
     issues = item.get("_quality_issues", [])
-    patch = _stage2_rewrite(item, issues, html_dir, claude)
+    patch = _stage2_rewrite(item, issues, html_dir, claude, name_index=name_index)
 
     new_item = dict(item)
     if patch and "_rewrite_error" not in patch:
@@ -431,6 +455,12 @@ def run_quality_agent(
           "_html_found"     : bool
     """
     import datetime
+
+    # 深拷贝，避免下方降级重试（proxy.enabled=False）就地改动调用方传入的 config
+    config = copy.deepcopy(config)
+
+    # 一次性建立 HTML 文件名索引，供所有线程复用（取代 per-record rglob）
+    name_index = _build_name_index(html_dir)
 
     # ── Pre-flight: connectivity check ──────────────────────────
     if verbose:
@@ -499,7 +529,7 @@ def run_quality_agent(
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {}
         for i, item in enumerate(api_data):
-            fut = executor.submit(_stage1_worker, i, item, gemini, html_dir)
+            fut = executor.submit(_stage1_worker, i, item, gemini, html_dir, name_index)
             fut.add_done_callback(_on_stage1_done)
             futures[fut] = i
 
@@ -571,7 +601,7 @@ def run_quality_agent(
             futures = {}
             for orig_idx, item in stage2_candidates:
                 fut = executor.submit(
-                    _stage2_worker, orig_idx, item, html_dir, claude, failed_403_log
+                    _stage2_worker, orig_idx, item, html_dir, claude, failed_403_log, name_index
                 )
                 fut.add_done_callback(_on_stage2_done)
                 futures[fut] = orig_idx
@@ -591,7 +621,9 @@ def run_quality_agent(
 
     # ── Write 403 log file ───────────────────────────────────────
     if failed_403_log:
-        log_path = failed_403_log_path or "quality_agent_403_failed.log"
+        # 默认写到项目根目录固定路径，避免依赖不确定的当前工作目录
+        _default_403_log = Path(__file__).resolve().parents[2] / "quality_agent_403_failed.log"
+        log_path = failed_403_log_path or str(_default_403_log)
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"# Stage-2 403 failures logged at {ts}\n")
@@ -609,7 +641,10 @@ def run_quality_agent(
                 rewritten_count += 1
 
     if verbose:
-        low_quality = sum(1 for r in results if r and r["_quality_score"] < _QUALITY_THRESHOLD)
+        low_quality = sum(
+            1 for r in results
+            if r and r["_quality_score"] is not None and r["_quality_score"] < _QUALITY_THRESHOLD
+        )
         html_total  = sum(1 for r in results if r and r.get("_html_found"))
         stage2_403_count = len(failed_403_log)
         print(f"\n{'='*60}")

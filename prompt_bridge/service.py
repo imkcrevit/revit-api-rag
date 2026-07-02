@@ -140,26 +140,17 @@ async def process_prompt_bridge_chat(
     session.touch()
     session.add_message("user", message)
 
-    # 构建包含历史的 prompt
-    history_parts: list[str] = []
-    for msg in session.history[:-1]:  # 不包含刚加的这条
-        role_label = "设计师" if msg["role"] == "user" else "PromptBridge"
-        history_parts.append(f"{role_label}：{msg['content']}")
-
-    if history_parts:
-        full_prompt = (
-            "以下是之前的对话历史：\n\n"
-            + "\n\n".join(history_parts)
-            + f"\n\n设计师：{message}"
-        )
-    else:
-        full_prompt = message
+    # 构建结构化 messages：system + 逐条 role（不再把历史平铺成一条 user 文本）
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    for msg in session.history:  # 已包含刚加的这条 user 消息
+        role = "assistant" if msg["role"] == "assistant" else "user"
+        messages.append({"role": role, "content": msg["content"]})
 
     try:
         client = _create_client()
         content_parts: list[str] = []
 
-        async for token in async_stream_tokens(client, full_prompt, system_prompt):
+        async for token in async_stream_tokens(client, messages=messages):
             content_parts.append(token)
             yield format_sse_event("token", token)
 
@@ -170,8 +161,9 @@ async def process_prompt_bridge_chat(
         yield format_sse_done()
 
     except Exception as e:
-        logger.error(f"PromptBridge chat error: {e}")
-        error_msg = f"抱歉，出现了错误：{str(e)}"
+        # 详细错误只进日志；前端返回泛化提示，避免泄露内部信息 (P2-8)
+        logger.error(f"PromptBridge chat error: {e}", exc_info=True)
+        error_msg = "抱歉，服务暂时出现问题，请稍后重试。"
         yield format_sse_event("token", error_msg)
         session.add_message("assistant", error_msg)
         yield format_sse_done()

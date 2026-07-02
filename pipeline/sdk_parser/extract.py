@@ -462,11 +462,15 @@ def generate_golden_code(
         """Clean and parse LLM JSON response."""
         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text.strip(), flags=re.IGNORECASE)
         raw_text = re.sub(r"\s*```$", "", raw_text.strip())
-        # Fix common JSON issues: unescaped newlines/tabs inside string values
-        raw_text = re.sub(r'(?<=: ")(.*?)(?="[,}])',
-                          lambda m: m.group(0).replace('\n', '\\n').replace('\t', '\\t'),
-                          raw_text, flags=re.DOTALL)
-        result = json.loads(raw_text)
+        # 优先直接解析（合法 JSON 无需正则修补，避免脆弱正则误伤内容）；
+        # 失败再退回修复未转义的换行/制表符后重试。
+        try:
+            result = json.loads(raw_text)
+        except json.JSONDecodeError:
+            fixed = re.sub(r'(?<=: ")(.*?)(?="[,}])',
+                           lambda m: m.group(0).replace('\n', '\\n').replace('\t', '\\t'),
+                           raw_text, flags=re.DOTALL)
+            result = json.loads(fixed)
         summary = (result.get("summary") or "").strip()
         content = (result.get("content") or "").strip()
         if not summary or not content:

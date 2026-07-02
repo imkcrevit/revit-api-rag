@@ -129,12 +129,32 @@ class SlotManager:
                 "id": request_id,
             }
 
-            future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
-            conn._pending = future
-
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + timeout
+            resp: dict | None = None
+            raw = ""
             try:
                 await conn.ws.send_text(json.dumps(payload, ensure_ascii=False))
-                raw = await asyncio.wait_for(future, timeout=timeout)
+                # Keep waiting until a response carrying our request_id arrives.
+                # Stray/mismatched messages are skipped rather than mis-attributed. (P2-27)
+                while True:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        return RevitResponse(success=False, error=f"Timeout after {timeout}s")
+                    conn._pending = loop.create_future()
+                    raw = await asyncio.wait_for(conn._pending, timeout=remaining)
+                    try:
+                        parsed = json.loads(raw)
+                    except json.JSONDecodeError:
+                        return RevitResponse(success=False, error="Invalid JSON from Revit", raw=raw)
+                    if parsed.get("id") != request_id:
+                        logger.warning(
+                            f"Slot '{slot_id}' response id mismatch, still waiting: "
+                            f"expected={request_id}, got={parsed.get('id')}"
+                        )
+                        continue
+                    resp = parsed
+                    break
                 conn.request_count += 1
             except asyncio.TimeoutError:
                 return RevitResponse(success=False, error=f"Timeout after {timeout}s")
@@ -142,19 +162,6 @@ class SlotManager:
                 return RevitResponse(success=False, error=str(e))
             finally:
                 conn._pending = None
-
-            # Parse JSON-RPC response
-            try:
-                resp = json.loads(raw)
-            except json.JSONDecodeError:
-                return RevitResponse(success=False, error="Invalid JSON from Revit", raw=raw)
-
-            # Validate response id
-            if resp.get("id") != request_id:
-                logger.warning(
-                    f"Slot '{slot_id}' response id mismatch: "
-                    f"expected={request_id}, got={resp.get('id')}"
-                )
 
             if "error" in resp and resp["error"]:
                 err = resp["error"]

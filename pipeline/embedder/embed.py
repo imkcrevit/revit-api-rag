@@ -5,12 +5,26 @@
 import os
 import json
 import sqlite3
+import time
 from pathlib import Path
 from datetime import datetime
 
 import chromadb
 
 from .providers import create_embedding
+
+
+def _embed_with_retry(embedder, texts: list[str], retries: int = 3, backoff: float = 2.0):
+    """对 embedder.embed_texts 做 3 次退避重试，抵御 OpenRouter/上游瞬时错误。"""
+    last_err: Exception | None = None
+    for attempt in range(retries):
+        try:
+            return embedder.embed_texts(texts)
+        except Exception as e:  # noqa: BLE001 — 网络/上游错误统一退避重试
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(backoff * (attempt + 1))
+    raise last_err  # type: ignore[misc]
 
 
 def _write_meta(output_dir: str, config: dict, record_count: int, source: str):
@@ -89,17 +103,21 @@ def embed_api_data(config: dict, api_db_path: str, chromadb_dir: str, batch_size
                 parts = [p for p in [full_id, name, summary, info] if p]
                 text = " - ".join(parts) if parts else ""
 
+            # 空文本会导致 embedding 报错——回退为 name 或 id
+            if not text.strip():
+                text = name or str(_id)
+
             texts.append(text)
             metadatas.append(
                 {
-                    "name": name,
-                    "full_id": full_id,
-                    "summary": summary,
-                    "info": info,
+                    "name": name or "",
+                    "full_id": full_id or "",
+                    "summary": (summary or "")[:500],
+                    "info": (info or "")[:500],
                 }
             )
 
-        embeddings = embedder.embed_texts(texts)
+        embeddings = _embed_with_retry(embedder, texts)
 
         collection.upsert(
             ids=ids,
@@ -188,6 +206,9 @@ def embed_code_data(config: dict, sdk_db_path: str, chromadb_dir: str, batch_siz
                 mentioned_apis = row[4] or ""
                 # Embedding text = summary only (concise, semantic-rich, minimal tokens)
                 text = summary if summary else (row[3] or "")[:500]
+                # 空文本会导致 embedding 报错——回退为 project 或 id
+                if not text.strip():
+                    text = project or str(row[0])
                 texts.append(text)
                 metadatas.append({
                     "project": project,
@@ -202,10 +223,12 @@ def embed_code_data(config: dict, sdk_db_path: str, chromadb_dir: str, batch_siz
                 file_purpose = row[7] if len(row) > 7 else ""
                 prefix = " | ".join(filter(None, [proj_summary or "", file_purpose or "", desc or ""]))
                 text = f"{prefix}\n{code[:800]}" if prefix else code[:1000]
+                if not text.strip():
+                    text = (row[1] or "") or str(row[0])
                 texts.append(text)
                 metadatas.append({"project": row[1] or "", "filename": row[2] or ""})
 
-        embeddings = embedder.embed_texts(texts)
+        embeddings = _embed_with_retry(embedder, texts)
 
         collection.upsert(
             ids=ids,

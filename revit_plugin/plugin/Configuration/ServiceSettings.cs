@@ -9,6 +9,12 @@ namespace revit_mcp_plugin.Configuration
     public class ServiceSettings
     {
         /// <summary>
+        /// <para>默认 WebSocket 服务器地址（统一常量，避免多处硬编码重复）。</para>
+        /// <para>Default WebSocket server URL (single source of truth to avoid duplication).</para>
+        /// </summary>
+        public const string DefaultWsUrl = "wss://graptolite.ai/api/v1/bridge/ws";
+
+        /// <summary>
         /// <para>日志级别</para>
         /// <para>Log level.</para>
         /// </summary>
@@ -34,7 +40,7 @@ namespace revit_mcp_plugin.Configuration
         /// <para>WebSocket server URL (used when mode = "websocket").</para>
         /// </summary>
         [JsonProperty("wsUrl")]
-        public string WsUrl { get; set; } = "wss://graptolite.ai/api/v1/bridge/ws";
+        public string WsUrl { get; set; } = DefaultWsUrl;
 
         /// <summary>
         /// <para>WebSocket 槽位编号 (1-5)</para>

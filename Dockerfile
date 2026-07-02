@@ -11,14 +11,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps
+# Python deps (server only)
+# build-essential is only needed to compile wheels; purge it in the same layer
+COPY requirements-server.txt .
 RUN apt-get update && \
     apt-get install -y --no-install-recommends build-essential && \
+    pip install --no-cache-dir -r requirements-server.txt && \
+    apt-get purge -y build-essential && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
-
-# Python deps (server only)
-COPY requirements-server.txt .
-RUN pip install --no-cache-dir -r requirements-server.txt
 
 # Copy source code
 COPY config/ config/
@@ -33,8 +33,8 @@ COPY text_studio/ text_studio/
 # Copy built React frontend
 COPY --from=frontend-build /build/dist/ frontend/dist/
 
-# Runtime databases are mounted by docker-compose; do not bake large model data
-# into the image layer.
+# SQLite + ChromaDB are mounted by docker-compose at runtime; do NOT bake large
+# model data into the image layer. Only skills are copied in.
 RUN mkdir -p data/sqlite data/chromadb data/skills
 COPY data/skills/ data/skills/
 
@@ -42,6 +42,15 @@ COPY data/skills/ data/skills/
 ENV PYTHONUNBUFFERED=1
 ENV DATA_DIR=/app/data
 
+# Run as non-root. NOTE: volume-mounted data dirs must be writable by uid 1000
+# (chown host dirs, or set the compose `user:` accordingly) or the log store
+# will fail to write.
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')" || exit 1
 
 CMD ["python", "-m", "server.main"]

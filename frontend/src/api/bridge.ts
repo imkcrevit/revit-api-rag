@@ -48,12 +48,12 @@ export const bridgeApi = {
   listTools: () => apiGet<ToolInfo[]>(`${B}/tools`),
 
   deleteTool: (name: string) =>
-    apiFetch(`${B}/tools/${name}`, { method: 'DELETE' }),
+    apiFetch(`${B}/tools/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
-  getToolDetail: (name: string) => apiGet<ToolInfo & { code_template: string; source_query?: string }>(`${B}/tools/${name}`),
+  getToolDetail: (name: string) => apiGet<ToolInfo & { code_template: string; source_query?: string }>(`${B}/tools/${encodeURIComponent(name)}`),
 
   updateTool: (name: string, payload: ToolUpdatePayload) =>
-    apiFetch<ToolInfo & { code_template: string; source_query?: string }>(`${B}/tools/${name}`, {
+    apiFetch<ToolInfo & { code_template: string; source_query?: string }>(`${B}/tools/${encodeURIComponent(name)}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
@@ -62,11 +62,11 @@ export const bridgeApi = {
     apiPost<{ safe: boolean; warnings: string[] }>(`${B}/review-code`, { code }),
 
   getToolChoices: (name: string) =>
-    apiGet<Record<string, ToolChoiceItem[]>>(`${B}/tools/${name}/choices`),
+    apiGet<Record<string, ToolChoiceItem[]>>(`${B}/tools/${encodeURIComponent(name)}/choices`),
 
   runTool: (name: string, params: Record<string, string>) =>
     apiPost<{ success: boolean; result: unknown; error: string }>(
-      `${B}/tools/${name}/run`, { name, params }),
+      `${B}/tools/${encodeURIComponent(name)}/run`, { name, params }),
 
   triggerSelection: () =>
     apiPost<{ elements: Array<Record<string, unknown>> }>(`${B}/trigger-selection`, {}),

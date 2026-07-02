@@ -1,7 +1,7 @@
 /* Tab D: MCP Bridge — 5-step code generation pipeline + tool library */
 /* graptolite.ai style + tool match flow fix */
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { bridgeApi } from '../../api/bridge'
 import { sseStream } from '../../api/client'
 import { extractThinkingAndCode } from '../../utils/sse'
@@ -235,6 +235,12 @@ export default function BridgeTab() {
   const stopTimer = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current)
     setElapsed(`completed | ${((performance.now() - startTimeRef.current) / 1000).toFixed(1)}s`)
+  }, [])
+
+  // Clean up in-flight stream + timer on unmount
+  useEffect(() => () => {
+    abortRef.current?.abort()
+    if (timerRef.current) clearInterval(timerRef.current)
   }, [])
 
   // --- Init (no auto-connect — user clicks Refresh manually) ---

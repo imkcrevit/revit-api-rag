@@ -82,3 +82,47 @@ export async function* sseStream(
     }
   }
 }
+
+/* Token stream helper — POSTs to an SSE endpoint and yields individual decoded
+   tokens. Terminates cleanly on the `[DONE]` sentinel (fixes inner-loop break
+   bugs) and shares one parser across chat-style callers. */
+export async function* tokenStream(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
+  const resp = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ..._slotHeader() },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!resp.ok) {
+    const raw = await resp.text().catch(() => '')
+    const isHtml = raw.trimStart().startsWith('<')
+    throw new Error(isHtml
+      ? `${resp.status}: Backend unreachable`
+      : `${resp.status}: ${raw.slice(0, 200)}`)
+  }
+  const reader = resp.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop()!
+
+    for (const line of lines) {
+      if (line.startsWith('event: ')) continue
+      if (!line.startsWith('data: ')) continue
+      const dataStr = line.slice(6)
+      if (dataStr.trim() === '[DONE]') return
+      try {
+        yield JSON.parse(dataStr)
+      } catch { /* skip malformed */ }
+    }
+  }
+}

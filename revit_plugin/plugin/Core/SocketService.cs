@@ -84,13 +84,12 @@ namespace revit_mcp_plugin.Core
             _authToken = configManager.Config?.Settings?.Token;
 
 
-            //// 从配置中读取服务端口
-            //// Read the service port from the configuration.
-            //if (configManager.Config.Settings.Port > 0)
-            //{
-            //    _port = configManager.Config.Settings.Port;
-            //}
-            _port = 18080; // 固定端口号 - Hard-wired port number.
+            // 从配置中读取服务端口（缺省仍为字段默认值 18080）
+            // Read the service port from the configuration (defaults to 18080 when unset).
+            if (configManager.Config?.Settings?.Port > 0)
+            {
+                _port = configManager.Config.Settings.Port;
+            }
 
             // 加载命令
             // Load command.
@@ -117,11 +116,12 @@ namespace revit_mcp_plugin.Core
                 {
                     IsBackground = true
                 };
-                _listenerThread.Start();              
+                _listenerThread.Start();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 _isRunning = false;
+                _logger.Error("Socket 服务启动失败 / Failed to start socket service: {0}", ex.Message);
             }
         }
 
@@ -141,9 +141,9 @@ namespace revit_mcp_plugin.Core
                     _listenerThread.Join(1000);
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // log error
+                _logger.Error("Socket 服务停止时异常 / Error stopping socket service: {0}", ex.Message);
             }
         }
 
@@ -164,11 +164,13 @@ namespace revit_mcp_plugin.Core
             }
             catch (SocketException)
             {
-                
+                // 监听器被 Stop() 关闭时的正常退出，仅调试记录
+                // Normal exit when Stop() closes the listener; debug-level only.
+                _logger.Debug("Socket 监听线程结束 / Socket listener thread ended");
             }
-            catch(Exception)
+            catch(Exception ex)
             {
-                // log
+                _logger.Error("Socket 监听循环异常 / Socket listen loop error: {0}", ex.Message);
             }
         }
 
@@ -183,9 +185,12 @@ namespace revit_mcp_plugin.Core
 
                 while (_isRunning && tcpClient.Connected)
                 {
-                    // 读取客户端消息
-                    // Read client messages.
-                    int bytesRead = 0;
+                    // 循环读取并累加到 MemoryStream，直到读完当前完整帧再处理，
+                    // 避免单次 8192B 读取截断超长消息（对齐 WebSocket 端的分片累加）。
+                    // Loop-read into a MemoryStream until the full frame is received before
+                    // processing, so messages larger than the buffer are not truncated
+                    // (mirrors the fragment accumulation on the WebSocket side).
+                    int bytesRead;
 
                     try
                     {
@@ -205,7 +210,32 @@ namespace revit_mcp_plugin.Core
                         break;
                     }
 
-                    string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                    string message;
+                    using (var ms = new MemoryStream())
+                    {
+                        ms.Write(buffer, 0, bytesRead);
+
+                        // 继续读取仍在缓冲区中的剩余分片，直到没有更多数据
+                        // Drain the remaining fragments of the same frame still buffered.
+                        while (stream.DataAvailable)
+                        {
+                            int more;
+                            try
+                            {
+                                more = stream.Read(buffer, 0, buffer.Length);
+                            }
+                            catch (IOException)
+                            {
+                                break;
+                            }
+                            if (more <= 0)
+                                break;
+                            ms.Write(buffer, 0, more);
+                        }
+
+                        message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+                    }
+
                     System.Diagnostics.Trace.WriteLine($"收到消息: {message}\nReceived message: {message}");
 
                     string response = ProcessJsonRPCRequest(message);
@@ -216,9 +246,11 @@ namespace revit_mcp_plugin.Core
                     stream.Write(responseData, 0, responseData.Length);
                 }
             }
-            catch(Exception)
+            catch (Exception ex)
             {
-                // log
+                // 记录客户端通信异常，便于排障（原为静默吞异常）
+                // Log client-communication errors for diagnostics (was silently swallowed).
+                _logger.Error("Socket 客户端通信异常 / Socket client communication error: {0}", ex.Message);
             }
             finally
             {

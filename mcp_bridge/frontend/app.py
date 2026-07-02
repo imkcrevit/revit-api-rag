@@ -9,8 +9,10 @@ Tool Library workflow:
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
+import os
 import re
 import traceback
 import httpx
@@ -20,7 +22,7 @@ logger = logging.getLogger("mcp_bridge.frontend")
 
 
 def _api_base() -> str:
-    return "http://127.0.0.1:7860"
+    return os.getenv("INTERNAL_API_BASE", "http://127.0.0.1:7860")
 
 
 def _bridge_url(path: str) -> str:
@@ -241,26 +243,27 @@ def _step_md(current: int, labels: list[str], status: str = "",
                 f'{i}.{label}</span>'
             )
     bar = ' <span style="color:#d1d5db;font-size:1.1em"> &rarr; </span> '.join(parts)
-    html = f'<div style="font-size:15px;line-height:1.8;padding:4px 0">{bar}</div>'
+    markup = f'<div style="font-size:15px;line-height:1.8;padding:4px 0">{bar}</div>'
 
     # Pipeline log — accumulated stages with scroll
     if pipeline_log:
         log_lines = []
         for idx, msg in enumerate(pipeline_log):
+            safe_msg = html.escape(str(msg))
             is_last = (idx == len(pipeline_log) - 1)
             if is_last:
-                log_lines.append(f'<div class="active">&#9654; {msg}</div>')
+                log_lines.append(f'<div class="active">&#9654; {safe_msg}</div>')
             else:
-                log_lines.append(f'<div class="done">&#10003; {msg}</div>')
-        html += f'<div class="pipeline-log">{"".join(log_lines)}</div>'
+                log_lines.append(f'<div class="done">&#10003; {safe_msg}</div>')
+        markup += f'<div class="pipeline-log">{"".join(log_lines)}</div>'
     elif status:
-        html += (
+        markup += (
             f'<div style="margin-top:6px;padding:8px 12px;'
             f'background:#eff6ff;border-left:3px solid #2563eb;'
             f'border-radius:4px;color:#1e40af;font-size:14px">'
-            f'{status}</div>'
+            f'{html.escape(str(status))}</div>'
         )
-    return html
+    return markup
 
 
 MAIN_STEPS = ["Input", "Select", "Review Code", "Execute", "Solidify"]
@@ -937,10 +940,9 @@ def create_bridge_tab():
                         final_code, thinking_md,
                         sec_text=sec_text, rag=rag, step=3,
                         plog=final_log)
-                except Exception:
-                    err = traceback.format_exc()
-                    logger.error(f"[on_generate] stream error:\n{err}")
-                    yield _reset(2, f"Error: {err[:200]}")
+                except Exception as e:
+                    logger.error(f"[on_generate] stream error:\n{traceback.format_exc()}")
+                    yield _reset(2, f"Error: {type(e).__name__}: {e}")
                 return
 
             # === Interactive: query Revit ===
@@ -1125,10 +1127,9 @@ def create_bridge_tab():
                    # Orchestrator questions + state
                    *orch_dd,
                    orch_data)
-        except Exception:
-            err = traceback.format_exc()
-            logger.error(f"[on_generate] EXCEPTION:\n{err}")
-            yield _reset(1, f"Error: {err[:200]}")
+        except Exception as e:
+            logger.error(f"[on_generate] EXCEPTION:\n{traceback.format_exc()}")
+            yield _reset(1, f"Error: {type(e).__name__}: {e}")
 
     def on_select_host():
         """Trigger Revit selection mode — user clicks a wall/floor in Revit."""
@@ -1314,11 +1315,10 @@ def create_bridge_tab():
             thinking_md = f"**Thinking:**\n\n{final_thinking}" if final_thinking else ""
             yield _out(selections, final_code, thinking_md,
                        sec_text=sec_text, rag=rag, step=3, plog=final_log)
-        except Exception:
-            err = traceback.format_exc()
-            logger.error(f"[on_confirm] EXCEPTION:\n{err}")
-            yield _out({}, "", sec_text=f"Error:\n{err[:200]}",
-                       step=2, status=f"Error: {err[:100]}")
+        except Exception as e:
+            logger.error(f"[on_confirm] EXCEPTION:\n{traceback.format_exc()}")
+            yield _out({}, "", sec_text=f"Error: {type(e).__name__}: {e}",
+                       step=2, status=f"Error: {type(e).__name__}")
 
     def on_execute(code):
         """Generator — yields progress to avoid 'processing' overlay."""

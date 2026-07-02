@@ -492,8 +492,13 @@ class AtomResolver:
         _log.warning(f"[resolve_interactive] No handler for: {base}")
         return []
 
+    @staticmethod
+    def _escape_cs_string(s: str) -> str:
+        """Escape a value before embedding it inside a C# string literal (P2-5)."""
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+
     async def _i_pick_object(self, prompt: str | None) -> list[dict]:
-        msg = prompt or "Please select an element"
+        msg = self._escape_cs_string(prompt or "Please select an element")
         code = (
             'var uidoc = new UIDocument(document);\n'
             'var reference = uidoc.Selection.PickObject(\n'
@@ -510,7 +515,7 @@ class AtomResolver:
         return []
 
     async def _i_pick_point(self, prompt: str | None) -> list[dict]:
-        msg = prompt or "Please click a point"
+        msg = self._escape_cs_string(prompt or "Please click a point")
         code = (
             'var uidoc = new UIDocument(document);\n'
             f'var pt = uidoc.Selection.PickPoint("{msg}");\n'
@@ -525,7 +530,7 @@ class AtomResolver:
         return []
 
     async def _i_pick_edge(self, prompt: str | None) -> list[dict]:
-        msg = prompt or "Please select an edge"
+        msg = self._escape_cs_string(prompt or "Please select an edge")
         code = (
             'var uidoc = new UIDocument(document);\n'
             'var reference = uidoc.Selection.PickObject(\n'
@@ -542,7 +547,7 @@ class AtomResolver:
         return []
 
     async def _i_pick_face(self, prompt: str | None) -> list[dict]:
-        msg = prompt or "Please select a face"
+        msg = self._escape_cs_string(prompt or "Please select a face")
         code = (
             'var uidoc = new UIDocument(document);\n'
             'var reference = uidoc.Selection.PickObject(\n'
@@ -559,17 +564,20 @@ class AtomResolver:
         return []
 
     async def _i_pick_objects(self, prompt: str | None) -> list[dict]:
-        msg = prompt or "Please select elements (press Finish when done)"
+        msg = self._escape_cs_string(prompt or "Please select elements (press Finish when done)")
+        # NOTE: these are plain (non-f) string literals, so braces must be single.
+        # The previous `{{`/`}}` were a copy-paste bug that emitted literal double
+        # braces into the C# source and broke compilation. (P3-19)
         code = (
             'var uidoc = new UIDocument(document);\n'
             'var refs = uidoc.Selection.PickObjects(\n'
             '    Autodesk.Revit.UI.Selection.ObjectType.Element,\n'
             f'    "{msg}");\n'
-            'return refs.Select(r => {{\n'
+            'return refs.Select(r => {\n'
             '    var el = document.GetElement(r);\n'
-            '    return new {{ Id = el.Id.Value, Name = el.Name,\n'
-            '        Category = el.Category != null ? el.Category.Name : "" }};\n'
-            '}}).ToList();'
+            '    return new { Id = el.Id.Value, Name = el.Name,\n'
+            '        Category = el.Category != null ? el.Category.Name : "" };\n'
+            '}).ToList();'
         )
         resp = await self.client.send_code(code)
         if resp.success and resp.result:

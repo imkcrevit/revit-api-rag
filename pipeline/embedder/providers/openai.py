@@ -18,13 +18,27 @@ class OpenAIEmbedding(BaseEmbedding):
         self._dimension = dimension
 
         proxy = get_proxy_url()
-        http_client = httpx.Client(proxy=proxy) if proxy else None
+        self._http_client = httpx.Client(proxy=proxy) if proxy else None
 
         self._client = OpenAI(
             api_key=get_api_key(api_key_env),
             base_url=base_url,
-            http_client=http_client,
+            http_client=self._http_client,
         )
+
+    def close(self) -> None:
+        """关闭底层 httpx.Client（若存在），释放连接池。"""
+        if self._http_client is not None:
+            try:
+                self._http_client.close()
+            except Exception:
+                pass
+
+    def __enter__(self) -> "OpenAIEmbedding":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
 
     @property
     def model_name(self) -> str:

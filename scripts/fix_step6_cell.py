@@ -41,19 +41,18 @@ for name, src, _ in db_files:
     shutil.copy2(src, f'{backup_dir}/{name}')
 print(f'\nBackup saved to: {backup_dir}/')
 
-# ── 3. Git setup (clean hooks for Drive + set identity) ──
-hooks_dir = Path(PROJECT_ROOT) / '.git/hooks'
-for hook in hooks_dir.glob('*'):
-    try: hook.unlink()
-    except: pass
-
+# ── 3. Git setup (disable hooks via -c, set identity) ──
 lock_file = Path(PROJECT_ROOT) / '.git/index.lock'
 if lock_file.exists():
-    lock_file.unlink()
+    try:
+        lock_file.unlink()
+    except OSError:
+        pass
 
 def git(*args):
+    # -c core.hooksPath=/dev/null 一次性禁用钩子，无需删除 .git/hooks 下的文件
     return subprocess.run(
-        ['git', '-C', PROJECT_ROOT] + list(args),
+        ['git', '-C', PROJECT_ROOT, '-c', 'core.hooksPath=/dev/null'] + list(args),
         capture_output=True, text=True
     )
 
@@ -71,19 +70,19 @@ print('Git LFS installed')
 # ── 5. Track .db files with LFS ──
 git('lfs', 'track', '*.db')
 
-# ── 6. Git add (force to override .gitignore) + commit + push ──
-# Add the versioned backup directory
+# ── 6. Git add (explicit targets only, force to override .gitignore) + commit + push ──
+# 只显式 add 目标文件（版本化备份 + LFS 配置），不用 `git add -A` 误提交无关改动
+git('add', '.gitattributes')
 for name, _, _ in db_files:
     git('add', '-f', f'data/sqlite/{VERSION_TAG}/{name}')
 
-# Also add any other changes
-git('add', '-A')
-
-r = git('status')
-print(r.stdout)
-
 r = git('commit', '-m', f'data: save {VERSION_TAG} DB snapshot via LFS')
 print(r.stdout or r.stderr)
+
+# push 前打印待推送的工作区状态，便于排查
+r = git('status', '--porcelain')
+print('git status --porcelain (pre-push):')
+print(r.stdout)
 
 # Push (requires GitHub token set in Colab secrets or SSH key)
 r = git('push', 'origin', 'main')

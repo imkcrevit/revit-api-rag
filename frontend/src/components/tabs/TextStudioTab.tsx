@@ -76,6 +76,9 @@ export default function TextStudioTab() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Abort in-flight stream on unmount
+  useEffect(() => () => { abortRef.current?.abort() }, [])
+
   /* Auto-resize textarea */
   useEffect(() => {
     const el = textareaRef.current
@@ -111,7 +114,7 @@ export default function TextStudioTab() {
           session_id: sessionId,
           source_lang: sourceLang,
           target_lang: targetLang,
-          accept_experimental: true,
+          accept_experimental: accepted,
         }),
         signal: abort.signal,
       })
@@ -134,7 +137,7 @@ export default function TextStudioTab() {
       let buffer = ''
       let content = ''
 
-      while (true) {
+      outer: while (true) {
         const { done, value } = await reader.read()
         if (done) break
         buffer += decoder.decode(value, { stream: true })
@@ -145,7 +148,7 @@ export default function TextStudioTab() {
           if (line.startsWith('event: ')) continue
           if (!line.startsWith('data: ')) continue
           const dataStr = line.slice(6)
-          if (dataStr.trim() === '[DONE]') break
+          if (dataStr.trim() === '[DONE]') break outer
           try {
             const token = JSON.parse(dataStr)
             content += token
@@ -175,7 +178,7 @@ export default function TextStudioTab() {
     } finally {
       setStreaming(false)
     }
-  }, [input, streaming, sessionId, sourceLang, targetLang, fetchStatus])
+  }, [input, streaming, sessionId, sourceLang, targetLang, accepted, fetchStatus])
 
   const handleClear = () => {
     setMessages([])

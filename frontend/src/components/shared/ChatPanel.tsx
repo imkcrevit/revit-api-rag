@@ -26,6 +26,9 @@ export default function ChatPanel({ endpoint, placeholder, showFullOption = fals
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Abort in-flight stream on unmount
+  useEffect(() => () => { abortRef.current?.abort() }, [])
+
   const send = useCallback(async () => {
     const msg = input.trim()
     if (!msg || streaming) return
