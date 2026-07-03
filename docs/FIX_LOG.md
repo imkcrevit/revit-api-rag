@@ -127,6 +127,41 @@
 
 ---
 
+## 六、与上游合并（rebase 到远程 main，Fable 更新，续）
+
+> 推送时发现远程 `main` 已在两轮 Fable 提交之外，被他人推入 **13 个提交**（前端改版、Docker 安全、执行审查门禁、提示词集中化 `prompts/`、Gradio 可选化、编排会话加锁等），与本次修复大量重叠。
+> 处理方式：将两个 Fable 提交 `git rebase` 到最新 `origin/main` 之上（**普通快进推送，无 force-push**），逐个解决 10 处冲突。最终远程 `main` = `cddf385`。
+> 第一个提交（P0/P1）自动合并成功且 **全部 P0 安全修复幸存**（`skip_review` 已删除、category 白名单、参数转义、slot token、solidify 前审查均在，未重新引入 RCE）；冲突集中在第二个提交（P2/P3）。
+
+### 冲突解决决策（10 处）
+| 文件 | 决策 | 说明 |
+|---|---|---|
+| `mcp_bridge/router.py` | 采用 origin 版 | origin 的编排会话实现更完善（`_OrchSessionEntry` + FIFO 锁 + 状态回滚 + TTL 900s + 队列超时），取代我较简单的 P2-3；我的 P0/P1 安全修复已在第一提交合并保留。 |
+| `intent_bridge/slot_engine.py` | 采用 origin 版 | origin 用构造函数级 `self._use_skills` + 新增 `_with_extra_skill_context`，与我 P2-29 的局部参数方案不兼容；origin 已含连接关闭。 |
+| `frontend/src/api/settings.ts` | 采用 origin 版 | origin 的手写 SSE 循环可用；我 P2-37 的 `tokenStream` 去重放弃（helper 仍留在 `client.ts`）。 |
+| `frontend/src/components/bridge/OrchestratorQuestions.tsx` | 采用 origin 版 | origin 已用等价 state map（`pickedLabels`）实现 P3-22，无需我的 `pickDisplay`。 |
+| `frontend/src/api/bridge.ts` | 手动融合 | 保留 origin 新增的 `updateTool`/`reviewCode` + 叠加我的 `encodeURIComponent`（P3-20）。 |
+| `mcp_bridge/code_generator.py` | 手动融合 | 保留两个 import（origin 的 `load_prompt` + 我的 `sandbox`）；P2-4 落盘前审查幸存。 |
+| `Dockerfile` | 手动融合 | origin 的 `COPY prompts/` + mkdir 挂载点 + 我的非 root/HEALTHCHECK/purge build-essential。 |
+| `requirements-server.txt` | 手动融合 | 保留我的 `==` 版本锁定；去掉 gradio（origin 已改为可选懒加载、默认禁用）。 |
+| `server/main.py` | 手动融合 | origin 的可选 Gradio 设计（`ENABLE_GRADIO`、默认禁用、`ImportError` 优雅处理）+ 我的 P2-38 挂载顺序（catch-all 前，防 `/app` 遮蔽）+ P3-8 去 favicon 警告；P2-15 启动预热、P0-10 SPA 路径遍历防护、P1-5 bridge 鉴权占位均保留。 |
+| `frontend/dist/index.html` | 接受删除 | origin 已取消追踪构建产物（现由 `.gitignore` 覆盖）。 |
+
+### 被取代 / 降级的项（非功能丢失，origin 已有等价或更优实现）
+- **P2-3**（orchestrate 会话 TTL）→ 被 origin 的加锁+回滚+TTL 编排取代（更强）。
+- **P2-16**（LLM 客户端单例）→ 随 router.py 采用 origin 版而未带入（origin 有自己的客户端管理）；影响：每请求可能重建客户端，属性能层面，非安全。
+- **P2-29**（`use_skills` 改参数传入消除单例竞态）→ 被 origin 的构造函数级方案取代；origin 的编排锁另行缓解了并发。
+- **P2-37**（前端 SSE 解析去重）→ settings.ts 放弃，`tokenStream` helper 保留在 client.ts 供其他 tab 使用。
+- **P2-18 的 LIKE 转义**（`slot_engine._query_api_by_method`）→ 因 origin 重构该函数未带入。**经评估无需补回**：该查询全程参数化（无注入风险），pattern 来自 Revit API 标识符，字面 `_`/`%` 仍匹配自身、目标文档始终在结果集内，最多微弱宽松、被 `ORDER BY`+`LIMIT 5` 吸收；P2-18 的连接关闭部分 origin 已具备。
+  - 注：另一处 LIKE 转义 **P2-25（`pipeline/retriever.py`，主检索路径）完整保留**（`_escape_like` + `ESCAPE '\'`），面向更自由的用户查询，转义在此更有意义。
+
+### 合并后验证
+- Python：`import server.main` + 全部 bridge/intent/prompt/pipeline 关键模块导入 OK（含 origin 新增 `prompts` 包与 `code_generator` 的双 import）。
+- 前端：`npm run build`（tsc + vite，287 模块）通过。
+- 无残留冲突标记；`origin/main` 快进更新至 `cddf385`。
+
+---
+
 ## 四、上线前检查清单
 1. [ ] 服务器环境设置 `ADMIN_PASSWORD`（强随机），确认 admin 页可登录。
 2. [ ] 轮换 OpenRouter 密钥并清理 git 历史中的旧管理员密码。
