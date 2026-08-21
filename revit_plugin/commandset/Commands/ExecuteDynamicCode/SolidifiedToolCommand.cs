@@ -151,10 +151,9 @@ namespace RevitMCPCommandSet.Commands.ExecuteDynamicCode
                 code = code.Replace($"{{{paramDef.Name}}}", safeValue);
             }
 
-            // Execute via Roslyn (same as send_code_to_revit).
-            // 人工确认弹窗由 ExecuteCodeEventHandler.Execute 在 UI 线程统一展示渲染后代码。
-            // The manual confirmation dialog is shown by ExecuteCodeEventHandler.Execute
-            // on the UI thread, displaying the fully rendered code.
+            // Execute via Roslyn (same as send_code_to_revit). The authenticated remote-code
+            // opt-in and server-side review are the execution boundary; no per-run Revit
+            // confirmation dialog is shown.
             _handler.SetExecutionParameters(code, Array.Empty<object>());
             if (RaiseAndWaitForCompletion(60000))
             {

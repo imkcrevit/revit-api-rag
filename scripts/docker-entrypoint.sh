@@ -23,4 +23,16 @@ while [ "$slot" -le 5 ]; do
     slot=$((slot + 1))
 done
 
+# Bind-mounted RAG data can arrive as root-owned after extraction or container
+# recreation. ChromaDB opens its SQLite files in read/write mode even for
+# retrieval, so make the mounted data writable by the unprivileged app process
+# before dropping privileges. This also fails startup early if the mount itself
+# is read-only instead of surfacing later as an opaque SSE 500.
+for data_dir in /app/data/sqlite /app/data/chromadb; do
+    if [ -d "$data_dir" ]; then
+        chown -R appuser:appuser "$data_dir"
+        chmod -R u+rwX "$data_dir"
+    fi
+done
+
 exec setpriv --reuid=appuser --regid=appuser --init-groups "$@"

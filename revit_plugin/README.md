@@ -106,6 +106,8 @@ wss://graptolite.ai/api/v1/bridge/ws
 `Commands/commandRegistry.json`的`settings.token`；初次只读联调保持
 `allowRemoteCodeExecution: false`。确认槽位、`say_hello`和模型查询通过后，再按需显式开启远程代码执行。
 
+`allowRemoteCodeExecution: true`是安装级执行授权。开启后，动态代码和已注册固化工具直接执行，不再在Revit内逐次显示代码确认弹窗；Slot令牌校验、服务器端安全审查以及固化工具注册确认仍然保留。
+
 浏览器打开`https://graptolite.ai/revit/`，选择`Slot 1`，把同一个令牌粘贴到
 `Slot token`输入框。令牌仅保存在当前标签页的`sessionStorage`中，关闭标签页后清除。
 

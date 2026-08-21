@@ -2,7 +2,7 @@
 
 此包已为`graptolite.ai`远程Bridge预配置。Revit插件主动通过HTTPS/WSS的443端口连接服务器，不需要开放本机的18080端口。
 
-本修正版为WebSocket握手显式发送`User-Agent`，解决Cloudflare对.NET默认握手返回HTTP 403的问题；连接设置页现在显示真实连接或重试状态。
+本修正版为WebSocket握手显式发送`User-Agent`，解决Cloudflare对.NET默认握手返回HTTP 403的问题；连接设置页现在显示真实连接或重试状态。启用远程代码执行后，生成代码与固化工具会直接在Revit事务中执行，不再显示逐次代码确认弹窗。
 
 ## 安装
 
@@ -54,6 +54,8 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 ```
 
 重新启动Revit并再次点击`Revit MCP Switch`。只在专用测试模型中开启该选项，录制完成后建议重新运行不带开关的安装命令恢复关闭状态。
+
+`-EnableRemoteCodeExecution`是明确的安装级授权：启用后不再要求不懂代码的最终用户逐次确认代码内容。Slot令牌、后端安全扫描和插件远程代码开关仍会继续生效。固化工具注册写入本地文件时的确认保持不变。
 
 ## 排障
 

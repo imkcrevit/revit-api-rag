@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$packageRevision = "2026-08-21-wsfix1"
+$packageRevision = "2026-08-21-autoxec1"
 
 if (Get-Process -Name Revit -ErrorAction SilentlyContinue) {
     throw "Close Revit before installing or updating the plugin."

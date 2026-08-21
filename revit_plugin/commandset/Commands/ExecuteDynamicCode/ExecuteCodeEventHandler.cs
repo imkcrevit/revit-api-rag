@@ -47,25 +47,9 @@ namespace RevitMCPCommandSet.Commands.ExecuteDynamicCode
                 var doc = app.ActiveUIDocument.Document;
                 ResultInfo = new ExecutionResultInfo();
 
-                // 人工确认弹窗（在 Revit UI 线程上下文，由 ExternalEvent 触发）
-                // Manual confirmation dialog (runs on the Revit UI thread via ExternalEvent).
-                // 展示待执行代码全文，用户点「否」即取消执行。
-                var codePreview = _generatedCode ?? string.Empty;
-                if (codePreview.Length > 4000)
-                    codePreview = codePreview.Substring(0, 4000) + "\n... (truncated)";
-
-                var confirmDialog = new TaskDialog("确认执行 AI 代码 / Confirm code execution")
-                {
-                    MainInstruction = "即将在当前 Revit 文档中执行以下代码，是否继续？\n" +
-                                      "The following code will be executed in the current Revit document. Continue?",
-                    MainContent = codePreview,
-                    CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
-                    DefaultButton = TaskDialogResult.No
-                };
-                if (confirmDialog.Show() != TaskDialogResult.Yes)
-                {
-                    throw new OperationCanceledException("用户取消了代码执行 / User cancelled code execution");
-                }
+                // Execute without a per-run Revit confirmation dialog. Remote dynamic code
+                // still requires an authenticated slot, allowRemoteCodeExecution=true, and
+                // the server-side sandbox review before it reaches this handler.
 
                 using (var transaction = new Transaction(doc, "执行AI代码"))
                 {
