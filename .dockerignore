@@ -58,4 +58,5 @@ tests/
 
 # Misc
 .env
+.secrets/
 .claude/

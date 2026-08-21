@@ -29,6 +29,7 @@ COPY mcp_bridge/ mcp_bridge/
 COPY intent_bridge/ intent_bridge/
 COPY prompt_bridge/ prompt_bridge/
 COPY text_studio/ text_studio/
+COPY scripts/docker-entrypoint.sh /usr/local/bin/revit-api-rag-entrypoint
 
 # Copy built React frontend
 COPY --from=frontend-build /build/dist/ frontend/dist/
@@ -42,15 +43,18 @@ COPY data/skills/ data/skills/
 ENV PYTHONUNBUFFERED=1
 ENV DATA_DIR=/app/data
 
-# Run as non-root. NOTE: volume-mounted data dirs must be writable by uid 1000
-# (chown host dirs, or set the compose `user:` accordingly) or the log store
-# will fail to write.
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-USER appuser
+# The entrypoint starts as root only long enough to copy root-owned Docker
+# secrets, then launches the application as uid/gid 1000. Volume-mounted data
+# dirs must therefore remain writable by uid 1000.
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app && \
+    chmod 0555 /usr/local/bin/revit-api-rag-entrypoint
 
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')" || exit 1
 
+USER root
+ENTRYPOINT ["/usr/local/bin/revit-api-rag-entrypoint"]
 CMD ["python", "-m", "server.main"]

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from contextvars import ContextVar
@@ -21,6 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.requests import HTTPConnection
 
 from mcp_bridge.tool_store import ToolStore
 from mcp_bridge.interactive import IntentClassifier, RevitQueryExecutor
@@ -30,11 +32,57 @@ _slot_log = logging.getLogger("mcp_bridge.slot")
 
 # Category values interpolated into C# must match this exact shape (P0-4)
 _CATEGORY_RE = re.compile(r"OST_[A-Za-z]+")
+_PUBLIC_BRIDGE_PATHS = {
+    "/api/v1/bridge/service-health",
+    "/api/v1/bridge/slots",
+}
+
+
+def _slot_token_required() -> bool:
+    return os.getenv("MCP_BRIDGE_REQUIRE_SLOT_TOKEN", "").lower() in {
+        "1", "true", "yes",
+    }
 
 
 def _get_slot_tokens() -> dict:
-    """Pre-shared slot tokens from config (mcp_bridge.slot_tokens). Empty = unconfigured."""
-    return _get_bridge_config().get("slot_tokens", {}) or {}
+    """Load pre-shared slot tokens without requiring secrets in git.
+
+    Resolution order for each slot is environment value, environment-backed
+    secret file, then ``mcp_bridge.slot_tokens`` from config. Production uses
+    Docker secret files; direct values remain useful for local tests.
+    """
+    cfg = _get_bridge_config()
+    tokens = {
+        str(slot_id): str(token)
+        for slot_id, token in (cfg.get("slot_tokens", {}) or {}).items()
+        if str(token).strip()
+    }
+    max_slots = int(cfg.get("max_slots", 5))
+
+    for slot_id in range(1, max_slots + 1):
+        sid = str(slot_id)
+        direct = os.getenv(f"MCP_BRIDGE_SLOT_TOKEN_{sid}", "").strip()
+        token_file = os.getenv(f"MCP_BRIDGE_SLOT_TOKEN_FILE_{sid}", "").strip()
+
+        if direct:
+            tokens[sid] = direct
+            continue
+        if token_file:
+            try:
+                with open(token_file, encoding="utf-8") as handle:
+                    secret = handle.read().strip()
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Cannot read MCP Bridge token file for slot {sid}: {token_file}"
+                ) from exc
+            if not secret:
+                raise RuntimeError(f"MCP Bridge token file for slot {sid} is empty")
+            tokens[sid] = secret
+
+    if not tokens and _slot_token_required():
+        raise RuntimeError("MCP Bridge slot token is required but not configured")
+
+    return tokens
 
 
 def _escape_param_value(v) -> str:
@@ -51,16 +99,25 @@ def _escape_param_value(v) -> str:
 _request_slot_id: ContextVar[str | None] = ContextVar("slot_id", default=None)
 
 
-async def _set_slot_ctx(request: Request):
+async def _set_slot_ctx(connection: HTTPConnection):
     """Extract X-Slot-Id from request header and store in ContextVar.
 
     When slot tokens are configured (mcp_bridge.slot_tokens), the request must
     carry a matching X-Slot-Token header for that slot, else 403. If tokens are
     not configured, a warning is logged and the request is allowed (backward
     compatible framework — see P0-5)."""
-    slot_id = request.headers.get("x-slot-id")
+    slot_id = connection.headers.get("x-slot-id")
     _request_slot_id.set(slot_id)
     if not slot_id:
+        # WebSockets authenticate with their first JSON message. For HTTP,
+        # leave only relay status and slot availability public in production;
+        # every functional Bridge route must select and authenticate a slot.
+        if (
+            connection.scope.get("type") == "http"
+            and _slot_token_required()
+            and connection.url.path not in _PUBLIC_BRIDGE_PATHS
+        ):
+            raise HTTPException(403, "Missing X-Slot-Id")
         return
     tokens = _get_slot_tokens()
     if not tokens:
@@ -69,7 +126,7 @@ async def _set_slot_ctx(request: Request):
         )
         return
     expected = tokens.get(str(slot_id))
-    provided = request.headers.get("x-slot-token")
+    provided = connection.headers.get("x-slot-token")
     if not expected or provided != expected:
         raise HTTPException(403, "Invalid or missing X-Slot-Token")
 
@@ -1646,15 +1703,39 @@ async def revit_health():
         # Check if any WebSocket slots are connected
         from mcp_bridge.ws_relay import get_slot_manager
         slot_status = get_slot_manager().get_status()
+        has_ws_connection = slot_status["connected"] > 0
         return {
-            "revit_connected": slot_status["connected"] > 0,
+            "revit_connected": has_ws_connection,
+            "remote_relay_ready": True,
+            "local_revit_test": "connected" if has_ws_connection else "pending",
             "latency_ms": None,
-            "detail": f"TCP: {e}" if slot_status["connected"] == 0 else f"TCP offline, {slot_status['connected']} WebSocket slot(s) connected",
+            "detail": (
+                f"TCP offline, {slot_status['connected']} WebSocket slot(s) connected"
+                if has_ws_connection
+                else "Remote relay ready; waiting for the local Revit plugin"
+            ),
             "bridge_version": "v0.3",
             "timestamp": now_str,
-            "mode": "websocket" if slot_status["connected"] > 0 else "disconnected",
+            "mode": "websocket" if has_ws_connection else "waiting_for_revit",
             "ws_slots": slot_status,
         }
+
+
+@bridge_router.get("/service-health")
+async def bridge_service_health():
+    """Fast remote-relay health check that does not probe local TCP/Revit."""
+    from mcp_bridge.ws_relay import get_slot_manager
+
+    slot_status = get_slot_manager().get_status()
+    connected = slot_status["connected"]
+    return {
+        "status": "ok",
+        "remote_relay_ready": True,
+        "local_revit_test": "connected" if connected else "pending",
+        "connected_slots": connected,
+        "websocket_endpoint": "/api/v1/bridge/ws/{slot_id}",
+        "slots": slot_status,
+    }
 
 
 # -- WebSocket Slot Routes (multi-user Revit connections) ----------------------

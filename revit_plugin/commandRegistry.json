@@ -312,5 +312,14 @@
         "organization": "mcp-servers-for-revit"
       }
     }
-  ]
+  ],
+  "settings": {
+    "logLevel": "Info",
+    "port": 18080,
+    "mode": "websocket",
+    "wsUrl": "wss://graptolite.ai/api/v1/bridge/ws",
+    "slotId": "1",
+    "token": "",
+    "allowRemoteCodeExecution": false
+  }
 }

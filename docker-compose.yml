@@ -6,25 +6,21 @@ services:
       # Bind to loopback only; nginx/Cloudflare reverse-proxies to it.
       - "127.0.0.1:7860:7860"
     environment:
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - DATA_DIR=/app/data
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      DATA_DIR: /app/data
+      MCP_BRIDGE_REQUIRE_SLOT_TOKEN: "1"
+      MCP_BRIDGE_SLOT_TOKEN_FILE_1: /run/secrets/revit_slot_1
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data/sqlite:/app/data/sqlite
       - ./data/chromadb:/app/data/chromadb
+    secrets:
+      - revit_slot_1
     mem_limit: 2g
     restart: unless-stopped
 
-  homepage:
-    image: nginx:alpine
-    container_name: graptolite-homepage
-    ports:
-      - "80:80"
-    volumes:
-      - ./h:/usr/share/nginx/html:ro
-      - ./h/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - revit-api-rag
-    restart: unless-stopped
+secrets:
+  revit_slot_1:
+    file: ${REVIT_SLOT_1_TOKEN_FILE:-./.secrets/revit-slot-1.token}

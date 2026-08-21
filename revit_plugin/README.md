@@ -1,6 +1,6 @@
-# Revit Plugin (TCP Socket Service)
+# Revit Plugin (TCP + Remote WebSocket)
 
-Revit 2026 插件，提供 TCP JSON-RPC 2.0 服务，接收 Python 端发来的命令和动态 C# 代码执行请求。
+Revit 2026插件，既可提供TCP JSON-RPC 2.0服务，也可主动连接远程WebSocket Bridge，接收Python端发来的命令和动态C#代码执行请求。
 
 ## 来源
 
@@ -14,35 +14,41 @@ Revit 2026 插件，提供 TCP JSON-RPC 2.0 服务，接收 Python 端发来的�
 |------|----------|
 | `plugin/Configuration/ServiceSettings.cs` | 默认端口 `8080` → `18080` |
 | `plugin/Core/SocketService.cs` | 硬编码端口 `8080` → `18080`（避免与 AdskLicensingAgent 冲突） |
+| `plugin/Core/WebSocketService.cs` | 增加WSS重连、槽位令牌握手和远程代码执行开关 |
+| `plugin/UI/ConnectionSettingsPage.*` | 增加TCP/WebSocket连接模式与槽位设置 |
 
 ## 编译
 
 **前置条件**：
 - .NET 8 SDK
-- Revit 2026 已安装（需要 Revit API DLL 引用）
+- Windows构建环境（WPF/WindowsDesktop SDK）
 
 ```bash
 cd revit_plugin
-dotnet restore plugin/RevitMCPPlugin.csproj -p:Configuration="Debug R26"
-dotnet build plugin/RevitMCPPlugin.csproj -c "Debug R26"
+dotnet build plugin/RevitMCPPlugin.csproj -c "Release R26"
+dotnet build commandset/RevitMCPCommandSet.csproj -c "Release R26"
 ```
 
-编译产物输出到 `plugin/bin/AddIn 2026 Debug R26/revit_mcp_plugin/`。
+编译产物输出到 `plugin/bin/AddIn 2026 Release R26/revit_mcp_plugin/`。必须同时
+编译`plugin`和`commandset`，后者会把24个命令及Roslyn依赖复制到最终插件目录。
 
 ## 部署
 
-### 方式 A：使用 Release 预编译 DLL（推荐）
+### 方式 A：使用加密Demo Kit（远程联调推荐）
 
-1. 从 [GitHub Release](https://github.com/imkcrevit/revit-api-rag/releases) 下载 `revit_mcp_plugin.zip`
-2. 解压到 `%AppData%\Autodesk\Revit\Addins\2026\revit_mcp_plugin\`
-3. 将 `mcp-servers-for-revit.addin` 复制到 `%AppData%\Autodesk\Revit\Addins\2026\`
-4. 将 `commandRegistry.json` 复制到 `%AppData%\Autodesk\Revit\Addins\2026\revit_mcp_plugin\Commands\`
+1. 下载本次联调提供的加密`Revit-Demo-Kit.7z`并解压。
+2. 关闭Revit，以PowerShell运行`install-revit-demo.ps1`。
+3. 首次安装保持远程代码执行关闭；只读联通通过后，运行
+   `./install-revit-demo.ps1 -EnableRemoteCodeExecution`并重新启动Revit。
+
+旧的`v0.2.0-plugin`Release早于WebSocket和槽位鉴权实现，不适用于本次远程联调。
 
 ### 方式 B：从源码编译
 
 1. 按上面的编译步骤生成 DLL
-2. 将 `plugin/bin/AddIn 2026 Debug R26/revit_mcp_plugin/` 复制到 `%AppData%\Autodesk\Revit\Addins\2026\`
-3. 同方式 A 的步骤 3-4
+2. 将 `plugin/bin/AddIn 2026 Release R26/revit_mcp_plugin/` 复制到 `%AppData%\Autodesk\Revit\Addins\2026\`
+3. 将`mcp-servers-for-revit.addin`复制到`%AppData%\Autodesk\Revit\Addins\2026\`
+4. 将`commandRegistry.json`复制到插件目录的`Commands\`，再按下方远程WebSocket说明配置。
 
 ### 部署后的文件结构
 
@@ -56,7 +62,7 @@ dotnet build plugin/RevitMCPPlugin.csproj -c "Debug R26"
     ├── Newtonsoft.Json.dll
     ├── WinRT.Runtime.dll
     └── Commands\
-        ├── commandRegistry.json         ← 命令注册（23 条）
+        ├── commandRegistry.json         ← 命令注册（24 条）
         └── RevitMCPCommandSet\
             ├── command.json             ← 命令定义
             └── 2026\
@@ -68,10 +74,37 @@ dotnet build plugin/RevitMCPPlugin.csproj -c "Debug R26"
 
 ## 使用
 
+### 本地TCP模式
+
 1. 启动 Revit 2026
 2. 点击 Ribbon 上的 **"Revit MCP Switch"** 按钮启动 TCP 服务
 3. 服务监听 `localhost:18080`，接受 JSON-RPC 2.0 请求
 4. Python 端通过 `mcp_bridge/revit_client.py` 连接
+
+### 远程WebSocket模式（graptolite.ai）
+
+远程模式不需要、也不应该把Windows上的`18080`暴露到公网。插件主动通过
+`wss://graptolite.ai/api/v1/bridge/ws/{slot_id}`连接服务器的443端口。
+
+服务器部署侧先运行：
+
+```bash
+scripts/init-bridge-token.sh
+docker compose up -d --build revit-api-rag
+```
+
+Revit端在`Settings → Connection`中选择`WebSocket (Cloud)`，服务器地址保持：
+
+```text
+wss://graptolite.ai/api/v1/bridge/ws
+```
+
+初次联调使用槽位`1`。把服务器`.secrets/revit-slot-1.token`的内容写入插件目录下
+`Commands/commandRegistry.json`的`settings.token`；初次只读联调保持
+`allowRemoteCodeExecution: false`。确认槽位、`say_hello`和模型查询通过后，再按需显式开启远程代码执行。
+
+浏览器打开`https://graptolite.ai/revit/`，选择`Slot 1`，把同一个令牌粘贴到
+`Slot token`输入框。令牌仅保存在当前标签页的`sessionStorage`中，关闭标签页后清除。
 
 ## 关键参数
 
@@ -81,9 +114,9 @@ dotnet build plugin/RevitMCPPlugin.csproj -c "Debug R26"
 | 协议 | JSON-RPC 2.0 | UTF-8 编码 |
 | Buffer | 8192 bytes | 单次读取上限 |
 | 超时 | 60s | 代码执行超时 |
-| 命令数 | 23 | 包含 `send_code_to_revit` |
+| 命令数 | 24 | 包含`send_code_to_revit`和`manage_solidified_tools` |
 
-## 23 个预置命令
+## 24个预置命令
 
 | 命令 | 说明 |
 |------|------|
@@ -98,4 +131,5 @@ dotnet build plugin/RevitMCPPlugin.csproj -c "Debug R26"
 | `create_wall` / `create_grid` / `create_level` / `create_room` | 创建建筑元素 |
 | `delete_element` | 删除元素 |
 | `analyze_model_statistics` | 模型统计分析 |
+| `manage_solidified_tools` | 管理浏览器端固化工具 |
 | ... | 完整列表见 `command.json` |

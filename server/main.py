@@ -13,6 +13,7 @@ import logging
 import os
 import uvicorn
 from fastapi import Depends, FastAPI
+from starlette.requests import HTTPConnection
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,12 +50,16 @@ except ImportError:
     text_studio_router = None
 
 
-async def _bridge_auth(request):  # noqa: ANN001
+async def _bridge_auth(connection: HTTPConnection):
     """Unified auth dependency placeholder for the three bridge routers (P1-5).
 
     Framework hook — currently a no-op so behavior is unchanged. Enforce
     X-App-Token / admin auth here to lock down intent/mcp/prompt bridges.
     """
+    # HTTPConnection works for both HTTP requests and WebSocket handshakes.
+    # Keeping this parameter typed prevents FastAPI from exposing a bogus
+    # required `request` query parameter on every bridge route.
+    _ = connection
     return None
 
 

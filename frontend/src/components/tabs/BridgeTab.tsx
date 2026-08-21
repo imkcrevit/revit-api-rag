@@ -168,6 +168,7 @@ export default function BridgeTab() {
   // --- Header state ---
   const [revitStatus, setRevitStatus] = useState('Revit Disconnected')
   const [slotId, setSlotId] = useState<string>(() => sessionStorage.getItem('mcp_slot') || '')
+  const [slotToken, setSlotToken] = useState<string>(() => sessionStorage.getItem('mcp_slot_token') || '')
   const [slotsStatus, setSlotsStatus] = useState<SlotsStatus | null>(null)
 
   /* Persist slot selection */
@@ -175,6 +176,17 @@ export default function BridgeTab() {
     setSlotId(id)
     if (id) sessionStorage.setItem('mcp_slot', id)
     else sessionStorage.removeItem('mcp_slot')
+
+    if (id !== slotId) {
+      setSlotToken('')
+      sessionStorage.removeItem('mcp_slot_token')
+    }
+  }
+
+  const updateSlotToken = (token: string) => {
+    setSlotToken(token)
+    if (token) sessionStorage.setItem('mcp_slot_token', token)
+    else sessionStorage.removeItem('mcp_slot_token')
   }
 
   /* Fetch slot status */
@@ -741,7 +753,28 @@ export default function BridgeTab() {
           })}
         </select>
 
+        {slotId && (
+          <input
+            type="password"
+            value={slotToken}
+            onChange={e => updateSlotToken(e.target.value.trim())}
+            placeholder="Slot token"
+            autoComplete="off"
+            aria-label="Revit slot token"
+            title="Session-only token for the selected Revit slot"
+            style={{
+              fontFamily: 'var(--mono)', fontSize: 11, padding: '6px 8px',
+              border: '1px solid var(--line)', background: 'var(--bg)',
+              borderRadius: 'var(--radius-sm)', color: 'var(--dark)', minWidth: 150,
+            }}
+          />
+        )}
+
         <button onClick={() => {
+          if (slotId && !slotToken) {
+            setRevitStatus('Enter the Slot token before connecting')
+            return
+          }
           refreshSlots()
           bridgeApi.revitHealth().then(h => {
             if (h.revit_connected) {
@@ -752,7 +785,9 @@ export default function BridgeTab() {
                 ? `TCP offline, ${wsInfo.connected} WS slot(s) online`
                 : `Disconnected: ${h.detail}`)
             }
-          }).catch(() => setRevitStatus('Revit Disconnected: server unreachable'))
+          }).catch((error: unknown) => setRevitStatus(
+            `Connection failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+          ))
         }} className="btn-secondary">Connect</button>
       </div>
 

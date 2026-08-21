@@ -5,7 +5,12 @@ const BASE = RAW_BASE.replace(/\/+$/, '')
 
 function _slotHeader(): Record<string, string> {
   const slot = sessionStorage.getItem('mcp_slot')
-  return slot ? { 'X-Slot-Id': slot } : {}
+  const token = sessionStorage.getItem('mcp_slot_token')
+  if (!slot) return {}
+  return {
+    'X-Slot-Id': slot,
+    ...(token ? { 'X-Slot-Token': token } : {}),
+  }
 }
 
 export async function apiFetch<T = unknown>(

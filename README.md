@@ -21,7 +21,7 @@
 - **参考内容**:
   - `plugin/Core/SocketService.cs` — TCP JSON-RPC 2.0 通信协议
   - `commandset/Commands/ExecuteDynamicCode/` — Roslyn 动态代码编译执行
-  - `command.json` — 23 个预置命令定义
+  - `command.json` — 24 个预置命令定义
 - **原始项目**: Fork of [revit-mcp](https://github.com/mcp-servers-for-revit/revit-mcp)
 
 ---
@@ -79,7 +79,7 @@ revit-api-rag/
 │           └── standards/        # 企业规范
 ├── revit_plugin/          # Revit 2026 插件（C# / .NET 8）
 │   ├── plugin/            # RevitMCPPlugin — TCP Socket 服务
-│   └── commandset/        # RevitMCPCommandSet — 23 个预置命令
+│   └── commandset/        # RevitMCPCommandSet — 24 个预置命令
 ├── config/                # 配置
 │   └── config.yaml
 ├── data/                  # 生成的数据库文件
@@ -363,4 +363,3 @@ python -m server.main
 - Revit API CHM 解析 → SQLite + ChromaDB
 - SDK 代码解析 → ChromaDB
 - 基础 RAG 检索 + 代码生成
-
