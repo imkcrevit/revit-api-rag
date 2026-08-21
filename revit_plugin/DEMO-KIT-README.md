@@ -57,12 +57,23 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 `-EnableRemoteCodeExecution`是明确的安装级授权：启用后不再要求不懂代码的最终用户逐次确认代码内容。Slot令牌、后端安全扫描和插件远程代码开关仍会继续生效。固化工具注册写入本地文件时的确认保持不变。
 
+AutoExec2安装器会校验已安装的`RevitMCPCommandSet.dll`。成功输出必须包含：
+
+```text
+Package revision: 2026-08-21-autoxec2
+Command DLL SHA-256: 49ccdce6ba5ca3010a30a6714d6d18cc30d08dbaf638979d355977d17e958f27
+Remote code execution enabled: True
+```
+
+如果安装器报告存在多个活动的Revit MCP `.addin`清单，请不要启动Revit，先处理输出中位于`ProgramData`或其他目录的旧副本；否则Revit可能继续加载旧DLL并显示代码确认弹窗。
+
 ## 排障
 
 - 无`Revit MCP`面板：确认使用Revit 2026，并检查`%APPDATA%\Autodesk\Revit\Addins\2026\mcp-servers-for-revit.addin`。
 - 显示未连接：确认Windows能访问`https://graptolite.ai/api/v1/bridge/service-health`，并再次点击`Revit MCP Switch`。
 - Slot已占用：关闭另一台正在使用Slot 1的Revit，等待数秒后重试。
 - 插件日志：`%APPDATA%\Autodesk\Revit\Addins\2026\revit_mcp_plugin\Logs\mcp_YYYYMMDD.log`。
+- 仍显示`Confirm code execution`：确认安装输出为AutoExec2及上述DLL哈希，并检查是否有多个活动`.addin`清单。
 - 安装器会把旧插件目录重命名为`revit_mcp_plugin.backup-时间戳`，可用于回退。
 
 ## 安全收尾
