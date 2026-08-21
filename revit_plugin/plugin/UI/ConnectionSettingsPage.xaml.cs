@@ -6,16 +6,27 @@ using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 
 namespace revit_mcp_plugin.UI
 {
     public partial class ConnectionSettingsPage : Page
     {
+        private readonly DispatcherTimer _statusTimer;
+
         public ConnectionSettingsPage()
         {
             InitializeComponent();
             LoadSettings();
             UpdateStatus();
+
+            _statusTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1)
+            };
+            _statusTimer.Tick += (_, _) => UpdateStatus();
+            Loaded += (_, _) => _statusTimer.Start();
+            Unloaded += (_, _) => _statusTimer.Stop();
         }
 
         private void LoadSettings()
@@ -75,15 +86,22 @@ namespace revit_mcp_plugin.UI
         private void UpdateStatus()
         {
             bool tcpRunning = SocketService.Instance.IsRunning;
-            bool wsRunning = WebSocketService.Instance.IsRunning;
+            WebSocketService wsService = WebSocketService.Instance;
 
             if (tcpRunning)
             {
                 StatusText.Text = $"TCP Server running on port {SocketService.Instance.Port}";
             }
-            else if (wsRunning)
+            else if (wsService.IsConnected)
             {
-                StatusText.Text = $"WebSocket connected to slot {WebSocketService.Instance.SlotId}";
+                StatusText.Text = $"WebSocket connected to slot {wsService.SlotId}";
+            }
+            else if (wsService.IsRunning)
+            {
+                StatusText.Text = string.IsNullOrWhiteSpace(wsService.LastConnectionError)
+                    ? $"WebSocket connecting to slot {wsService.SlotId}..."
+                    : $"WebSocket reconnecting to slot {wsService.SlotId}. " +
+                      $"Last error: {wsService.LastConnectionError}";
             }
             else
             {

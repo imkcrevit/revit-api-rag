@@ -32,6 +32,7 @@ namespace revit_mcp_plugin.Core
         private CancellationTokenSource _cts;
         private Thread _workerThread;
         private bool _isRunning;
+        private volatile string _lastConnectionError;
 
         private string _serverUrl;
         private string _slotId;
@@ -69,6 +70,8 @@ namespace revit_mcp_plugin.Core
         }
 
         public bool IsRunning => _isRunning;
+        public bool IsConnected => _ws != null && _ws.State == WebSocketState.Open;
+        public string LastConnectionError => _lastConnectionError;
         public string SlotId => _slotId;
         public string ServerUrl => _serverUrl;
 
@@ -118,6 +121,7 @@ namespace revit_mcp_plugin.Core
             _serverUrl = serverUrl.TrimEnd('/');
             _slotId = slotId;
             _isRunning = true;
+            _lastConnectionError = null;
             _cts = new CancellationTokenSource();
 
             _workerThread = new Thread(WorkerLoop)
@@ -169,12 +173,15 @@ namespace revit_mcp_plugin.Core
             {
                 try
                 {
-                    ConnectAndListen().Wait();
+                    // Avoid AggregateException masking the actual HTTP/WebSocket error.
+                    ConnectAndListen().GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
                     if (!_isRunning) break;
-                    _logger.Warning($"WebSocket connection lost: {ex.Message}");
+                    Exception rootCause = ex.GetBaseException();
+                    _lastConnectionError = rootCause.Message;
+                    _logger.Warning($"WebSocket connection lost: {rootCause.Message}");
                 }
 
                 // Wait before reconnecting
@@ -190,11 +197,16 @@ namespace revit_mcp_plugin.Core
         {
             _ws?.Dispose();
             _ws = new ClientWebSocket();
+            // Cloudflare rejects the header-less .NET ClientWebSocket handshake
+            // with HTTP 403. An explicit product User-Agent reaches the origin
+            // and upgrades normally with HTTP 101.
+            _ws.Options.SetRequestHeader("User-Agent", "RevitMCPPlugin/0.3");
 
             var uri = new Uri($"{_serverUrl}/{_slotId}");
             _logger.Info($"Connecting to {uri}...");
 
             await _ws.ConnectAsync(uri, _cts.Token);
+            _lastConnectionError = null;
             _logger.Info($"Connected to slot {_slotId}");
 
             // 连接后发送鉴权 token 完成握手（仅在配置了 token 时发送，向后兼容）
@@ -236,7 +248,10 @@ namespace revit_mcp_plugin.Core
 
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
-                    _logger.Info("Server closed WebSocket connection");
+                    string closeDetail = $"Server closed WebSocket connection: " +
+                        $"{result.CloseStatus} {result.CloseStatusDescription}".TrimEnd();
+                    _lastConnectionError = closeDetail;
+                    _logger.Warning(closeDetail);
                     break;
                 }
 

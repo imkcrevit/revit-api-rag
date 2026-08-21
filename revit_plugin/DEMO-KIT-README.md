@@ -2,6 +2,8 @@
 
 此包已为`graptolite.ai`远程Bridge预配置。Revit插件主动通过HTTPS/WSS的443端口连接服务器，不需要开放本机的18080端口。
 
+本修正版为WebSocket握手显式发送`User-Agent`，解决Cloudflare对.NET默认握手返回HTTP 403的问题；连接设置页现在显示真实连接或重试状态。
+
 ## 安装
 
 准备条件：Windows x64、Autodesk Revit 2026、7-Zip，以及可访问`graptolite.ai:443`的网络。

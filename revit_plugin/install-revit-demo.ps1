@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$packageRevision = "2026-08-21-wsfix1"
 
 if (Get-Process -Name Revit -ErrorAction SilentlyContinue) {
     throw "Close Revit before installing or updating the plugin."
@@ -74,6 +75,7 @@ if ($null -eq $config.settings) {
 $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $registryDestination -Encoding UTF8
 
 Write-Host "Revit 2026 plugin installed: $pluginDestination"
+Write-Host "Package revision: $packageRevision"
 Write-Host "Connection mode: WebSocket, slot $SlotId"
 Write-Host "Remote code execution enabled: $([bool]$EnableRemoteCodeExecution)"
 Write-Host "Start Revit 2026, then click 'Revit MCP Switch'."

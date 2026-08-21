@@ -77,7 +77,8 @@ namespace revit_mcp_plugin.Core
                 service.Initialize(commandData.Application);
                 service.Start(settings.WsUrl, settings.SlotId);
                 TaskDialog.Show("revitMCP",
-                    $"WebSocket Connected\nServer: {settings.WsUrl}\nSlot: {settings.SlotId}");
+                    $"WebSocket connection started\nServer: {settings.WsUrl}\n" +
+                    $"Slot: {settings.SlotId}\nCheck Settings > Connection for live status.");
             }
 
             return Result.Succeeded;

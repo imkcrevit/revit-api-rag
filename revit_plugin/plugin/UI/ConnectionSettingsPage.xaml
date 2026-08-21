@@ -88,7 +88,8 @@
                     BorderThickness="1" CornerRadius="4">
                 <StackPanel>
                     <TextBlock Text="Current Status" FontWeight="SemiBold" Margin="0,0,0,5"/>
-                    <TextBlock x:Name="StatusText" Text="Not connected" Foreground="#666"/>
+                    <TextBlock x:Name="StatusText" Text="Not connected" Foreground="#666"
+                               TextWrapping="Wrap"/>
                 </StackPanel>
             </Border>
         </StackPanel>

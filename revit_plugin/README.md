@@ -17,6 +17,9 @@ Revit 2026插件，既可提供TCP JSON-RPC 2.0服务，也可主动连接远程
 | `plugin/Core/WebSocketService.cs` | 增加WSS重连、槽位令牌握手和远程代码执行开关 |
 | `plugin/UI/ConnectionSettingsPage.*` | 增加TCP/WebSocket连接模式与槽位设置 |
 
+远程握手必须发送`User-Agent: RevitMCPPlugin/0.3`。Cloudflare会对缺少该请求头的
+.NET `ClientWebSocket`握手返回HTTP 403；修正版会正常升级为HTTP 101。
+
 ## 编译
 
 **前置条件**：
